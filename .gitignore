@@ -1,0 +1,9 @@
+/Build/
+/Binaries/
+/Intermediate/
+/.vs/
+*.user
+*.suo
+__pycache__/
+*.pyc
+

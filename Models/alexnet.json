@@ -1,0 +1,16 @@
+{
+  "format": "elman.model",
+  "version": 1,
+  "name": "AlexNet",
+  "architecture": "alexnet",
+  "input_shape": [3, 224, 224],
+  "channels": [64, 192, 384, 256, 256],
+  "kernels": [11, 5, 3, 3, 3],
+  "strides": [4, 1, 1, 1, 1],
+  "paddings": [2, 2, 1, 1, 1],
+  "pool_kernel": 3,
+  "pool_stride": 2,
+  "hidden_features": [4096, 4096],
+  "num_classes": 1000,
+  "dropout": 0.5
+}

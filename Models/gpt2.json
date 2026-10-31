@@ -1,0 +1,14 @@
+{
+  "format": "elman.model",
+  "version": 1,
+  "name": "GPT2",
+  "architecture": "gpt2",
+  "vocab_size": 50257,
+  "context_length": 1024,
+  "embedding_dim": 768,
+  "num_heads": 12,
+  "num_layers": 12,
+  "mlp_ratio": 4,
+  "dropout": 0.1,
+  "layer_norm_epsilon": 0.00001
+}
