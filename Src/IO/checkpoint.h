@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Models/model.h"
+#include "Models/Model.h"
 
 namespace elman {
 

@@ -1,7 +1,7 @@
 #pragma once
 
-#include "Core/tensor.h"
-#include "IO/json.h"
+#include "Core/Tensor.h"
+#include "IO/Json.h"
 #include <memory>
 
 namespace elman {

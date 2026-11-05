@@ -1,13 +1,13 @@
 # Training configuration reference
 
-Run `elman train <configuration.json>` to start training. The smoke configurations default to CUDA; `--backend cpu`, `--backend compute` or `--backend metal` explicitly selects another available device. An unavailable requested backend is an error.
+Run `elman train <configuration.json>` to start training. The smoke configurations default to CUDA; `--backend cpu` selects the CPU implementation. An unavailable requested backend is an error.
 
 | Field | Meaning |
 | --- | --- |
 | `format`, `version` | Required `elman.training` and integer `1`. |
 | `model_name` | Required exact name from the model definition. |
 | `model` | Required path to a versioned model JSON file, relative to this configuration. |
-| `backend` | `cpu`, `cuda`, `compute` or `metal`; defaults to `cpu`. |
+| `backend` | `cpu` or `cuda`; defaults to `cpu`. |
 | `data.format` | `image_csv` for classification or `token_csv` for language modeling. |
 | `data.path` | Required CSV path, relative to this configuration. |
 | `data.limit_samples` | Optional maximum rows to load; `0` means every row. |

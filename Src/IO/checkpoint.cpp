@@ -1,4 +1,4 @@
-#include "IO/checkpoint.h"
+#include "IO/Checkpoint.h"
 
 #include <cmath>
 #include <algorithm>
