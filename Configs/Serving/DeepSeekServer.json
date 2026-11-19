@@ -1,0 +1,11 @@
+{
+  "model": {
+    "type": "llm",
+    "path": "../../Models/DeepSeek-R1-Distill-Qwen-1.5B",
+    "backend": "cuda"
+  },
+  "http": {
+    "host": "127.0.0.1",
+    "port": 8080
+  }
+}

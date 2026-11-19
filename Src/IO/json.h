@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <filesystem>
 #include <map>
 #include <string>
 #include <variant>
@@ -22,7 +23,7 @@ public:
     Json(Object value) : value_(std::move(value)) {}
 
     static Json parse(const std::string& text);
-    static Json read(const std::string& path);
+    static Json read(const std::filesystem::path& path);
     std::string dump(int indent = 2) const;
     void write(const std::string& path) const;
     bool is_null() const;

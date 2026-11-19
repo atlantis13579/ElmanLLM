@@ -18,7 +18,7 @@ struct OptimizerSettings {
 
 class Optimizer {
  public:
-  Optimizer(const Json& settings, const Model& model);
+  Optimizer(const Json& settings, const Model& model, bool default_device_optimizer = false);
 
   const std::string& name() const {
     return name_;

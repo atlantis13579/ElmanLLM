@@ -1,6 +1,6 @@
 #pragma once
 
-namespace elman::conv2d {
+namespace elman::operator_attr::conv2d {
 
 inline constexpr int kBatchAxis = 0;
 inline constexpr int kOutputChannelAxis = 0;
@@ -16,4 +16,4 @@ inline constexpr int kDilationHeight = 4;
 inline constexpr int kDilationWidth = 5;
 inline constexpr int kGroups = 6;
 
-}  // namespace elman::conv2d
+}  // namespace elman::operator_attr::conv2d

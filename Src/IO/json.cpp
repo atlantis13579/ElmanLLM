@@ -180,9 +180,9 @@ std::string quote(const std::string& text) {
 }
 
 Json Json::parse(const std::string& text) { return Parser(text).parse(); }
-Json Json::read(const std::string& path) {
+Json Json::read(const std::filesystem::path& path) {
     std::ifstream in(path, std::ios::binary);
-    if (!in) throw std::runtime_error("Cannot open JSON file: " + path);
+    if (!in) throw std::runtime_error("Cannot open JSON file: " + path.u8string());
     std::ostringstream text;
     text << in.rdbuf();
     return parse(text.str());

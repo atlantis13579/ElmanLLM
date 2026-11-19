@@ -1,0 +1,8 @@
+{
+  "format": "elman.model",
+  "version": 1,
+  "name": "LogisticRegression",
+  "architecture": "logistic_regression",
+  "input_features": 4,
+  "num_classes": 3
+}

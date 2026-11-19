@@ -1,4 +1,6 @@
 #include "kernel.cuh"
+#include "long_row_reduction.cuh"
+#include "integer_extrema.cuh"
 
 namespace elman {
 __global__ void kernel_max_cuda(uint32_t* out, const uint32_t* a,
@@ -22,8 +24,14 @@ __global__ void kernel_max_cuda(uint32_t* out, const uint32_t* a,
 }
 void launch_max_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
                      const uint32_t* c, const KernelParams& p) {
+  if (is_standard_integer(DType(p.output_dtype()))) {
+    if (p.output_count() > 0)
+      integer_extrema_cuda<true><<<unsigned(p.output_count()), 256, 0, current_cuda_stream()>>>(out, a, p);
+    return;
+  }
   if (p.output_count() > 0) {
-    kernel_max_cuda<<<(unsigned(p.output_count()) + 255u) / 256u, 256>>>(
+    if (try_reduce_contiguous_rows<RowReduction::Maximum>(out, a, p)) return;
+    kernel_max_cuda<<<(unsigned(p.output_count()) + 255u) / 256u, 256, 0, current_cuda_stream()>>>(
         out, a, b, c, p);
   }
 }

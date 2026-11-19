@@ -36,7 +36,7 @@ void launch_max_pool2d_grad_cpu(uint32_t* out, const uint32_t* a,
               if (y >= 0 && y < input_height && x >= 0 && x < input_width) {
                 int index = (plane * input_height + y) * input_width + x;
                 float candidate = READ_A(index);
-                if (selected < 0 || candidate > maximum_value) {
+                if (selected < 0 || candidate > maximum_value || candidate != candidate) {
                   maximum_value = candidate;
                   selected = index;
                 }

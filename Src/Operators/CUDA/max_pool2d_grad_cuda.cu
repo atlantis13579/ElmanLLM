@@ -17,37 +17,42 @@ __global__ void kernel_max_pool2d_grad_cuda(uint32_t* out, const uint32_t* a,
     int output_width =
         p.input_shape(KernelInput::B, tensor_axis::image::kWidth);
     float value = 0.0f;
-    for (int oy = 0; oy < output_height; ++oy) {
-      for (int ox = 0; ox < output_width; ++ox) {
+    const int stride_y = p.attribute(operator_attr::pool2d::kStrideHeight);
+    const int stride_x = p.attribute(operator_attr::pool2d::kStrideWidth);
+    const int kernel_y = p.attribute(operator_attr::pool2d::kKernelHeight);
+    const int kernel_x = p.attribute(operator_attr::pool2d::kKernelWidth);
+    const int y = iy + p.attribute(operator_attr::pool2d::kPaddingHeight);
+    const int x = ix + p.attribute(operator_attr::pool2d::kPaddingWidth);
+    const int first_y = y < kernel_y ? 0 : (y - kernel_y) / stride_y + 1;
+    const int first_x = x < kernel_x ? 0 : (x - kernel_x) / stride_x + 1;
+    const int stop_y = min(output_height, y / stride_y + 1);
+    const int stop_x = min(output_width, x / stride_x + 1);
+    for (int oy = first_y; oy < stop_y; ++oy) {
+      for (int ox = first_x; ox < stop_x; ++ox) {
         int start_y = oy * p.attribute(operator_attr::pool2d::kStrideHeight) -
                       p.attribute(operator_attr::pool2d::kPaddingHeight);
         int start_x = ox * p.attribute(operator_attr::pool2d::kStrideWidth) -
                       p.attribute(operator_attr::pool2d::kPaddingWidth);
-        if (iy >= start_y &&
-            iy < start_y + p.attribute(operator_attr::pool2d::kKernelHeight) &&
-            ix >= start_x &&
-            ix < start_x + p.attribute(operator_attr::pool2d::kKernelWidth)) {
-          float maximum_value = -EL_INF;
-          int selected = -1;
-          for (int ky = 0;
-               ky < p.attribute(operator_attr::pool2d::kKernelHeight); ++ky) {
-            for (int kx = 0;
-                 kx < p.attribute(operator_attr::pool2d::kKernelWidth); ++kx) {
-              int y = start_y + ky;
-              int x = start_x + kx;
-              if (y >= 0 && y < input_height && x >= 0 && x < input_width) {
-                int index = (plane * input_height + y) * input_width + x;
-                float candidate = READ_A(index);
-                if (selected < 0 || candidate > maximum_value) {
-                  maximum_value = candidate;
-                  selected = index;
-                }
+        float maximum_value = -EL_INF;
+        int selected = -1;
+        for (int ky = 0;
+             ky < p.attribute(operator_attr::pool2d::kKernelHeight); ++ky) {
+          for (int kx = 0;
+               kx < p.attribute(operator_attr::pool2d::kKernelWidth); ++kx) {
+            int y = start_y + ky;
+            int x = start_x + kx;
+            if (y >= 0 && y < input_height && x >= 0 && x < input_width) {
+              int index = (plane * input_height + y) * input_width + x;
+              float candidate = READ_A(index);
+              if (selected < 0 || candidate > maximum_value || candidate != candidate) {
+                maximum_value = candidate;
+                selected = index;
               }
             }
           }
-          if (selected == i) {
-            value += READ_B((plane * output_height + oy) * output_width + ox);
-          }
+        }
+        if (selected == i) {
+          value += READ_B((plane * output_height + oy) * output_width + ox);
         }
       }
     }
@@ -59,7 +64,7 @@ void launch_max_pool2d_grad_cuda(uint32_t* out, const uint32_t* a,
                                  const KernelParams& p) {
   if (p.output_count() > 0) {
     kernel_max_pool2d_grad_cuda<<<(unsigned(p.output_count()) + 255u) / 256u,
-                                  256>>>(out, a, b, c, p);
+                                  256, 0, current_cuda_stream()>>>(out, a, b, c, p);
   }
 }
 }  // namespace elman

@@ -35,7 +35,7 @@ void launch_cross_entropy_grad_cuda(uint32_t* out, const uint32_t* a,
                                     const uint32_t* b, const uint32_t* c,
                                     const KernelParams& p) {
   cross_entropy_gradient_rows<<<
-      p.input_shape(KernelInput::A, tensor_axis::logits::kBatch), 256>>>(
+      p.input_shape(KernelInput::A, tensor_axis::logits::kBatch), 256, 0, current_cuda_stream()>>>(
       out, a, b, c, p);
 }
 }  // namespace elman

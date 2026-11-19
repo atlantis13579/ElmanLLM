@@ -1,0 +1,17 @@
+{
+  "format": "elman.training",
+  "version": 1,
+  "model_name": "LogisticRegression",
+  "model": "../../Models/LogisticRegression.json",
+  "backend": "cpu",
+  "data": {"format": "tabular_csv", "path": "../../Intermediate/ParityData/logistic_train.csv"},
+  "training": {
+    "steps": 100, "batch_size": 90, "optimizer": "sgd", "learning_rate": 0.1,
+    "momentum": 0.9, "weight_decay": 0, "clip_grad_norm": 0, "seed": 42,
+    "shuffle": false, "log_every": 20, "require_loss_decrease": true
+  },
+  "output": {
+    "checkpoint": "../../Intermediate/Runs/logistic_regression/model.elman",
+    "metrics": "../../Intermediate/Runs/logistic_regression/metrics.json"
+  }
+}

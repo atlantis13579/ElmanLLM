@@ -1,4 +1,5 @@
 #include "kernel.cuh"
+#include "Backends/CudaGemm.h"
 
 namespace elman {
 __global__ void kernel_bmm_cuda(uint32_t* out, const uint32_t* a,
@@ -16,6 +17,15 @@ __global__ void kernel_bmm_cuda(uint32_t* out, const uint32_t* a,
     int bbase = matrix_batch_offset(batch, KernelInput::B, p);
     int shared_size =
         p.input_shape(KernelInput::A, p.input_rank(KernelInput::A) - 1);
+    if (kernel_integer(p.output_dtype())) {
+      uint32_t integer_value = 0u;
+      for (int k = 0; k < shared_size; ++k) {
+        integer_value += uint32_t(READ_INT_A(abase + row * shared_size + k)) *
+                         uint32_t(READ_INT_B(bbase + k * columns + column));
+      }
+      WRITE_INT_OUTPUT(i, int(integer_value));
+      return;
+    }
     float value = 0.0f;
     for (int k = 0; k < shared_size; ++k) {
       value += READ_A(abase + row * shared_size + k) *
@@ -26,8 +36,9 @@ __global__ void kernel_bmm_cuda(uint32_t* out, const uint32_t* a,
 }
 void launch_bmm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
                      const uint32_t* c, const KernelParams& p) {
+  if (try_gemm_cuda(out, a, b, c, p, GemmOperation::Matmul)) return;
   if (p.output_count() > 0) {
-    kernel_bmm_cuda<<<(unsigned(p.output_count()) + 255u) / 256u, 256>>>(
+    kernel_bmm_cuda<<<(unsigned(p.output_count()) + 255u) / 256u, 256, 0, current_cuda_stream()>>>(
         out, a, b, c, p);
   }
 }

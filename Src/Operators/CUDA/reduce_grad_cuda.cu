@@ -15,7 +15,7 @@ __global__ void kernel_reduce_grad_cuda(uint32_t* out, const uint32_t* a,
     float value = READ_C(target);
     int kind = p.attribute(operator_attr::reduction::kGradientKind);
     if (kind == 1) {
-      value /= float(length);
+      value = __fmul_rn(value, __fdiv_rn(1.0f, float(length)));
     }
     if (kind == 2 || kind == 3) {
       float extremum = READ_B(target);
@@ -27,7 +27,22 @@ __global__ void kernel_reduce_grad_cuda(uint32_t* out, const uint32_t* a,
           ++matches;
         }
       }
-      value = READ_A(i) == extremum ? value / float(matches) : 0.0f;
+      value = (value / float(matches)) * float(READ_A(i) == extremum);
+    }
+    if (kind == 5 || kind == 6) {
+      const float extremum = READ_B(target);
+      const int base =
+          axis < 0 ? 0 : (target / inner) * length * inner + target % inner;
+      int selected = -1;
+      for (int j = 0; j < length; ++j) {
+        const int index = base + j * inner;
+        const float candidate = READ_A(index);
+        if (candidate == extremum || (candidate != candidate && extremum != extremum)) {
+          selected = index;
+          break;
+        }
+      }
+      value = i == selected ? value : 0.0f;
     }
     if (kind == 4) {
       int base =
@@ -38,7 +53,7 @@ __global__ void kernel_reduce_grad_cuda(uint32_t* out, const uint32_t* a,
           product *= READ_A(base + j * inner);
         }
       }
-      value *= product;
+      value *= READ_A(i) == 0.0f ? product : READ_B(target) / READ_A(i);
     }
     WRITE_OUTPUT(i, value);
   }
@@ -48,7 +63,7 @@ void launch_reduce_grad_cuda(uint32_t* out, const uint32_t* a,
                              const KernelParams& p) {
   if (p.output_count() > 0) {
     kernel_reduce_grad_cuda<<<(unsigned(p.output_count()) + 255u) / 256u,
-                              256>>>(out, a, b, c, p);
+                              256, 0, current_cuda_stream()>>>(out, a, b, c, p);
   }
 }
 }  // namespace elman

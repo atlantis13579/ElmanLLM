@@ -3,11 +3,18 @@
 namespace elman {
 void launch_log_softmax_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
                             const uint32_t* c, const KernelParams& p) {
-  for (int i = 0; i < p.output_count(); ++i) {
-    int axis = p.attribute(operator_attr::softmax::kAxis);
-    int inner = p.input_stride(KernelInput::A, axis);
-    int length = p.input_shape(KernelInput::A, axis);
-    int base = (i / (length * inner)) * length * inner + i % inner;
+  const int axis = p.attribute(operator_attr::softmax::kAxis);
+  const int inner = p.input_rank(KernelInput::A) == 0
+                        ? 1
+                        : p.input_stride(KernelInput::A, axis);
+  const int length = p.input_rank(KernelInput::A) == 0
+                         ? 1
+                         : p.input_shape(KernelInput::A, axis);
+  if (p.output_count() == 0) {
+    return;
+  }
+  for (int group = 0; group < p.output_count() / length; ++group) {
+    const int base = (group / inner) * length * inner + group % inner;
     float maximum_value = -EL_INF;
     for (int j = 0; j < length; ++j) {
       maximum_value = EL_MAX(maximum_value, READ_A(base + j * inner));
@@ -16,7 +23,10 @@ void launch_log_softmax_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
     for (int j = 0; j < length; ++j) {
       denominator += EL_EXP(READ_A(base + j * inner) - maximum_value);
     }
-    WRITE_OUTPUT(i, READ_A(i) - maximum_value - EL_LOG(denominator));
+    for (int j = 0; j < length; ++j) {
+      const int i = base + j * inner;
+      WRITE_OUTPUT(i, READ_A(i) - maximum_value - EL_LOG(denominator));
+    }
   }
 }
 }  // namespace elman

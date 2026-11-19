@@ -5,7 +5,7 @@ void launch_scatter_add_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
                             const uint32_t* c, const KernelParams& p) {
   for (int i = 0; i < p.output_count(); ++i) {
     float value = READ_A(i);
-    int integer_value = READ_INT_A(i);
+    uint32_t integer_value = kernel_integer(p.output_dtype()) ? uint32_t(READ_INT_A(i)) : 0u;
     int count = input_count(KernelInput::C, p);
     for (int j = 0; j < count; ++j) {
       int flat = j;
@@ -23,13 +23,13 @@ void launch_scatter_add_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
           selected <
               p.output_shape(p.attribute(operator_attr::indexing::kAxis))) {
         value += READ_C(j);
-        integer_value += READ_INT_C(j);
+        if (kernel_integer(p.output_dtype())) integer_value += uint32_t(READ_INT_C(j));
       }
     }
-    if (p.output_dtype() == 0) {
+    if (!kernel_integer(p.output_dtype())) {
       WRITE_OUTPUT(i, value);
     } else {
-      WRITE_INT_OUTPUT(i, integer_value);
+      WRITE_INT_OUTPUT(i, int(integer_value));
     }
   }
 }

@@ -17,6 +17,8 @@ public:
     virtual Tensor forward(const Tensor& input, bool training, uint32_t seed = 1) = 0;
     virtual Shape sample_shape() const = 0;
     virtual int output_classes() const = 0;
+    virtual bool regression() const { return false; }
+    virtual std::vector<Parameter> checkpoint_buffers() const { return {}; }
     const std::string& name() const { return name_; }
     const std::string& architecture() const { return architecture_; }
     std::vector<Parameter>& parameters() { return parameters_; }

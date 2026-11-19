@@ -26,7 +26,7 @@ void launch_index_select_cuda(uint32_t* out, const uint32_t* a,
                               const KernelParams& p) {
   if (p.output_count() > 0) {
     kernel_index_select_cuda<<<(unsigned(p.output_count()) + 255u) / 256u,
-                               256>>>(out, a, b, c, p);
+                               256, 0, current_cuda_stream()>>>(out, a, b, c, p);
   }
 }
 }  // namespace elman

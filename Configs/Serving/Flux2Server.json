@@ -1,0 +1,13 @@
+{
+  "model": {
+    "type": "flux2",
+    "name": "FLUX.2 Klein 4B",
+    "path": "../../Models/FLUX.2-klein-4B",
+    "backend": "cuda",
+    "dtype": "bfloat16"
+  },
+  "http": {
+    "host": "127.0.0.1",
+    "port": 8082
+  }
+}

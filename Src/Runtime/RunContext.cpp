@@ -1,6 +1,9 @@
 #include "Runtime/RunContext.h"
 
+#include "Core/Device.h"
+
 #include <cmath>
+#include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <utility>
@@ -26,7 +29,7 @@ std::string resolve(const std::filesystem::path& base,
 }  // namespace
 
 Configuration::Configuration(const std::string& path,
-                             const RunOptions& options) {
+                             const RunOptions& options, int cuda_device) {
   directory = std::filesystem::absolute(path).parent_path();
   json = Json::read(path);
   require(json.at("format").string() == "elman.training" &&
@@ -41,6 +44,8 @@ Configuration::Configuration(const std::string& path,
   int seed_value = json.at("training").int_or("seed", 42);
   require(seed_value >= 0, "Seed must be non-negative");
   seed = static_cast<uint32_t>(seed_value);
+  DeviceScope device(backend, backend == Backend::CUDA && cuda_device >= 0
+                                  ? cuda_device : current_device(backend));
   model = create_model(definition, backend, seed);
   require(json.at("model_name").string() == model->name(),
           "Training model_name does not match model definition");
@@ -57,6 +62,7 @@ Dataset::Dataset(const Configuration& config) {
   const auto& settings = config.json.at("data");
   sample_shape = config.model->sample_shape();
   language = config.model->architecture() == "gpt2";
+  regression = config.model->regression();
   if (language && settings.contains("sequence_length")) {
     int length = settings.at("sequence_length").integer();
     require(length > 0 && length <= sample_shape[0],
@@ -64,9 +70,13 @@ Dataset::Dataset(const Configuration& config) {
     sample_shape[0] = length;
   }
   classes = config.model->output_classes();
-  require(
-      settings.at("format").string() == (language ? "token_csv" : "image_csv"),
-      "Dataset format does not match model architecture");
+  const std::string format =
+      regression                                              ? "regression_csv"
+      : language                                              ? "token_csv"
+      : config.model->architecture() == "logistic_regression" ? "tabular_csv"
+                                                              : "image_csv";
+  require(settings.at("format").string() == format,
+          "Dataset format does not match model architecture");
   std::string path = resolve(config.directory, settings.at("path").string());
   std::ifstream input(path);
   require(static_cast<bool>(input), "Cannot open dataset: " + path);
@@ -108,9 +118,10 @@ Dataset::Dataset(const Configuration& config) {
       }
       begin = comma + 1;
     }
-    require(row.size() == sample_size + 1,
+    const size_t target_columns = regression ? size_t(classes) : 1;
+    require(row.size() == sample_size + target_columns,
             "Dataset line " + std::to_string(line_number) + " requires " +
-                std::to_string(sample_size + 1) + " values");
+                std::to_string(sample_size + target_columns) + " values");
     if (language) {
       for (float token : row) {
         require(token >= 0 && token < classes && std::floor(token) == token,
@@ -119,10 +130,13 @@ Dataset::Dataset(const Configuration& config) {
       }
       inputs.emplace_back(row.begin(), row.end() - 1);
       targets.emplace_back(row.begin() + 1, row.end());
+    } else if (regression) {
+      targets.emplace_back(row.begin(), row.begin() + classes);
+      inputs.emplace_back(row.begin() + classes, row.end());
     } else {
-      require(
-          row[0] >= 0 && row[0] < classes && std::floor(row[0]) == row[0],
-          "Invalid image class at dataset line " + std::to_string(line_number));
+      require(row[0] >= 0 && row[0] < classes && std::floor(row[0]) == row[0],
+              "Invalid target class at dataset line " +
+                  std::to_string(line_number));
       inputs.emplace_back(row.begin() + 1, row.end());
       targets.push_back({row[0]});
     }
@@ -134,7 +148,23 @@ Dataset::Dataset(const Configuration& config) {
   require(input.eof() || static_cast<bool>(input), "Dataset read failed");
 }
 
-std::pair<Tensor, Tensor> Dataset::batch(const std::vector<size_t>& order,
+std::string Dataset::fingerprint() const {
+  uint64_t hash = 14695981039346656037ull;
+  for (const auto* rows : {&inputs, &targets}) {
+    for (const auto& row : *rows) {
+      for (float value : row) {
+        uint32_t bits;
+        std::memcpy(&bits, &value, sizeof(bits));
+        for (int shift = 0; shift < 32; shift += 8) {
+          hash = (hash ^ uint8_t(bits >> shift)) * 1099511628211ull;
+        }
+      }
+    }
+  }
+  return std::to_string(hash);
+}
+
+TensorBatch Dataset::batch(const std::vector<size_t>& order,
                                          size_t offset, size_t count,
                                          Backend backend) const {
   std::vector<float> input_values;
@@ -152,8 +182,16 @@ std::pair<Tensor, Tensor> Dataset::batch(const std::vector<size_t>& order,
   shape.insert(shape.begin(), static_cast<int>(count));
   return {Tensor::from_data(shape, input_values, backend, false,
                             language ? DType::Int32 : DType::Float32),
-          Tensor::from_data({static_cast<int>(target_values.size())},
-                            target_values, backend, false, DType::Int32)};
+          Tensor::from_data(regression
+                                ? Shape{static_cast<int>(count), classes}
+                                : Shape{static_cast<int>(target_values.size())},
+                            target_values, backend, false,
+                            regression ? DType::Float32 : DType::Int32)};
+}
+
+Tensor Dataset::loss(const Tensor& prediction, const Tensor& target) const {
+  return regression ? mse_loss(prediction, target)
+                    : classification_loss(prediction, target, classes);
 }
 
 Tensor classification_loss(const Tensor& logits, const Tensor& targets,

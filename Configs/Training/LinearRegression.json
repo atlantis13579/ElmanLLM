@@ -1,0 +1,17 @@
+{
+  "format": "elman.training",
+  "version": 1,
+  "model_name": "LinearRegression",
+  "model": "../../Models/LinearRegression.json",
+  "backend": "cpu",
+  "data": {"format": "regression_csv", "path": "../../Intermediate/ParityData/linear_train.csv"},
+  "training": {
+    "steps": 80, "batch_size": 64, "optimizer": "sgd", "learning_rate": 0.05,
+    "momentum": 0, "weight_decay": 0, "clip_grad_norm": 0, "seed": 42,
+    "shuffle": false, "log_every": 20, "require_loss_decrease": true
+  },
+  "output": {
+    "checkpoint": "../../Intermediate/Runs/linear_regression/model.elman",
+    "metrics": "../../Intermediate/Runs/linear_regression/metrics.json"
+  }
+}

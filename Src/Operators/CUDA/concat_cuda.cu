@@ -21,7 +21,9 @@ __global__ void kernel_concat_cuda(uint32_t* out, const uint32_t* a,
       int source = outer * p.input_shape(KernelInput::B, axis) * inner +
                    (coordinate - p.input_shape(KernelInput::A, axis)) * inner +
                    rest;
-      if (p.input_dtype(KernelInput::B) == 0) {
+      if (p.input_dtype(KernelInput::B) == p.output_dtype()) {
+        COPY_TYPED_ELEMENT(out, b, i, source, p.output_dtype());
+      } else if (!kernel_integer(p.input_dtype(KernelInput::B))) {
         WRITE_OUTPUT(i, READ_B(source));
       } else {
         WRITE_INT_OUTPUT(i, READ_INT_B(source));
@@ -32,7 +34,7 @@ __global__ void kernel_concat_cuda(uint32_t* out, const uint32_t* a,
 void launch_concat_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
                         const uint32_t* c, const KernelParams& p) {
   if (p.output_count() > 0) {
-    kernel_concat_cuda<<<(unsigned(p.output_count()) + 255u) / 256u, 256>>>(
+    kernel_concat_cuda<<<(unsigned(p.output_count()) + 255u) / 256u, 256, 0, current_cuda_stream()>>>(
         out, a, b, c, p);
   }
 }

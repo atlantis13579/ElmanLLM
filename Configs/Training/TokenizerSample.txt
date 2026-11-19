@@ -1,0 +1,6 @@
+<begin>A tokenizer turns text into tokens. A tokenizer turns tokens into text.<end>
+<begin>Repeated words help a byte pair model learn useful tokens. Repeated words help a model learn.<end>
+<begin>Linear regression predicts a number. Logistic regression predicts a class.<end>
+<begin>We train a tokenizer, save the tokenizer, and load the same tokenizer.<end>
+<begin>你好世界。你好世界。分词模型可以学习重复的文字。<end>
+<begin>Numbers: 1 2 3 1 2 3. Spaces and newlines remain part of the text.<end>

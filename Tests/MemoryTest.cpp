@@ -1,0 +1,197 @@
+#include "Inference/LLM/MemoryPlan.h"
+#include "Backends/CpuMath.h"
+#include <atomic>
+#include <functional>
+#include <iostream>
+#include <limits>
+#include <thread>
+
+namespace {
+using namespace elman;
+size_t checks = 0;
+void check(bool valid, const char* message) {
+    ++checks;
+    if (!valid) throw std::runtime_error(message);
+}
+template<class Exception> void rejects(const std::function<void()>& run) {
+    bool rejected = false;
+    try { run(); } catch (const Exception&) { rejected = true; }
+    check(rejected, "Expected memory rejection");
+}
+void accounting(Backend backend) {
+    auto before = memory_stats(backend).live_bytes();
+    auto bytes = memory_allocation_bytes(backend, 12);
+    {
+        MemoryLimit limit(backend, before + bytes);
+        auto tensor = Tensor::zeros({3}, backend);
+        check(memory_stats(backend).live_bytes() == before + bytes, "Tensor storage charge differs");
+        auto alias = reshape(tensor, {1, 3});
+        tensor = {};
+        check(memory_stats(backend).live_bytes() == before + bytes, "Alias released live storage");
+        auto allocations = memory_stats(backend).allocations;
+        rejects<MemoryLimitExceeded>([&] { Tensor::zeros({1}, backend); });
+        check(memory_stats(backend).allocations == allocations, "Rejected allocation changed accounting");
+        rejects<MemoryLimitExceeded>([&] { MemoryLimit impossible(backend, before); });
+        alias = {};
+        check(memory_stats(backend).live_bytes() == before, "Last alias did not release storage");
+        check(limit.peak_bytes() == before + bytes, "Scoped peak was lost after release");
+        MemoryLimit nested(backend, before);
+        rejects<MemoryLimitExceeded>([&] { MemoryReservation reservation(backend, 1); });
+    }
+    {
+        MemoryReservation first(backend, 64), second(backend, 32);
+        second = std::move(first);
+        check(memory_stats(backend).live_bytes() == before + 64, "Moving reservation leaked bytes");
+        MemoryReservation third(std::move(second));
+        check(memory_stats(backend).live_bytes() == before + 64, "Move construction changed live bytes");
+    }
+    check(memory_stats(backend).live_bytes() == before, "Reservation scope leaked");
+    {
+        auto empty = backend_allocate(backend, 0, DType::Float32);
+        check(memory_stats(backend).live_bytes() == before + (backend == Backend::CUDA ? 1 : 0), "Empty allocation charge differs");
+    }
+    // Allocation failure after charging must roll back the reservation.
+    rejects<std::exception>([&] { backend_allocate(backend, std::numeric_limits<size_t>::max() / 2, DType::Float32); });
+    check(memory_stats(backend).live_bytes() == before, "Failed allocation leaked charge");
+    // Valid byte arithmetic, but an impossible physical allocation: exercises
+    // rollback after the reservation has succeeded, rather than overflow alone.
+    rejects<std::exception>([&] { backend_allocate(backend, std::numeric_limits<size_t>::max() - 15, DType::Bool); });
+    check(memory_stats(backend).live_bytes() == before, "Physical allocation failure leaked charge");
+    for (auto dtype : all_dtypes()) for (size_t count : {size_t(0), size_t(1), size_t(3), size_t(17)}) {
+        auto allocation = backend_allocate(backend, count, dtype);
+        auto payload = (size_t(dtype_info(dtype).bits) * count + 7) / 8;
+        auto charged = backend == Backend::CPU ? (payload + 7) / 8 * 8 : std::max(payload, size_t(1));
+        check(allocation->bytes == payload && memory_stats(backend).live_bytes() == before + charged,
+              "Packed/narrow dtype allocation charge differs");
+    }
+    check(memory_stats(backend).live_bytes() == before, "Dtype allocations leaked");
+    std::atomic<bool> failed{false};
+    {
+        MemoryLimit limit(backend, before + 512);
+        std::vector<std::thread> threads;
+        for (int i = 0; i < 8; ++i) threads.emplace_back([&] {
+            try {
+                for (int j = 0; j < 1000; ++j) {
+                    MemoryReservation reservation(backend, 64);
+                    std::this_thread::yield();
+                }
+            } catch (...) { failed = true; }
+        });
+        for (auto& thread : threads) thread.join();
+        check(!failed && limit.peak_bytes() <= before + 512, "Concurrent accounting exceeded its ceiling");
+    }
+    check(memory_stats(backend).live_bytes() == before, "Concurrent reservations leaked");
+    auto info = memory_info(backend);
+    check(info.total_bytes > 0 && info.available_bytes <= info.total_bytes, "Invalid memory snapshot");
+    check(memory_available_limit(backend, 1, 0) <= 1, "Explicit cap was not applied");
+    check(memory_available_limit(backend, 0, std::numeric_limits<size_t>::max()) == before, "Reserve did not exhaust headroom");
+}
+void workspace(Backend backend) {
+    auto input = Tensor::from_data({4097}, std::vector<float>(4097, 1), backend);
+    auto before = memory_stats(backend).live_bytes();
+    {
+        // Permit output IDs only: the sort workspace must hit the runtime cap.
+        MemoryLimit limit(backend, before + memory_allocation_bytes(backend, input.numel() * 4));
+        rejects<MemoryLimitExceeded>([&] { argsort(input, 0); });
+    }
+    check(memory_stats(backend).live_bytes() == before, "Sort workspace rejection leaked");
+    check(argsort(input, 0).int_data().back() == 4096, "Sort did not recover");
+    if (backend == Backend::CPU && cpu_vector_math_available()) {
+        auto narrow = Tensor::ones({4097}, backend, false, DType::BFloat16);
+        auto baseline = memory_stats(backend).live_bytes();
+        {
+            MemoryLimit limit(backend, baseline + memory_allocation_bytes(backend, narrow.nbytes()));
+            rejects<MemoryLimitExceeded>([&] { softmax(narrow, 0); });
+        }
+        check(memory_stats(backend).live_bytes() == baseline, "Narrow softmax workspace rejection leaked");
+        check(softmax(narrow, 0).data().front() > 0, "Narrow softmax did not recover");
+    }
+    if (backend == Backend::CUDA) {
+        {
+            MemoryLimit limit(backend, before + input.nbytes());
+            rejects<MemoryLimitExceeded>([&] { cumsum(input, 0); });
+        }
+        check(memory_stats(backend).live_bytes() == before, "Scan workspace rejection leaked");
+        check(cumsum(input, 0).data().back() == 4097, "Scan did not recover");
+        {
+            auto matrix = Tensor::ones({64, 64}, backend);
+            auto baseline = memory_stats(backend).live_bytes();
+            {
+                MemoryLimit limit(backend, baseline + matrix.nbytes());
+                rejects<MemoryLimitExceeded>([&] { matmul(matrix, matrix); });
+            }
+            check(memory_stats(backend).live_bytes() == baseline, "Failed GEMM initialization leaked workspace");
+            check(matmul(matrix, matrix).data().front() == 64, "GEMM did not recover");
+            check(memory_stats(backend).live_bytes() == baseline + 1024 * 1024, "Persistent GEMM workspace was not charged");
+        }
+        {
+            auto logits = Tensor::zeros({2, 3}, backend);
+            auto targets = Tensor::from_int_data({2}, {0, 1}, backend);
+            auto baseline = memory_stats(backend).live_bytes();
+            {
+                MemoryLimit limit(backend, baseline + 4);
+                rejects<MemoryLimitExceeded>([&] { cross_entropy(logits, targets); });
+            }
+            check(memory_stats(backend).live_bytes() == baseline, "Cross-entropy workspace rejection leaked");
+            auto loss = cross_entropy(logits, targets).data().front();
+            check(loss > 1 && loss < 1.2f, "Cross-entropy did not recover");
+        }
+    }
+}
+void plans(Backend backend) {
+    {
+        Qwen2Config tiny;
+        tiny.vocabulary = 3; tiny.hidden = 2; tiny.intermediate = 1; tiny.layers = 1;
+        tiny.heads = tiny.kv_heads = 1; tiny.max_positions = 8;
+        auto packed = plan_decoder_generation(tiny, backend, DType::BFloat16, 1, 0, false, false, true);
+        auto separate = plan_decoder_generation(tiny, backend, DType::BFloat16, 1, 0, false, false, false);
+        check(packed.parameter_bytes == (backend == Backend::CPU ? 120 : 92), "Packed parameter alignment differs");
+        check(separate.parameter_bytes == (backend == Backend::CPU ? 136 : 92), "Separate parameter alignment differs");
+    }
+    Qwen2Config c;
+    c.vocabulary = 151936; c.hidden = 1536; c.intermediate = 8960; c.layers = 28;
+    c.heads = 12; c.kv_heads = 2; c.max_positions = 131072;
+    auto plan = plan_decoder_generation(c, backend, DType::BFloat16, 128, 64, true);
+    check(plan.parameter_bytes == size_t(1777088000) * 2, "Official parameter accounting differs");
+    check(plan.kv_cache_bytes == size_t(2) * 28 * 192 * 256 * 2, "KV cache accounting differs");
+    auto longer = plan_decoder_generation(c, backend, DType::BFloat16, 4096, 64, true);
+    check(longer.additional_bytes > plan.additional_bytes, "Longer prompt did not increase budget");
+    auto selected = plan_decoder_generation(c, backend, DType::BFloat16, 4088, 8, true, true, true, true, 0, false);
+    auto chunked = plan_decoder_generation(c, backend, DType::BFloat16, 4088, 8, true, true, true, true, 128, false);
+    auto chunked_full = plan_decoder_generation(c, backend, DType::BFloat16, 4088, 8, true, true, true, true, 128, true);
+    check(chunked.additional_bytes < selected.additional_bytes, "Chunked prefill did not reduce admission bound");
+    check(chunked.additional_bytes < chunked_full.additional_bytes, "Selected logits did not reduce admission bound");
+    check(chunked.parameter_bytes + chunked.additional_bytes < size_t(4)*1024*1024*1024, "4096-token BF16 request exceeds 4 GiB tracked budget");
+    rejects<std::invalid_argument>([&] { plan_qwen_batch(c,backend,DType::BFloat16,2,1,17,Qwen2Logits::Last,false,true,0); });
+    auto narrow_pages=plan_qwen_batch(c,backend,DType::BFloat16,2,1,33,Qwen2Logits::Last,false,true,1);
+    auto shared_pages=plan_qwen_batch(c,backend,DType::BFloat16,2,1,33,Qwen2Logits::Last,false,true,32);
+    check(shared_pages.forward_bytes>narrow_pages.forward_bytes && shared_pages.host_additional_bytes>narrow_pages.host_additional_bytes,
+          "Shared partial tails did not increase batch memory admission");
+    rejects<std::invalid_argument>([&] { plan_decoder_generation(c, backend, DType::BFloat16, 1, 0, false, true, true, true, -1, false); });
+    rejects<std::invalid_argument>([&] { plan_decoder_generation(c, backend, DType::BFloat16, 65536, 1, false); });
+    rejects<std::invalid_argument>([&] { plan_decoder_generation(c, backend, DType::Int8, 1, 1, false); });
+    rejects<std::invalid_argument>([&] { plan_decoder_generation(c, backend, DType::Float32, 131072, 1, false); });
+    c.vocabulary = 1000000; c.hidden = 2; c.heads = c.kv_heads = 1;
+    check(qwen_host_workspace(c, 1, 3000, 3000, false) > 0, "Last-logit-only planning rejected a valid shape");
+    rejects<std::invalid_argument>([&] { qwen_host_workspace(c, 1, 3000, 3000, true); });
+    c.heads = 0;
+    rejects<std::invalid_argument>([&] { plan_decoder_generation(c, backend, DType::Float32, 1, 1, false); });
+    rejects<std::overflow_error>([&] { checked_memory_add(std::numeric_limits<size_t>::max(), 1); });
+    rejects<std::overflow_error>([&] { checked_memory_mul(std::numeric_limits<size_t>::max(), 2); });
+}
+}
+int main(int argc, char** argv) {
+    try {
+        if (argc != 2) throw std::invalid_argument("Usage: elman_memory_tests cpu|cuda");
+        auto backend = elman::parse_backend(argv[1]);
+        if (!elman::backend_available(backend)) return 77;
+        accounting(backend);
+        workspace(backend);
+        plans(backend);
+        std::cout << "Memory: " << checks << " passed, 0 failed\n";
+        return 0;
+    } catch (const std::exception& error) {
+        std::cerr << error.what() << '\n';
+        return 1;
+    }
+}

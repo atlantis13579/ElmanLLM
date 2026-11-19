@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 namespace elman {
+std::unique_ptr<Model> create_resnet(const Json& definition, Backend backend, uint32_t seed);
 namespace {
 
 std::vector<int> integers(const Json& object, const std::string& key) {
@@ -16,6 +17,30 @@ void require(bool condition, const std::string& message) {
     if (!condition) throw std::runtime_error("Model: " + message);
 }
 Tensor active(const Tensor& tensor, bool training) { return training ? tensor : tensor.detach(); }
+
+class AffineModel final : public Model {
+public:
+    AffineModel(const Json& definition, Backend backend, uint32_t seed, bool regression)
+        : Model(definition.at("name").string(), definition.at("architecture").string(), backend, seed), regression_(regression) {
+        features_ = definition.at("input_features").integer();
+        outputs_ = regression ? definition.int_or("output_features", 1) : definition.at("num_classes").integer();
+        require(features_ > 0 && outputs_ >= (regression ? 1 : 2), "invalid affine model dimensions");
+        weight_ = parameter("linear.weight", {features_, outputs_}, 0.01f);
+        bias_ = constant_parameter("linear.bias", {outputs_}, 0);
+    }
+    Shape sample_shape() const override { return {features_}; }
+    int output_classes() const override { return outputs_; }
+    bool regression() const override { return regression_; }
+    Tensor forward(const Tensor& input, bool training, uint32_t) override {
+        require(input.shape().size() == 2 && input.shape()[1] == features_ && input.dtype() == DType::Float32,
+                "Affine model input must be float32 [batch, input_features]");
+        return add(matmul(input, active(weight_, training)), active(bias_, training));
+    }
+private:
+    int features_, outputs_;
+    bool regression_;
+    Tensor weight_, bias_;
+};
 
 class AlexNet final : public Model {
 public:
@@ -147,8 +172,9 @@ public:
             auto query = permute(reshape(slice(qkv, 2, 0, width_), {batch, length, heads_, head_width}), {0, 2, 1, 3});
             auto key = permute(reshape(slice(qkv, 2, width_, 2 * width_), {batch, length, heads_, head_width}), {0, 2, 1, 3});
             auto val = permute(reshape(slice(qkv, 2, 2 * width_, 3 * width_), {batch, length, heads_, head_width}), {0, 2, 1, 3});
-            auto scores = add(mul(matmul(query, transpose(key, 2, 3)), 1.0f / std::sqrt(static_cast<float>(head_width))), causal_mask);
-            auto attention = dropout(softmax(scores, 3), dropout_, seed++, training);
+            // Preserve GPT2's reciprocal-multiply scaling, including on CPU.
+            auto scores = mul(matmul(query, transpose(key, 2, 3)), 1.0f / std::sqrt(static_cast<float>(head_width)));
+            auto attention = dropout(attention_softmax(scores, causal_mask, 1, 3), dropout_, seed++, training);
             auto attended = reshape(permute(matmul(attention, val), {0, 2, 1, 3}), {batch, length, width_});
             auto projected = add(matmul(attended, active(block.projection_weight, training)), active(block.projection_bias, training));
             value = add(value, dropout(projected, dropout_, seed++, training));
@@ -158,7 +184,7 @@ public:
             value = add(value, dropout(feedforward, dropout_, seed++, training));
         }
         value = layer_norm(value, active(final_weight_, training), active(final_bias_, training), epsilon_);
-        return matmul(value, transpose(active(token_embedding_, training), 0, 1));
+        return linear(value, active(token_embedding_, training));
     }
 private:
     struct Block {
@@ -196,8 +222,11 @@ std::unique_ptr<Model> create_model(const Json& definition, Backend backend, uin
     require(definition.at("format").string() == "elman.model", "unsupported model format");
     require(definition.at("version").integer() == 1, "unsupported model version");
     const auto architecture = definition.at("architecture").string();
+    if (architecture == "linear_regression") return std::make_unique<AffineModel>(definition, backend, seed, true);
+    if (architecture == "logistic_regression") return std::make_unique<AffineModel>(definition, backend, seed, false);
     if (architecture == "alexnet") return std::make_unique<AlexNet>(definition, backend, seed);
     if (architecture == "gpt2") return std::make_unique<GPT2>(definition, backend, seed);
+    if (architecture == "resnet") return create_resnet(definition, backend, seed);
     throw std::runtime_error("Unsupported model architecture: " + architecture);
 }
 

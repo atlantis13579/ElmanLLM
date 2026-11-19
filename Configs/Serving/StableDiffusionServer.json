@@ -1,0 +1,11 @@
+{
+  "model": {
+    "type": "diffusion",
+    "path": "../../Models/stable-diffusion-v1-5",
+    "backend": "cuda"
+  },
+  "http": {
+    "host": "127.0.0.1",
+    "port": 8081
+  }
+}

@@ -24,7 +24,22 @@ void launch_reduce_grad_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
           ++matches;
         }
       }
-      value = READ_A(i) == extremum ? value / float(matches) : 0.0f;
+      value = (value / float(matches)) * float(READ_A(i) == extremum);
+    }
+    if (kind == 5 || kind == 6) {
+      const float extremum = READ_B(target);
+      const int base =
+          axis < 0 ? 0 : (target / inner) * length * inner + target % inner;
+      int selected = -1;
+      for (int j = 0; j < length; ++j) {
+        const int index = base + j * inner;
+        const float candidate = READ_A(index);
+        if (candidate == extremum || (candidate != candidate && extremum != extremum)) {
+          selected = index;
+          break;
+        }
+      }
+      value = i == selected ? value : 0.0f;
     }
     if (kind == 4) {
       int base =
@@ -35,7 +50,7 @@ void launch_reduce_grad_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
           product *= READ_A(base + j * inner);
         }
       }
-      value *= product;
+      value *= READ_A(i) == 0.0f ? product : READ_B(target) / READ_A(i);
     }
     WRITE_OUTPUT(i, value);
   }

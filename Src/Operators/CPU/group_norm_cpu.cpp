@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "Operators/group_norm_params.h"
 
 namespace elman {
 void launch_group_norm_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
@@ -20,6 +21,14 @@ void launch_group_norm_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
       variance += difference * difference;
     }
     variance /= float(length);
+    if (p.input_dtype(KernelInput::A) == int(DType::Float32)) {
+      float inverse = float(1.0 / std::sqrt(double(variance) + group_norm_epsilon(p)));
+      int channel = (i / spatial) % channels;
+      float scale = inverse * (p.input_rank(KernelInput::B) >= 0 ? READ_B(channel) : 1.0f);
+      float bias = (p.input_rank(KernelInput::C) >= 0 ? READ_C(channel) : 0.0f) - scale * average;
+      WRITE_OUTPUT(i, scale * READ_A(i) + bias);
+      continue;
+    }
     float value =
         (READ_A(i) - average) /
         EL_SQRT(variance +

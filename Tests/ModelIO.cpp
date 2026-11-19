@@ -9,7 +9,8 @@
 #include <stdexcept>
 
 #include "IO/Checkpoint.h"
-#include "Inference/Inference.h"
+#include "Inference/ModelEvaluation.h"
+#include "Runtime/RunContext.h"
 
 namespace {
 int checks = 0;
@@ -177,6 +178,110 @@ void model_tests() {
   }
 }
 
+void affine_tests() {
+  using namespace elman;
+  for (bool regression : {true, false}) {
+    TemporaryDirectory temporary;
+    const auto model_path = temporary.path / "model.json";
+    const auto data_path = temporary.path / "data.csv";
+    const auto config_path = temporary.path / "run.json";
+    const auto checkpoint_path = temporary.path / "model.elman";
+    const auto prediction_path = temporary.path / "predictions.json";
+    Json definition(
+        Json::Object{{"format", "elman.model"},
+                     {"version", 1},
+                     {"name", "TestAffine"},
+                     {"architecture",
+                      regression ? "linear_regression" : "logistic_regression"},
+                     {"input_features", 2},
+                     {regression ? "output_features" : "num_classes", 2}});
+    definition.write(model_path.string());
+    auto model = create_model(definition, Backend::CPU, 7);
+    check(model->regression() == regression, "Affine objective selection");
+    check(model->parameters().size() == 2, "Affine parameter count");
+    model->parameters()[0].value.assign({1, 2, 3, 4});
+    model->parameters()[1].value.assign({0.5f, -0.5f});
+    auto input = Tensor::from_data({2, 2}, {1, 2, -1, 1});
+    auto prediction = model->forward(input, false);
+    near(prediction.data(), {7.5f, 9.5f, 2.5f, 1.5f}, 0, "Affine known output");
+    check(!prediction.requires_grad(),
+          "Affine inference has no parameter graph");
+    rejects([&] { model->forward(Tensor::zeros({2, 3}), false); },
+            "Affine input width");
+    rejects(
+        [&] { model->forward(Tensor::from_int_data({1, 2}, {1, 2}), false); },
+        "Affine input dtype");
+    auto bad = definition.object();
+    bad["input_features"] = 0;
+    rejects([&] { create_model(Json(bad), Backend::CPU); },
+            "Affine invalid feature count");
+    bad = definition.object();
+    bad[regression ? "output_features" : "num_classes"] = regression ? 0 : 1;
+    rejects([&] { create_model(Json(bad), Backend::CPU); },
+            "Affine invalid output count");
+    save_checkpoint(checkpoint_path.string(), *model, definition,
+                    state_for(*model));
+    {
+      std::ofstream data(data_path);
+      data << (regression ? "7.5,9.5,1,2\n1.5,-1.5,-1,1\n" : "1,1,2\n0,-1,1\n");
+    }
+    Json config(Json::Object{
+        {"format", "elman.training"},
+        {"version", 1},
+        {"model_name", model->name()},
+        {"model", "model.json"},
+        {"backend", "cpu"},
+        {"training", Json::Object{{"seed", 7}}},
+        {"data",
+         Json::Object{{"format", regression ? "regression_csv" : "tabular_csv"},
+                      {"path", "data.csv"}}},
+        {"output", Json::Object{{"checkpoint", "model.elman"}}}});
+    config.write(config_path.string());
+    Configuration context(config_path.string(), {});
+    Dataset data(context);
+    auto batch = data.batch({0, 1}, 0, 2, Backend::CPU);
+    near(batch.first.data(), input.data(), 0, "Tabular feature order");
+    check(batch.second.shape() == (regression ? Shape{2, 2} : Shape{2}),
+          "Tabular target shape");
+    check(batch.second.dtype() == (regression ? DType::Float32 : DType::Int32),
+          "Tabular target dtype");
+    auto loss = data.loss(model->forward(batch.first, true), batch.second);
+    if (regression) {
+      near(loss.data(), {2.5f}, 0, "Multi-output mean squared error");
+    }
+    loss.backward();
+    for (const auto& parameter : model->parameters()) {
+      check(parameter.value.grad().size() == parameter.value.numel(),
+            "Affine parameter gradient");
+      for (float value : parameter.value.grad()) {
+        check(std::isfinite(value), "Affine finite gradient");
+      }
+    }
+    RunOptions options;
+    options.output = prediction_path.string();
+    check(infer(config_path.string(), options) == 0,
+          "Affine checkpoint inference");
+    auto report = Json::read(prediction_path.string());
+    check(report.at("predictions").array().size() == 2,
+          "Affine inference sample count");
+    if (regression) {
+      check(!report.contains("accuracy"), "Regression has no class accuracy");
+      check(std::abs(report.at("rmse").number() - std::sqrt(2.5)) < 1e-6,
+            "Regression inference RMSE");
+      check(
+          report.at("predictions").at(0).at("predicted").at(1).number() == 9.5,
+          "Regression fractional prediction");
+    } else {
+      check(report.at("accuracy").number() == 1, "Logistic inference accuracy");
+    }
+    {
+      std::ofstream invalid(data_path);
+      invalid << (regression ? "1,2,3\n" : "2,1,2\n");
+    }
+    rejects([&] { Dataset invalid(context); }, "Invalid affine dataset");
+  }
+}
+
 void checkpoint_tests() {
   using namespace elman;
   TemporaryDirectory temporary;
@@ -335,6 +440,7 @@ int main() {
   try {
     json_tests();
     model_tests();
+    affine_tests();
     checkpoint_tests();
     inference_tests();
     std::cout << "Model/IO tests passed: " << checks << " checks\n";
