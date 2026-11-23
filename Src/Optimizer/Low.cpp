@@ -1,4 +1,5 @@
 #include "Optimizer/OptimizerInternal.h"
+#include "Core/LocalFunction.h"
 #include "Core/TensorDispatch.h"
 #include "Operators/low_precision_optimizer.h"
 #include <cmath>
@@ -19,22 +20,22 @@ std::vector<int> step_attributes(const std::string& algorithm, const StepParamet
 }
 LowStep low_step(const std::string& algorithm,const Tensor& values,const Tensor& gradients,
         const Tensor& first_moment,const Tensor& second_moment,const StepParameters& step,bool first_step){
-    auto attributes = step_attributes(algorithm, step, first_step, std::pow(step.correction2, .5));
+    std::vector<int> attributes = step_attributes(algorithm, step, first_step, std::pow(step.correction2, .5));
     const std::vector<Tensor> inputs{values,gradients,first_moment,second_moment};
-    auto result=[&](int mode){attributes[optimizer_attr::kResult]=mode;
-        return dispatch_tensor("optimizer_step",values.shape(),inputs,attributes,mode==0?values.dtype():DType::Float32);};
+    LocalFunction result{[&](int mode){attributes[optimizer_attr::kResult]=mode;
+        return dispatch_tensor("optimizer_step",values.shape(),inputs,attributes,mode==0?values.dtype():DType::Float32);}};
     return {result(0),result(1),result(2),result(3)};
 }
 
-DoubleStep resident_float32_step(const std::string& algorithm, const Tensor& values, const Tensor& gradients,
+TensorStep resident_float32_step(const std::string& algorithm, const Tensor& values, const Tensor& gradients,
                                 const Tensor& first_moment, const Tensor& second_moment, const StepParameters& step) {
-    auto attributes = step_attributes(algorithm, step, false, step.correction2);
+    std::vector<int> attributes = step_attributes(algorithm, step, false, step.correction2);
     attributes[optimizer_attr::kResidentFloat32] = 1;
     const std::vector<Tensor> inputs{values, gradients, first_moment, second_moment};
-    auto result = [&](int mode) {
+    LocalFunction result{[&](int mode) {
         attributes[optimizer_attr::kResult] = mode;
         return dispatch_tensor("optimizer_step", values.shape(), inputs, attributes, DType::Float32);
-    };
+    }};
     return {result(0), result(1), algorithm == "sgd" ? second_moment : result(2)};
 }
 } // namespace elman::optimizer_internal

@@ -5,14 +5,14 @@
 
 namespace elman::metal {
 Tensor lower_conv2d_input_grad(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto a = inputs[0];
-  auto b = inputs[1];
+  Tensor a = inputs[0];
+  Tensor b = inputs[1];
   if (!a) {
     return m.filled(p, 0);
   }
   using namespace operator_attr::conv2d;
   const int pw = p.attribute(kPaddingWidth), ph = p.attribute(kPaddingHeight);
-  auto* descriptor =
+  MPSGraphConvolution2DOpDescriptor* descriptor =
       [MPSGraphConvolution2DOpDescriptor descriptorWithStrideInX:p.attribute(kStrideWidth)
                                                        strideInY:p.attribute(kStrideHeight)
                                                  dilationRateInX:p.attribute(kDilationWidth)

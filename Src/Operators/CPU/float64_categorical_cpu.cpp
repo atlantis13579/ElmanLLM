@@ -4,9 +4,9 @@
 
 namespace elman {
 void launch_float64_categorical_cpu(uint32_t* output, const uint32_t* weights, const uint32_t* cumulative, const uint32_t* uniforms, const KernelParams& p) {
-    const auto* a = reinterpret_cast<const double*>(weights);
-    const auto* b = reinterpret_cast<const double*>(cumulative);
-    const auto* c = reinterpret_cast<const double*>(uniforms);
+    const double* a = reinterpret_cast<const double*>(weights);
+    const double* b = reinterpret_cast<const double*>(cumulative);
+    const double* c = reinterpret_cast<const double*>(uniforms);
     const int width = p.input_shape(KernelInput::A, 1);
     for (int row = 0; row < p.output_count(); ++row) {
         const double uniform = c[row], total = b[row * width + width - 1];

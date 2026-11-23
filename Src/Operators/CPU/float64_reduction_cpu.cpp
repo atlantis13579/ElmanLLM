@@ -3,8 +3,8 @@
 namespace elman {
 void launch_float64_reduction_cpu(Float64Reduction op, uint32_t* out, const uint32_t* a,
                                   const uint32_t* b, const uint32_t* c, const KernelParams& p) {
-    auto output = reinterpret_cast<double*>(out);
-    auto input = reinterpret_cast<const double*>(a);
+    double* output = reinterpret_cast<double*>(out);
+    const double* input = reinterpret_cast<const double*>(a);
     const int length = float64_reduction_length(p), inner = float64_reduction_inner(p);
     if (op == Float64Reduction::Cumsum || op == Float64Reduction::ReverseCumsum) {
         const int rows = length ? p.output_count() / length : 0;

@@ -2,12 +2,12 @@
 
 namespace elman::metal {
 Tensor lower_repeat(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto a = inputs[0];
-  auto original = shape(p, 0);
-  auto repeated = shape(p);
+  Tensor a = inputs[0];
+  Shape original = shape(p, 0);
+  Shape repeated = shape(p);
   const int leading = int(repeated.count) - int(original.count);
-  auto expanded = [NSMutableArray<NSNumber*> arrayWithCapacity:repeated.count];
-  auto repetitions = [NSMutableArray<NSNumber*> arrayWithCapacity:repeated.count];
+  NSMutableArray<NSNumber*>* expanded = [NSMutableArray<NSNumber*> arrayWithCapacity:repeated.count];
+  NSMutableArray<NSNumber*>* repetitions = [NSMutableArray<NSNumber*> arrayWithCapacity:repeated.count];
   for (int i = 0; i < int(repeated.count); ++i) {
     const int base = i < leading ? 1 : original[i - leading].intValue;
     if (!base) {

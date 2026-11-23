@@ -3,13 +3,12 @@
 namespace elman::optimizer_internal {
 
 void sgd_step(std::vector<float>& values, const std::vector<float>& gradients,
-              std::vector<float>& first_moment, const StepParameters& step) {
+              std::vector<float>& first_moment, const FloatOptimizerParameters& step) {
   for (size_t i = 0; i < values.size(); ++i) {
-    double gradient =
-        gradients[i] * step.gradient_scale + step.weight_decay * values[i];
-    first_moment[i] =
-        static_cast<float>(step.momentum * first_moment[i] + gradient);
-    values[i] = static_cast<float>(values[i] - step.rate * first_moment[i]);
+    const FloatOptimizerElement result = float_optimizer_element(
+        values[i], gradients[i], first_moment[i], 0.f, step, FloatOptimizerAlgorithm::Sgd, false, i, values.size());
+    values[i] = result.value;
+    first_moment[i] = result.first;
   }
 }
 

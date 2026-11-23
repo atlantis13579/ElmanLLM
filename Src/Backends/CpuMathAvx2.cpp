@@ -84,13 +84,13 @@ void softmax_math_avx2(float* output, const float* input, int rows, int columns,
             maximum = std::isnan(maximum) || maximum > source[i] ? maximum : source[i];
         int i = 0;
         for (; i + 8 <= columns; i += 8) {
-            auto values = _mm256_sub_ps(_mm256_loadu_ps(source + i), _mm256_set1_ps(maximum));
+            __m256 values = _mm256_sub_ps(_mm256_loadu_ps(source + i), _mm256_set1_ps(maximum));
             _mm256_storeu_ps(target + i, Sleef_expf8_u10avx2(values));
         }
         if (i < columns && !narrow_input) {
             float tail[8]{};
             std::copy_n(source + i, columns - i, tail);
-            auto values = _mm256_sub_ps(_mm256_loadu_ps(tail), _mm256_set1_ps(maximum));
+            __m256 values = _mm256_sub_ps(_mm256_loadu_ps(tail), _mm256_set1_ps(maximum));
             _mm256_storeu_ps(tail, Sleef_expf8_u10avx2(values));
             std::copy_n(tail, columns - i, target + i);
         }

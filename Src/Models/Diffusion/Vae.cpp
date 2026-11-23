@@ -1,4 +1,5 @@
 #include "Models/Diffusion/Vae.h"
+#include "Core/LocalFunction.h"
 
 #include <cmath>
 #include <memory>
@@ -29,9 +30,9 @@ struct VaeConfig {
     if (latent <= 0 || output <= 0 || groups <= 0 || repeats < 1 || repeats > 16 ||
         !(scaling > 0) || !std::isfinite(scaling) || config.string_or("act_fn", "silu") != "silu")
       throw std::invalid_argument("Unsupported Stable Diffusion VAE configuration");
-    const auto& types = config.at("up_block_types").array();
+    const Json::Array& types = config.at("up_block_types").array();
     if (types.size() != channels.size()) throw std::invalid_argument("VAE up blocks do not match channel stages");
-    for (const auto& type : types) if (type.string() != "UpDecoderBlock2D")
+    for (const Json& type : types) if (type.string() != "UpDecoderBlock2D")
       throw std::invalid_argument("Unsupported VAE upsampling block");
   }
 };
@@ -44,14 +45,14 @@ struct VaeAttention {
         attention(load(weights, prefix, channels)) {}
   static Attention load(const ComponentWeights& weights, const std::string& prefix, int channels) {
     const bool modern = weights.contains(prefix + ".to_q.weight");
-    auto projection = [&](const char* current, const char* legacy) {
+    LocalFunction projection{[&](const char* current, const char* legacy) {
       return model_weights::linear(weights, prefix + (modern ? current : legacy), channels, channels, true, true);
-    };
+    }};
     return Attention(projection(".to_q", ".query"), projection(".to_k", ".key"),
                      projection(".to_v", ".value"), projection(".to_out.0", ".proj_attn"), 1);
   }
   Tensor operator()(const Tensor& input) const {
-    auto x = image_tokens(norm(input));
+    Tensor x = image_tokens(norm(input));
     return add(input, token_image(attention(x, x), input.shape()[2], input.shape()[3]));
   }
 };
@@ -79,9 +80,9 @@ struct VaeModel {
     if (config.attention) mid_attention.emplace(weights, "decoder.mid_block.attentions.0", config.channels.back(), config.groups);
     int current = config.channels.back();
     for (size_t level = 0; level < config.channels.size(); ++level) {
-      const auto prefix = "decoder.up_blocks." + std::to_string(level);
+      const std::string prefix = "decoder.up_blocks." + std::to_string(level);
       const int width = config.channels[config.channels.size() - level - 1];
-      auto& stage = stages.emplace_back();
+      VaeStage& stage = stages.emplace_back();
       for (int block = 0; block <= config.repeats; ++block) {
         stage.blocks.emplace_back(weights, prefix + ".resnets." + std::to_string(block), current, width, config.groups, 1e-6);
         current = width;
@@ -90,13 +91,13 @@ struct VaeModel {
     }
   }
   Tensor forward(const Tensor& latent) const {
-    const auto& shape = latent.shape();
+    const Shape& shape = latent.shape();
     if (shape[0] <= 0 || shape[2] <= 0 || shape[3] <= 0) throw std::invalid_argument("Invalid VAE latent shape");
-    auto x = mid_first(input(post_quant ? (*post_quant)(latent) : latent));
+    Tensor x = mid_first(input(post_quant ? (*post_quant)(latent) : latent));
     if (mid_attention) x = (*mid_attention)(x);
     x = mid_second(x);
-    for (const auto& stage : stages) {
-      for (const auto& block : stage.blocks) x = block(x);
+    for (const VaeStage& stage : stages) {
+      for (const diffusion::ResnetBlock& block : stage.blocks) x = block(x);
       if (stage.resize) x = (*stage.resize)(upsample_nearest2d(x));
     }
     return output(silu(final_norm(x)));
@@ -108,7 +109,7 @@ struct VaeModel {
 VaeDecoder load_diffusion_vae(const std::filesystem::path& directory, Backend backend, int device, DType dtype) {
   DeviceScope owner(backend, device);
   const VaeConfig config(Json::read((directory / "config.json").string()));
-  auto model = std::make_shared<VaeModel>(config, ComponentWeights(directory, "diffusion_pytorch_model", backend, dtype));
+  std::shared_ptr<VaeModel> model = std::make_shared<VaeModel>(config, ComponentWeights(directory, "diffusion_pytorch_model", backend, dtype));
   return {InferenceSession(backend, device, {{"latent", {dtype, {-1, config.latent, -1, -1}}}},
       {{"sample", {dtype, {-1, config.output, -1, -1}}}}, [model = std::move(model)](const NamedTensors& inputs) {
         return NamedTensors{{"sample", model->forward(inputs.at("latent"))}};

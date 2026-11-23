@@ -3,8 +3,8 @@
 
 namespace elman {
 void validate_low_precision_cast(const BufferPtr& output, const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
-    auto floating = [](DType dtype) { return is_arithmetic_float(dtype) || is_low_precision_float(dtype); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    bool (*const floating)(DType) = [](DType dtype) { return is_arithmetic_float(dtype) || is_low_precision_float(dtype); };
     require(!inputs.empty() && inputs.size() <= 4 && inputs[0], "Low precision cast requires one input");
     for (size_t i = 1; i < inputs.size(); ++i) require(!inputs[i], "Unexpected low precision cast input");
     for (int i = 1; i < 4; ++i) require(p.input_rank(KernelInput(i)) == -1, "Unexpected low precision cast descriptor");
@@ -25,8 +25,8 @@ void validate_low_precision_cast(const BufferPtr& output, const std::vector<Buff
     require(count == output->count && count == inputs[0]->count && p.output_count() == int(count),
             "Low precision cast descriptor differs from storage");
     if (output->bytes && inputs[0]->bytes) {
-        const auto a = reinterpret_cast<uintptr_t>(output->raw_pointer());
-        const auto b = reinterpret_cast<uintptr_t>(inputs[0]->raw_pointer());
+        const uintptr_t a = reinterpret_cast<uintptr_t>(output->raw_pointer());
+        const uintptr_t b = reinterpret_cast<uintptr_t>(inputs[0]->raw_pointer());
         const bool overlap = a <= b ? b - a < output->bytes : a - b < inputs[0]->bytes;
         require(!overlap || (a == b && output->dtype == inputs[0]->dtype), "Unsafe overlapping low precision cast buffers");
     }

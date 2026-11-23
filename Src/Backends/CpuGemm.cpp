@@ -87,9 +87,10 @@ bool try_attention_gemm_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
                     reinterpret_cast<const float*>(b), left_stride, reinterpret_cast<const float*>(a), right_stride,
                     beta, reinterpret_cast<float*>(out), output_stride);
     } else {
-        auto workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(batches), 3 * sizeof(void*)));
-        auto left = static_cast<const float**>(workspace->raw_pointer()), right = left + batches;
-        auto outputs = reinterpret_cast<float**>(static_cast<char*>(workspace->raw_pointer()) + 2 * size_t(batches) * sizeof(void*));
+        BufferPtr workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(batches), 3 * sizeof(void*)));
+        const float** left = static_cast<const float**>(workspace->raw_pointer());
+        const float** right = left + batches;
+        float** outputs = reinterpret_cast<float**>(static_cast<char*>(workspace->raw_pointer()) + 2 * size_t(batches) * sizeof(void*));
         for (int i = 0; i < batches; ++i) {
             left[i] = reinterpret_cast<const float*>(b) + size_t(i / s.groups) * s.b_stride;
             right[i] = reinterpret_cast<const float*>(a) + size_t(i) * s.a_stride;
@@ -127,7 +128,7 @@ bool try_gemm_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
     if (alpha == 0) return false;
     if (beta != 0 && p.input_dtype(KernelInput::C) != int(DType::Float32)) return false;
     initialize_blas();
-    auto destination = reinterpret_cast<float*>(out);
+    float* destination = reinterpret_cast<float*>(out);
     LocalGemmThreads threads(configured_cpu_thread_count());
     bool separate_bias = linear && p.input_rank(KernelInput::C) == 0 && p.input_rank(KernelInput::A) != 2 && p.input_rank(KernelInput::A) != 3;
     if (beta != 0 && !separate_bias) {
@@ -145,9 +146,10 @@ bool try_gemm_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
                     reinterpret_cast<const float*>(b), left_stride, reinterpret_cast<const float*>(a), right_stride,
                     beta, destination, output_stride);
     } else {
-        auto workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(batches), 3 * sizeof(void*)));
-        auto left = static_cast<const float**>(workspace->raw_pointer()), right = left + batches;
-        auto outputs = reinterpret_cast<float**>(static_cast<char*>(workspace->raw_pointer()) + 2 * size_t(batches) * sizeof(void*));
+        BufferPtr workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(batches), 3 * sizeof(void*)));
+        const float** left = static_cast<const float**>(workspace->raw_pointer());
+        const float** right = left + batches;
+        float** outputs = reinterpret_cast<float**>(static_cast<char*>(workspace->raw_pointer()) + 2 * size_t(batches) * sizeof(void*));
         for (int i = 0; i < batches; ++i) {
             left[i] = reinterpret_cast<const float*>(b) + matrix_batch_offset(i, KernelInput::B, p);
             right[i] = reinterpret_cast<const float*>(a) + matrix_batch_offset(i, KernelInput::A, p);

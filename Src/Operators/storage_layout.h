@@ -96,7 +96,7 @@ ELMAN_LAYOUT_HD inline uint8_t storage_layout_byte(StorageLayout op, uint64_t by
     if (op == StorageLayout::Copy) return inputs[0][byte];
     if (bits % 8 == 0) {
         const unsigned width = bits / 8;
-        const auto source = storage_layout_source(op, int(byte / width), b, p);
+        const StorageLocation source = storage_layout_source(op, int(byte / width), b, p);
         return source.input < 0 ? 0 : inputs[source.input][uint64_t(source.index) * width + byte % width];
     }
     // Each thread owns one destination byte, including cross-byte packed values.
@@ -105,7 +105,7 @@ ELMAN_LAYOUT_HD inline uint8_t storage_layout_byte(StorageLayout op, uint64_t by
     for (unsigned bit = 0; bit < 8; ++bit) {
         const uint64_t logical_bit = byte * 8 + bit, element = logical_bit / bits;
         if (element >= uint64_t(p.output_count())) break;
-        const auto source = storage_layout_source(op, int(element), b, p);
+        const StorageLocation source = storage_layout_source(op, int(element), b, p);
         if (source.input < 0) continue;
         const uint64_t source_bit = uint64_t(source.index) * bits + logical_bit % bits;
         result |= ((inputs[source.input][source_bit / 8] >> (source_bit % 8)) & 1u) << bit;

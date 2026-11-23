@@ -1,4 +1,5 @@
 #include "Models/LLM/DeepSeek.h"
+#include "Core/LocalFunction.h"
 #include "Inference/LLM/LatentAttention.h"
 #include "IO/InferenceWeights.h"
 #include "Core/Graph.h"
@@ -28,26 +29,26 @@ std::vector<int32_t> integers(const Tensor& value, bool mask = false) {
     require(value.defined(), "undefined integer input");
     if (value.dtype() == DType::Int32 || (mask && value.dtype() == DType::Bool)) return value.int_data();
     require(value.dtype() == DType::Int64, "indices require Int32 or Int64");
-    auto source = value.int64_data();
+    std::vector<int64_t> source = value.int64_data();
     std::vector<int32_t> result;
     result.reserve(source.size());
-    for (auto number : source) {
+    for (int64_t number : source) {
         require(number >= INT_MIN && number <= INT_MAX, "integer input exceeds Int32 indexing");
         result.push_back(int32_t(number));
     }
     return result;
 }
 Tensor rotate(const Tensor& input, const Tensor& cosine, const Tensor& sine) {
-    const auto& s = input.shape();
-    auto paired = reshape(input, {s[0], s[1], s[2], s[3] / 2, 2});
-    auto split = reshape(transpose(paired, 3, 4), s);
+    const Shape& s = input.shape();
+    Tensor paired = reshape(input, {s[0], s[1], s[2], s[3] / 2, 2});
+    Tensor split = reshape(transpose(paired, 3, 4), s);
     return rotary_embedding(split, cosine, sine);
 }
 }
 
 static std::pair<Tensor, Tensor> split_latent_projection(const Tensor& weight, const DeepSeekConfig& c) {
     const int width = c.plain_dimension + c.value_dimension;
-    auto projection = reshape(weight, {c.heads, width, c.latent_cache_rank});
+    Tensor projection = reshape(weight, {c.heads, width, c.latent_cache_rank});
     return {slice(projection, 1, 0, c.plain_dimension), slice(projection, 1, c.plain_dimension, width)};
 }
 
@@ -92,10 +93,10 @@ DeepSeekConfig DeepSeekConfig::from_json(const Json& value) {
         c.routing.groups = value.int_or("n_group", 1);
         c.routing.selected_groups = value.int_or("topk_group", c.routing.groups);
         c.routing.scale = float(value.number_or("routed_scaling_factor", 1));
-        const auto score = value.string_or("scoring_func", "softmax");
+        const std::string score = value.string_or("scoring_func", "softmax");
         require(score == "softmax" || score == "sigmoid", "unsupported expert scoring function");
         c.routing.score = score == "softmax" ? ExpertScore::Softmax : ExpertScore::Sigmoid;
-        const auto method = value.string_or("topk_method", "greedy");
+        const std::string method = value.string_or("topk_method", "greedy");
         require(method == "greedy" || method == "group_limited_greedy" || method == "noaux_tc", "unsupported expert selection method");
         if (method == "greedy") c.routing.groups = c.routing.selected_groups = 1;
         c.routing.group_score = method == "noaux_tc" ? ExpertGroupScore::TopTwo : ExpertGroupScore::Maximum;
@@ -105,7 +106,7 @@ DeepSeekConfig DeepSeekConfig::from_json(const Json& value) {
         c.routing.validate();
     }
     if (value.contains("rope_scaling") && !value.at("rope_scaling").is_null()) {
-        const auto& rope = value.at("rope_scaling");
+        const Json& rope = value.at("rope_scaling");
         c.rope_type = rope.string_or("rope_type", rope.string_or("type", "default"));
         require(c.rope_type == "default" || c.rope_type == "linear" || c.rope_type == "yarn", "unsupported rotary scaling type");
         c.rope_factor = rope.number_or("factor", 1);
@@ -129,7 +130,7 @@ DeepSeekConfig DeepSeekConfig::from_json(const Json& value) {
     return c;
 }
 double DeepSeekConfig::attention_scale() const {
-    const auto gain = rope_type == "yarn" ? magnitude(rope_factor, rope_mscale_all) : 1.;
+    const double gain = rope_type == "yarn" ? magnitude(rope_factor, rope_mscale_all) : 1.;
     return gain * gain / std::sqrt(double(plain_dimension) + rotary_dimension);
 }
 
@@ -137,39 +138,39 @@ DeepSeek::DeepSeek(const std::string& directory, Backend backend, DType dtype, b
     : config_(DeepSeekConfig::from_json(Json::read((std::filesystem::path(directory) / "config.json").string()))),
       backend_(backend), dtype_(dtype), placement_(backend, config_.layers, devices, simulated_devices), absorbed_attention_(absorbed_attention) {
     require(backend_available(backend) && is_compute_float(dtype), "inference backend or dtype is unavailable");
-    auto input_device = placement_.enter_input();
+    DeviceStage input_device = placement_.enter_input();
     InferenceWeights weights(directory);
     quantized_weights_ = weights.has_quantization();
-    const auto& c = config_;
+    const DeepSeekConfig& c = config_;
     std::set<std::string> loaded;
-    auto check = [&](const std::string& name, const Shape& shape) {
-        const auto& info = weights.info(name);
+    LocalFunction check{[&](const std::string& name, const Shape& shape) {
+        const SafetensorInfo& info = weights.info(name);
         require(info.shape == shape && (is_compute_float(info.dtype) || weights.quantized(name)), "weight geometry or dtype differs: " + name);
         require(loaded.insert(name).second, "weight loaded twice: " + name);
         parameter_count_ = checked_memory_add(parameter_count_, shape_element_count(shape));
-    };
-    auto dense = [&](const std::string& name, const Shape& shape, DType type) {
+    }};
+    LocalFunction dense{[&](const std::string& name, const Shape& shape, DType type) {
         check(name, shape);
         require(!weights.quantized(name), "normalization, bias and routing weights must be dense: " + name);
         return cast(weights.load(name, backend), type);
-    };
-    auto matrix = [&](const std::string& name, const Shape& shape) {
+    }};
+    LocalFunction matrix{[&](const std::string& name, const Shape& shape) {
         check(name, shape);
-        auto result = weights.quantized(name) ? ProjectionWeight(weights.load_quantized(name, backend)) :
+        ProjectionWeight result = weights.quantized(name) ? ProjectionWeight(weights.load_quantized(name, backend)) :
             ProjectionWeight(cast(weights.load(name, backend), dtype));
         layer_workspace_count_ = std::max(layer_workspace_count_, result.workspace_count());
         return result;
-    };
-    auto expert = [&](const std::string& prefix, int width) {
+    }};
+    LocalFunction expert{[&](const std::string& prefix, int width) {
         Expert result;
         result.gate = matrix(prefix + "gate_proj.weight", {width, c.hidden});
         result.up = matrix(prefix + "up_proj.weight", {width, c.hidden});
         result.down = matrix(prefix + "down_proj.weight", {c.hidden, width});
         return result;
-    };
+    }};
     embedding_ = matrix("model.embed_tokens.weight", {c.vocabulary, c.hidden});
     {
-        auto output_device = placement_.enter_output();
+        DeviceStage output_device = placement_.enter_output();
         norm_ = dense("model.norm.weight", {c.hidden}, dtype);
         head_ = c.tied_embeddings ? embedding_.to_device(placement_.output_device()) : matrix("lm_head.weight", {c.vocabulary, c.hidden});
     }
@@ -177,8 +178,8 @@ DeepSeek::DeepSeek(const std::string& directory, Backend backend, DType dtype, b
     layer_workspace_count_ = 0;
     const int query_width = c.heads * (c.plain_dimension + c.rotary_dimension);
     for (int index = 0; index < c.layers; ++index) {
-        auto layer_device = placement_.enter_layer(index);
-        const auto p = "model.layers." + std::to_string(index) + ".";
+        DeviceStage layer_device = placement_.enter_layer(index);
+        const std::string p = "model.layers." + std::to_string(index) + ".";
         Layer layer;
         layer.input_norm = dense(p + "input_layernorm.weight", {c.hidden}, dtype);
         layer.post_norm = dense(p + "post_attention_layernorm.weight", {c.hidden}, dtype);
@@ -214,7 +215,7 @@ DeepSeek::DeepSeek(const std::string& directory, Backend backend, DType dtype, b
     const int dim = c.rotary_dimension;
     double lower = 0, upper = 1;
     if (c.rope_type == "yarn") {
-        auto correction = [&](double rotations) { return dim * std::log(c.rope_original_positions / (rotations * 2 * 3.14159265358979323846)) / (2 * std::log(c.rope_theta)); };
+        LocalFunction correction{[&](double rotations) { return dim * std::log(c.rope_original_positions / (rotations * 2 * 3.14159265358979323846)) / (2 * std::log(c.rope_theta)); }};
         lower = std::max(0., std::floor(correction(c.rope_beta_fast)));
         upper = std::min(double(dim - 1), std::ceil(correction(c.rope_beta_slow)));
         if (lower == upper) upper += .001;
@@ -233,31 +234,31 @@ DeepSeek::DeepSeek(const std::string& directory, Backend backend, DType dtype, b
 }
 
 size_t DeepSeek::quantization_workspace_bytes(DecoderLogits logits) const {
-    const auto count = std::max(layer_workspace_count_, logits == DecoderLogits::None ? size_t(0) : head_workspace_count_);
+    const uint64_t count = std::max(layer_workspace_count_, logits == DecoderLogits::None ? size_t(0) : head_workspace_count_);
     return count ? memory_allocation_bytes(backend_, dtype_storage_bytes(dtype_, count)) : 0;
 }
 
 DecoderOutput DeepSeek::forward(const Tensor& input_ids, const Tensor& attention_mask, const Tensor& position_ids,
     const DecoderCache* past, bool capture_hidden, DecoderLogits logits, const DecoderTrace& trace) const {
-    auto input_device = placement_.enter_input();
-    const auto& c = config_;
+    DeviceStage input_device = placement_.enter_input();
+    const DeepSeekConfig& c = config_;
     require(logits == DecoderLogits::All || logits == DecoderLogits::Last || logits == DecoderLogits::None, "invalid logits selection");
     require(input_ids.defined() && input_ids.shape().size() == 2 && input_ids.shape()[0] > 0 && input_ids.shape()[1] > 0,
             "input IDs require a nonempty [batch,sequence] matrix");
     const int batch = input_ids.shape()[0], sequence = input_ids.shape()[1], previous = past ? past->length : 0;
     require(previous >= 0 && int64_t(previous) + sequence <= c.max_positions, "request exceeds context capacity");
     const int total = previous + sequence;
-    const auto host_bytes = checked_memory_add(checked_memory_mul(size_t(batch) * total, 32),
+    const size_t host_bytes = checked_memory_add(checked_memory_mul(size_t(batch) * total, 32),
         checked_memory_mul(size_t(batch) * sequence, 32 + size_t(c.rotary_dimension) * 16));
     MemoryReservation host_workspace(Backend::CPU, host_bytes);
     require(!past || (previous ? past->layers.size() == size_t(c.layers) : past->layers.empty()), "cache layer count differs");
-    auto ids = integers(input_ids);
-    for (auto id : ids) require(id >= 0 && id < c.vocabulary, "token ID is outside the vocabulary");
+    std::vector<int32_t> ids = integers(input_ids);
+    for (int id : ids) require(id >= 0 && id < c.vocabulary, "token ID is outside the vocabulary");
     std::vector<int32_t> mask(size_t(batch) * total, 1);
     if (attention_mask.defined()) {
         require(attention_mask.shape() == Shape{batch, total}, "attention mask geometry differs");
         mask = integers(attention_mask, true);
-        for (auto value : mask) require(value == 0 || value == 1, "attention mask requires zero or one");
+        for (int value : mask) require(value == 0 || value == 1, "attention mask requires zero or one");
     }
     std::vector<int32_t> positions(ids.size());
     if (position_ids.defined()) {
@@ -270,7 +271,7 @@ DecoderOutput DeepSeek::forward(const Tensor& input_ids, const Tensor& attention
             if (t >= previous) positions[size_t(b) * sequence + t - previous] = mask[size_t(b) * total + t] ? position - 1 : 0;
         }
     }
-    for (auto position : positions) require(position >= 0 && position < c.max_positions, "position exceeds context capacity");
+    for (int position : positions) require(position >= 0 && position < c.max_positions, "position exceeds context capacity");
     graph::RecordingGuard inference;
     std::vector<float> cosines(ids.size() * c.rotary_dimension), sines(cosines.size());
     for (size_t row = 0; row < ids.size(); ++row) for (int d = 0; d < c.rotary_dimension / 2; ++d) {
@@ -280,53 +281,53 @@ DecoderOutput DeepSeek::forward(const Tensor& input_ids, const Tensor& attention
     }
     require(cosines.size() <= INT_MAX, "rotary table exceeds indexing limits");
     if (!try_unary_math_cpu(cosines.data(), cosines.data(), int(cosines.size()), CpuMathOperation::Cos))
-        for (auto& value : cosines) value = std::cos(value);
+        for (float& value : cosines) value = std::cos(value);
     if (!try_unary_math_cpu(sines.data(), sines.data(), int(sines.size()), CpuMathOperation::Sin))
-        for (auto& value : sines) value = std::sin(value);
-    for (auto& value : cosines) value *= rotary_magnitude_;
-    for (auto& value : sines) value *= rotary_magnitude_;
-    auto cosine = Tensor::from_data({batch, 1, sequence, c.rotary_dimension}, cosines, backend_, false, dtype_);
-    auto sine = Tensor::from_data({batch, 1, sequence, c.rotary_dimension}, sines, backend_, false, dtype_);
+        for (float& value : sines) value = std::sin(value);
+    for (float& value : cosines) value *= rotary_magnitude_;
+    for (float& value : sines) value *= rotary_magnitude_;
+    Tensor cosine = Tensor::from_data({batch, 1, sequence, c.rotary_dimension}, cosines, backend_, false, dtype_);
+    Tensor sine = Tensor::from_data({batch, 1, sequence, c.rotary_dimension}, sines, backend_, false, dtype_);
     const float minimum = dtype_ == DType::Float16 ? -65504.f : dtype_ == DType::BFloat16 ? -3.3895313892515355e38f : std::numeric_limits<float>::lowest();
     std::vector<float> padding_values(mask.size());
     for (size_t i = 0; i < mask.size(); ++i) padding_values[i] = mask[i] ? 0.f : minimum;
-    auto padding = Tensor::from_data({batch, 1, 1, total}, padding_values, backend_, false, dtype_);
-    auto hidden = reshape(embedding_.embedding(Tensor::from_int_data({int(ids.size())}, ids, backend_), dtype_), {batch, sequence, c.hidden});
-    const auto workspace_count = std::max(layer_workspace_count_, logits == DecoderLogits::None ? size_t(0) : head_workspace_count_);
+    Tensor padding = Tensor::from_data({batch, 1, 1, total}, padding_values, backend_, false, dtype_);
+    Tensor hidden = reshape(embedding_.embedding(Tensor::from_int_data({int(ids.size())}, ids, backend_), dtype_), {batch, sequence, c.hidden});
+    const uint64_t workspace_count = std::max(layer_workspace_count_, logits == DecoderLogits::None ? size_t(0) : head_workspace_count_);
     require(workspace_count <= INT_MAX, "weight workspace exceeds indexing limits");
     DeviceTensorCopies cosine_copies(cosine), sine_copies(sine), padding_copies(padding);
     std::map<int, Tensor> workspaces;
-    auto workspace_for = [&](int ordinal, size_t count) {
-        auto& value = workspaces[ordinal];
+    LocalFunction workspace_for{[&](int ordinal, size_t count) {
+        Tensor& value = workspaces[ordinal];
         if (count && (!value.defined() || value.numel() < count)) value = Tensor::zeros({int(count)}, backend_, false, dtype_);
         return value;
-    };
+    }};
     DecoderOutput result;
     result.cache.length = total;
-    auto feed_forward = [&](const Expert& weights, const Tensor& input, const Tensor& workspace) {
-        auto gate = weights.gate.linear(input, {}, workspace), up = weights.up.linear(input, {}, workspace);
+    LocalFunction feed_forward{[&](const Expert& weights, const Tensor& input, const Tensor& workspace) {
+        Tensor gate = weights.gate.linear(input, {}, workspace), up = weights.up.linear(input, {}, workspace);
         return weights.down.linear(silu_mul(gate, up), {}, workspace);
-    };
+    }};
     for (int index = 0; index < c.layers; ++index) {
         const int ordinal = placement_.layer_device(index);
-        auto layer_device = placement_.enter_layer(index);
+        DeviceStage layer_device = placement_.enter_layer(index);
         hidden = placement_.transfer_to_layer(hidden, index);
-        const auto& cosine = cosine_copies.get(ordinal);
-        const auto& sine = sine_copies.get(ordinal);
-        const auto& padding = padding_copies.get(ordinal);
-        auto workspace = workspace_for(ordinal, placement_.distributed() ? layer_workspace_count_ : workspace_count);
-        const auto& layer = layers_[index];
-        auto emit = [&](const std::string& name, const Tensor& value) { if (trace) trace("layer." + std::to_string(index) + "." + name, value); };
+        const Tensor& cosine = cosine_copies.get(ordinal);
+        const Tensor& sine = sine_copies.get(ordinal);
+        const Tensor& padding = padding_copies.get(ordinal);
+        Tensor workspace = workspace_for(ordinal, placement_.distributed() ? layer_workspace_count_ : workspace_count);
+        const DeepSeek::Layer& layer = layers_[index];
+        LocalFunction emit{[&](const std::string& name, const Tensor& value) { if (trace) trace("layer." + std::to_string(index) + "." + name, value); }};
         if (capture_hidden) result.hidden_states.push_back(hidden);
-        auto normalized = rms_norm(hidden, layer.input_norm, c.rms_epsilon, RmsNormRounding::Normalized);
-        auto query = c.query_rank ? layer.query_b.linear(rms_norm(layer.query_a.linear(normalized, layer.query_bias, workspace),
+        Tensor normalized = rms_norm(hidden, layer.input_norm, c.rms_epsilon, RmsNormRounding::Normalized);
+        Tensor query = c.query_rank ? layer.query_b.linear(rms_norm(layer.query_a.linear(normalized, layer.query_bias, workspace),
             layer.query_norm, c.rms_epsilon, RmsNormRounding::Normalized), {}, workspace) : layer.query.linear(normalized, {}, workspace);
         query = transpose(reshape(query, {batch, sequence, c.heads, c.plain_dimension + c.rotary_dimension}), 1, 2);
-        auto plain_query = slice(query, -1, 0, c.plain_dimension);
-        auto rotary_query = rotate(slice(query, -1, c.plain_dimension, c.plain_dimension + c.rotary_dimension), cosine, sine);
-        auto compressed = layer.latent_a.linear(normalized, layer.latent_bias, workspace);
-        auto latent = rms_norm(slice(compressed, -1, 0, c.latent_cache_rank), layer.latent_norm, c.rms_epsilon, RmsNormRounding::Normalized);
-        auto rotary_key = rotate(unsqueeze(slice(compressed, -1, c.latent_cache_rank, c.latent_cache_rank + c.rotary_dimension), 1), cosine, sine);
+        Tensor plain_query = slice(query, -1, 0, c.plain_dimension);
+        Tensor rotary_query = rotate(slice(query, -1, c.plain_dimension, c.plain_dimension + c.rotary_dimension), cosine, sine);
+        Tensor compressed = layer.latent_a.linear(normalized, layer.latent_bias, workspace);
+        Tensor latent = rms_norm(slice(compressed, -1, 0, c.latent_cache_rank), layer.latent_norm, c.rms_epsilon, RmsNormRounding::Normalized);
+        Tensor rotary_key = rotate(unsqueeze(slice(compressed, -1, c.latent_cache_rank, c.latent_cache_rank + c.rotary_dimension), 1), cosine, sine);
         LatentKVCache old;
         if (previous) {
             old = {past->layers[index].key, past->layers[index].value};
@@ -334,28 +335,28 @@ DecoderOutput DeepSeek::forward(const Tensor& input_ids, const Tensor& attention
                     "compressed cache layer belongs to a different device");
             require(old.latent.defined() && old.latent.shape().size() == 3 && old.length() == previous, "compressed cache length differs");
         }
-        auto cached = append_latent_cache(previous ? &old : nullptr, latent, squeeze(rotary_key, 1));
+        LatentKVCache cached = append_latent_cache(previous ? &old : nullptr, latent, squeeze(rotary_key, 1));
         result.cache.layers.push_back({cached.latent, cached.rotary});
         emit("query_plain", plain_query); emit("query_rotary", rotary_query);
         emit("latent_cache", cached.latent); emit("rotary_cache", cached.rotary);
         Tensor attended;
         if (absorbed_attention_) {
-            auto weights = layer.absorbed_weights;
+            std::pair<Tensor, Tensor> weights = layer.absorbed_weights;
             if (!weights.first.defined()) weights = split_latent_projection(layer.latent_b.materialize(workspace), c);
             attended = latent_attention(plain_query, rotary_query, cached, weights.first, weights.second, padding, c.attention_scale(), previous);
         } else {
-            auto expanded = transpose(reshape(layer.latent_b.linear(cached.latent, {}, workspace),
+            Tensor expanded = transpose(reshape(layer.latent_b.linear(cached.latent, {}, workspace),
                 {batch, total, c.heads, c.plain_dimension + c.value_dimension}), 1, 2);
-            auto keys = concat({slice(expanded, -1, 0, c.plain_dimension),
+            Tensor keys = concat({slice(expanded, -1, 0, c.plain_dimension),
                 expand(unsqueeze(cached.rotary, 1), {batch, c.heads, total, c.rotary_dimension})}, -1);
-            auto values = slice(expanded, -1, c.plain_dimension, c.plain_dimension + c.value_dimension);
-            auto full_query = concat({plain_query, rotary_query}, -1);
+            Tensor values = slice(expanded, -1, c.plain_dimension, c.plain_dimension + c.value_dimension);
+            Tensor full_query = concat({plain_query, rotary_query}, -1);
             std::vector<Tensor> tiles;
             for (int start = 0; start < sequence; start += 128) {
                 const int end = std::min(start + 128, sequence);
-                auto scores = mul(matmul_transposed(slice(full_query, 2, start, end), keys), c.attention_scale());
-                auto future = cast(triu(Tensor::ones({1, 1, end - start, total}, backend_), previous + start + 1), DType::Bool);
-                auto excluded = add(Tensor::zeros({1, 1, end - start, total}, backend_, false, dtype_), minimum);
+                Tensor scores = mul(matmul_transposed(slice(full_query, 2, start, end), keys), c.attention_scale());
+                Tensor future = cast(triu(Tensor::ones({1, 1, end - start, total}, backend_), previous + start + 1), DType::Bool);
+                Tensor excluded = add(Tensor::zeros({1, 1, end - start, total}, backend_, false, dtype_), minimum);
                 tiles.push_back(matmul(attention_softmax(scores, where(future, excluded, padding)), values));
             }
             attended = tiles.size() == 1 ? tiles.front() : concat(tiles, 2);
@@ -365,8 +366,8 @@ DecoderOutput DeepSeek::forward(const Tensor& input_ids, const Tensor& attention
         normalized = rms_norm(hidden, layer.post_norm, c.rms_epsilon, RmsNormRounding::Normalized);
         Tensor feed;
         if (c.sparse_layer(index)) {
-            auto flat = reshape(normalized, {batch * sequence, c.hidden});
-            auto routes = route_experts(linear(cast(flat, DType::Float32), layer.router), c.routing, layer.correction);
+            Tensor flat = reshape(normalized, {batch * sequence, c.hidden});
+            ExpertRoutes routes = route_experts(linear(cast(flat, DType::Float32), layer.router), c.routing, layer.correction);
             emit("expert_indices", routes.indices); emit("expert_weights", routes.weights);
             feed = evaluate_experts(flat, routes, [&](int id, const Tensor& selected) { return feed_forward(layer.experts[id], selected, workspace); });
             if (c.shared_experts) feed = add(feed, feed_forward(layer.shared, flat, workspace));
@@ -375,9 +376,9 @@ DecoderOutput DeepSeek::forward(const Tensor& input_ids, const Tensor& attention
         hidden = add(hidden, feed);
         emit("output", hidden);
     }
-    auto output_device = placement_.enter_output();
+    DeviceStage output_device = placement_.enter_output();
     hidden = hidden.to_device(placement_.output_device());
-    auto workspace = workspace_for(placement_.output_device(), logits == DecoderLogits::None ? 0 : head_workspace_count_);
+    Tensor workspace = workspace_for(placement_.output_device(), logits == DecoderLogits::None ? 0 : head_workspace_count_);
     if (capture_hidden || logits != DecoderLogits::None) hidden = rms_norm(hidden, norm_, c.rms_epsilon, RmsNormRounding::Normalized);
     if (capture_hidden) result.hidden_states.push_back(hidden);
     if (logits == DecoderLogits::Last && sequence > 1) hidden = slice(hidden, 1, sequence - 1, sequence);

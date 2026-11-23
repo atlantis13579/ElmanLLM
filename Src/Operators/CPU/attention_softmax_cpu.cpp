@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "Core/LocalFunction.h"
 #include "Backends/CpuMath.h"
 #include "Core/AllocationPool.h"
 #include "low_precision_softmax_exp.h"
@@ -14,19 +15,19 @@ void launch_attention_softmax_cpu(uint32_t* out, const uint32_t* a, const uint32
                                p.attribute(operator_attr::attention_softmax::kCausalOffset);
   const float blocked = p.output_dtype() == int(DType::Float16) ? -65504.0f :
                         p.output_dtype() == int(DType::BFloat16) ? -3.3895313892515355e38f : -3.402823466e38f;
-  auto rounded = [&](float value) {
+  LocalFunction rounded{[&](float value) {
     if (p.output_dtype() == int(DType::Float16)) return numeric::half_to_float(numeric::float_to_half(value));
     if (p.output_dtype() == int(DType::BFloat16)) return numeric::bfloat_to_float(numeric::float_to_bfloat(value));
     return value;
-  };
-  auto read = [&](int i) {
+  }};
+  LocalFunction read{[&](int i) {
     float mask = READ_B(broadcast_index(i, KernelInput::B, p));
     if (causal) {
       const int keys = p.output_shape(3);
       if (int64_t(i % keys) > (i / keys) % p.output_shape(2) + query_offset) mask = blocked;
     }
     return rounded(rounded(READ_A(i) / divisor) + mask);
-  };
+  }};
   const int rank = p.input_rank(KernelInput::A);
   const int length = rank ? p.input_shape(KernelInput::A, axis) : 1;
   const int inner = rank ? p.input_stride(KernelInput::A, axis) : 1;
@@ -37,8 +38,8 @@ void launch_attention_softmax_cpu(uint32_t* out, const uint32_t* a, const uint32
   const int mask_batch_stride = compact_mask && p.input_shape(KernelInput::B, 0) != 1 ? p.input_stride(KernelInput::B, 0) : 0;
   // Retain the unfused FP32 arithmetic order with one reusable row. Full-tile
   // materialization would violate the fused attention workspace bound.
-  auto workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(length), sizeof(float)));
-  auto* values = static_cast<float*>(workspace->raw_pointer());
+  BufferPtr workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(length), sizeof(float)));
+  float* values = static_cast<float*>(workspace->raw_pointer());
   for (int row = 0; row < p.output_count() / length; ++row) {
     const int base = row / inner * length * inner + row % inner;
     if (compact_mask) {

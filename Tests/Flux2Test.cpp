@@ -4,6 +4,7 @@
 #include <stdexcept>
 
 #include "Core/TensorDispatch.h"
+#include "Core/LocalFunction.h"
 #include "Inference/Diffusion/Flux2Sampler.h"
 #include "Models/Diffusion/Flux2Text.h"
 #include "Operators/flux2_ops.h"
@@ -36,7 +37,7 @@ void compare(const Tensor& actual, const Tensor& expected, float tolerance, cons
   if (actual.shape() != expected.shape() || actual.dtype() != expected.dtype() || actual.backend() != backend) {
     throw std::runtime_error(std::string(operation) + " descriptor mismatch");
   }
-  auto a = actual.data(), b = expected.data();
+  std::vector<float> a = actual.data(), b = expected.data();
   for (size_t i = 0; i < a.size(); ++i) {
     close(a[i], b[i], tolerance, operation);
   }
@@ -44,11 +45,11 @@ void compare(const Tensor& actual, const Tensor& expected, float tolerance, cons
 
 void primitives(DType type) {
   const float tolerance = type == DType::Float32 ? 3e-5f : type == DType::BFloat16 ? .006f : .001f;
-  auto ids = concat({text_positions(3, backend), image_positions(1, 2, 2, backend)}, 1);
-  auto coords = ids.int_data();
-  auto all_ids = concat({ids, add(ids, Tensor::from_int_data({}, {1}, backend))}, 0);
-  auto x = data({2, 3, 5, 128}, 6, 1, 0, type);
-  auto y = apply_rotary(x, rotary_table(all_ids)).data(), input = x.data();
+  Tensor ids = concat({text_positions(3, backend), image_positions(1, 2, 2, backend)}, 1);
+  std::vector<int32_t> coords = ids.int_data();
+  Tensor all_ids = concat({ids, add(ids, Tensor::from_int_data({}, {1}, backend))}, 0);
+  Tensor x = data({2, 3, 5, 128}, 6, 1, 0, type);
+  std::vector<float> y = apply_rotary(x, rotary_table(all_ids)).data(), input = x.data();
   for (size_t i = 0; i < y.size(); ++i) {
     const int pair = (i % 32) / 2, axis = (i % 128) / 32, token = (i / 128) % 5;
     const double angle = (coords[token * 4 + axis] + int(i / (3 * 5 * 128))) * std::pow(2000., -pair / 16.);
@@ -56,13 +57,13 @@ void primitives(DType type) {
           "RoPE");
   }
 
-  auto moments = data({2, 64, 4, 6}, 2, 1, 0, type);
-  auto mean = data({128}, 3, .25f), var = data({128}, 4, .25f, .5f);
-  auto packed = pack_latents(moments, mean, var);
+  Tensor moments = data({2, 64, 4, 6}, 2, 1, 0, type);
+  Tensor mean = data({128}, 3, .25f), var = data({128}, 4, .25f, .5f);
+  Tensor packed = pack_latents(moments, mean, var);
   if (packed.shape() != Shape{2, 128, 2, 3}) {
     throw std::runtime_error("Invalid packed latent shape");
   }
-  auto values = moments.data(), m = mean.data(), v = var.data(), z = packed.data();
+  std::vector<float> values = moments.data(), m = mean.data(), v = var.data(), z = packed.data();
   for (int b = 0; b < 2; ++b) {
     for (int c = 0; c < 128; ++c) {
       for (int h = 0; h < 2; ++h) {
@@ -77,18 +78,18 @@ void primitives(DType type) {
 
   // Both sequence lengths end in partial GPU tiles. Compare to independently
   // materialized FP32 logits so the CPU kernel is also checked against SDPA.
-  auto q = data({2, 2, 17, 128}, 4, 2, 0, type), k = data({2, 2, 37, 128}, 5, 2, 0, type);
-  auto value = data(k.shape(), 6, 1, 0, type);
-  auto scores = div(matmul_transposed(cast(q, DType::Float32), cast(k, DType::Float32)), std::sqrt(128.));
-  auto expected = cast(matmul(softmax(scores, -1), cast(value, DType::Float32)), type);
+  Tensor q = data({2, 2, 17, 128}, 4, 2, 0, type), k = data({2, 2, 37, 128}, 5, 2, 0, type);
+  Tensor value = data(k.shape(), 6, 1, 0, type);
+  Tensor scores = div(matmul_transposed(cast(q, DType::Float32), cast(k, DType::Float32)), std::sqrt(128.));
+  Tensor expected = cast(matmul(softmax(scores, -1), cast(value, DType::Float32)), type);
   compare(attention(q, k, value), expected, tolerance, "SDPA");
 
-  auto features = data({2, 3, 131}, 72, 2, 0, type), shift = data({2, 1, 131}, 73, 1, 0, type),
+  Tensor features = data({2, 3, 131}, 72, 2, 0, type), shift = data({2, 1, 131}, 73, 1, 0, type),
        scale = data(shift.shape(), 74, 1, 0, type);
-  auto work = cast(features, DType::Float32);
-  auto centered = sub(work, elman::mean(work, -1, true));
-  auto norm = cast(mul(centered, rsqrt(add(elman::mean(mul(centered, centered), -1, true), 1e-6))), type);
-  auto mod = add(mul(norm, add(scale, 1.0)), shift);
+  Tensor work = cast(features, DType::Float32);
+  Tensor centered = sub(work, elman::mean(work, -1, true));
+  Tensor norm = cast(mul(centered, rsqrt(add(elman::mean(mul(centered, centered), -1, true), 1e-6))), type);
+  Tensor mod = add(mul(norm, add(scale, 1.0)), shift);
   compare(modulate(features, shift, scale), mod, tolerance, "adaptive LayerNorm");
 }
 
@@ -98,7 +99,7 @@ StreamWeights stream(int salt) {
 }
 
 void golden(const Tensor& output, const std::vector<float>& values, const char* name) {
-  auto y = output.data();
+  std::vector<float> y = output.data();
   size_t k = 0;
   for (int row = 0; row < 7; ++row) {
     for (int d : {0, 17, 46, 94, 127}) {
@@ -111,13 +112,15 @@ void blocks() {
   DoubleBlock dual{stream(10), stream(20)};
   SingleBlock single{data({512, 128}, 30, .09f), data({128, 192}, 31, .09f), data({128}, 32, .25f, 1),
                      data({128}, 33, .25f, 1)};
-  auto txt = data({1, 2, 128}, 40), img = data({1, 5, 128}, 41);
-  auto im = data({1, 5, 768}, 42, .8f), tm = data({1, 1, 768}, 43, .8f), sm = data({1, 7, 384}, 44, .8f);
-  auto table = rotary_table(
+  Tensor txt = data({1, 2, 128}, 40), img = data({1, 5, 128}, 41);
+  Tensor im = data({1, 5, 768}, 42, .8f), tm = data({1, 1, 768}, 43, .8f), sm = data({1, 7, 384}, 44, .8f);
+  Tensor table = rotary_table(
       concat({text_positions(2, backend), image_positions(1, 2, 1, backend), image_positions(1, 3, 0, backend)}, 1));
   ReferenceKV dk, sk;
-  auto [a, b] = dual.forward(img, txt, im, tm, {table, 2, 2, nullptr, &dk});
-  auto h = concat({b, a}, 1);
+  std::pair<Tensor, Tensor> dual_output = dual.forward(img, txt, im, tm, {table, 2, 2, nullptr, &dk});
+  Tensor& a = dual_output.first;
+  Tensor& b = dual_output.second;
+  Tensor h = concat({b, a}, 1);
   // Upstream DoubleStreamBlock and SingleStreamBlock at 50fe516, loaded with
   // the exact weights above, FP32, including the reference-only attention rows.
   golden(h, {.83786821f,  .95305598f,  1.05583763f, .20499669f,  -.13763049f, -.05888770f, -.70501852f,
@@ -126,23 +129,25 @@ void blocks() {
              .27895564f,  -.65939558f, .58194804f,  .14251103f,  -.30757350f, .50041974f,  -.05830752f,
              -.01409120f, .67561632f,  .03257236f,  1.21311271f, .24534360f,  -.61199558f, .31547800f},
          "dual");
-  auto result = single.forward(h, sm, {table, 2, 2, nullptr, &sk});
+  Tensor result = single.forward(h, sm, {table, 2, 2, nullptr, &sk});
   golden(result, {.70468765f,  .79106975f,  1.03458452f, -.01659277f, -.10533967f, -.01132936f, -.68442726f,
                   .24906994f,  .37740690f,  -.58718187f, -.50231957f, -.31670773f, .15393150f,  .25572693f,
                   -.45572716f, .58771276f,  -.17560937f, -.79769808f, -.13116145f, -.35683146f, .02382120f,
                   .43303254f,  -.63390821f, .48701465f,  .21936914f,  -.28336352f, .44595477f,  -.15907216f,
                   -.00561579f, .62764698f,  -.17107378f, 1.17165005f, .31806418f,  -.61318916f, .45245385f},
          "single");
-  auto live = [](const Tensor& x) { return concat({slice(x, 1, 0, 2), slice(x, 1, 4, 7)}, 1); };
-  auto rt = live(table);
-  auto [img2, txt2] = dual.forward(slice(img, 1, 2, 5), txt, slice(im, 1, 2, 5), tm, {rt, 2, 0, &dk});
+  Tensor (*const live)(const Tensor&) = [](const Tensor& x) { return concat({slice(x, 1, 0, 2), slice(x, 1, 4, 7)}, 1); };
+  Tensor rt = live(table);
+  std::pair<Tensor, Tensor> next = dual.forward(slice(img, 1, 2, 5), txt, slice(im, 1, 2, 5), tm, {rt, 2, 0, &dk});
+  Tensor& img2 = next.first;
+  Tensor& txt2 = next.second;
   compare(single.forward(concat({txt2, img2}, 1), live(sm), {rt, 2, 0, &sk}), live(result), 1e-4f, "cached blocks");
 }
 
 void text_encoder(const std::filesystem::path& directory, bool qwen) {
   std::filesystem::create_directories(directory);
   const std::string prefix = qwen ? "model." : "language_model.model.";
-  auto config = std::ofstream(directory / "config.json");
+  std::ofstream config = std::ofstream(directory / "config.json");
   if (!qwen) {
     config << R"({"model_type":"mistral3","text_config":)";
   }
@@ -152,12 +157,12 @@ void text_encoder(const std::filesystem::path& directory, bool qwen) {
                   : R"("model_type":"mistral","rms_norm_eps":1e-5,"rope_theta":1e9}})");
   config.close();
   std::map<std::string, Tensor> weights;
-  auto put = [&](const std::string& name, Shape shape, int salt, float scale, float offset = 0) {
+  LocalFunction put{[&](const std::string& name, Shape shape, int salt, float scale, float offset = 0) {
     weights.emplace(prefix + name, data(shape, salt, scale, offset, DType::Float32, Backend::CPU));
-  };
+  }};
   put("embed_tokens.weight", {7, 8}, 57, 1);
   for (int layer = 0; layer < (qwen ? 27 : 30); ++layer) {
-    const auto p = "layers." + std::to_string(layer) + ".";
+    const std::string p = "layers." + std::to_string(layer) + ".";
     const int s = 100 + 11 * layer;
     put(p + "input_layernorm.weight", {8}, s, .2f, 1);
     put(p + "self_attn.q_proj.weight", {8, 8}, s + 1, .2f);
@@ -174,13 +179,13 @@ void text_encoder(const std::filesystem::path& directory, bool qwen) {
     put(p + "mlp.down_proj.weight", {8, 12}, s + 10, .2f);
   }
   save_safetensors(directory / "model.safetensors", weights);
-  auto ids = Tensor::from_int64_data({1, 4}, {3, 6, 1, 5}, backend);
-  auto mask = Tensor::from_int_data({1, 4}, {1, 1, 0, 0}, backend);
-  auto context = TextEncoder(directory, DType::Float32).encode(ids, mask);
+  Tensor ids = Tensor::from_int64_data({1, 4}, {3, 6, 1, 5}, backend);
+  Tensor mask = Tensor::from_int_data({1, 4}, {1, 1, 0, 0}, backend);
+  Tensor context = TextEncoder(directory, DType::Float32).encode(ids, mask);
   if (context.shape() != Shape{1, 4, 24}) {
     throw std::runtime_error("Wrong text conditioning layout");
   }
-  const auto y = context.data();
+  const std::vector<float> y = context.data();
   // PyTorch causal grouped SDPA with key padding, including the padded queries.
   const std::vector<float> gold =
       qwen ? std::vector<float>{-.646925f,  -.352894f, -1.527340f, -.364192f,  -.585452f, -.116839f, .441286f,
@@ -198,18 +203,18 @@ void text_encoder(const std::filesystem::path& directory, bool qwen) {
 }
 
 void sampling() {
-  for (auto c : {std::pair<int, float>{64, .87536883f}, {4300, .90957677f}, {4301, .76579124f}}) {
-    auto ts = flow_schedule(4, c.first);
+  for (std::pair<int, float> c : {std::pair<int, float>{64, .87536883f}, {4300, .90957677f}, {4301, .76579124f}}) {
+    std::vector<float> ts = flow_schedule(4, c.first);
     close(ts[2], c.second, 2e-7f, "schedule");
-    auto x = data({2, 3, 128}, 12), start = x, v = data(x.shape(), 16);
+    Tensor x = data({2, 3, 128}, 12), start = x, v = data(x.shape(), 16);
     for (int i = 0; i < 4; ++i) {
       x = flow_step(x, v, ts[i], ts[i + 1]);
     }
     compare(x, sub(start, v), 2e-6f, "Euler");
   }
-  auto cond = data({1, 3, 128}, 97), unc = data(cond.shape(), 98);
+  Tensor cond = data({1, 3, 128}, 97), unc = data(cond.shape(), 98);
   compare(guided_velocity(unc, cond, 4), sub(mul(cond, 4), mul(unc, 3)), 2e-6f, "CFG");
-  auto emb = timestep_embedding(Tensor::from_data({2}, {.125f, 4.f}, backend)).data();
+  std::vector<float> emb = timestep_embedding(Tensor::from_data({2}, {.125f, 4.f}, backend)).data();
   for (int j = 0; j < 256; ++j) {
     const double phase = 125 * std::pow(10000., -double(j % 128) / 128);
     close(emb[j], float(j < 128 ? std::cos(phase) : std::sin(phase)), 1e-5f, "time");
@@ -226,7 +231,7 @@ int main(int argc, char** argv) {
     if (!backend_available(backend)) {
       return 77;
     }
-    for (auto dtype : {DType::Float32, DType::Float16, DType::BFloat16}) {
+    for (elman::DType dtype : {DType::Float32, DType::Float16, DType::BFloat16}) {
       primitives(dtype);
     }
     blocks();

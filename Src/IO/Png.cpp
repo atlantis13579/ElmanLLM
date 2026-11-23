@@ -30,7 +30,7 @@ std::string zlib_stored(std::string_view bytes) {
   std::string result = "\x78\x01";
   uint32_t first = 1, second = 0;
   for (size_t offset = 0; offset < bytes.size();) {
-    const auto block = bytes.substr(offset, 65535);
+    const std::string_view block = bytes.substr(offset, 65535);
     offset += block.size();
     result.push_back(offset == bytes.size() ? '\1' : '\0');
     const uint16_t length = static_cast<uint16_t>(block.size());
@@ -51,14 +51,14 @@ std::string zlib_stored(std::string_view bytes) {
 }  // namespace
 
 std::string encode_png(const Tensor& image) {
-  const auto& shape = image.shape();
+  const Shape& shape = image.shape();
   if (shape.size() != 4 || shape[0] != 1 || shape[1] != 3 || shape[2] <= 0 || shape[3] <= 0)
     throw std::invalid_argument("PNG output requires one RGB image");
   const size_t height = shape[2], width = shape[3];
   const uint64_t bytes = (3 * uint64_t(width) + 1) * height;
   if (bytes + (bytes / 65535 + 1) * 5 + 6 > 0x7fffffff)
     throw std::overflow_error("PNG image exceeds the encoder's chunk size limit");
-  const auto pixels = image.data();
+  const std::vector<float> pixels = image.data();
   std::string scanlines;
   scanlines.reserve(static_cast<size_t>(bytes));
   for (size_t y = 0; y < height; ++y) {

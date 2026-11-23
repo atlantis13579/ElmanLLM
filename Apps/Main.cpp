@@ -1,5 +1,12 @@
 #include <iostream>
 #include <stdexcept>
+#include <vector>
+
+#ifdef _WIN32
+#define NOMINMAX
+#define WIN32_LEAN_AND_MEAN
+#include <Windows.h>
+#endif
 
 #include "Core/Backend.h"
 #include "Core/Device.h"
@@ -8,9 +15,10 @@
 #include "Inference/InferenceSession.h"
 #include "Inference/LLM/Generation.h"
 #include "Training/Trainer.h"
+#include "Training/GraphTraining.h"
 #include "Text/Tokenizer.h"
 
-#include "Web/Server.h"
+#include "Serving/Server.h"
 
 namespace {
 void usage() {
@@ -39,11 +47,11 @@ void usage() {
                "        [--no-normalization-fusion] [--no-attention-fusion] [--no-tiled-attention]\n"
                "        [--no-packed-projections] [--mla-expanded] [--devices 0,1,...] [--cuda-graph]\n";
   std::cout << "        [--simulate-devices N] [--tensor-parallel]\n"
-               "  elman --server-config <server.json>\n";
+               "  elman --server-config <server.json> [--open]\n";
 }
 }  // namespace
 
-int main(int argc, char** argv) {
+int run(int argc, char** argv) {
   try {
     if (argc < 2) {
       usage();
@@ -57,8 +65,9 @@ int main(int argc, char** argv) {
     if (command == "infer-tensors") return elman::infer_tensors_command(argc, argv);
     if (command == "diffusion") return elman::diffusion_command(argc, argv);
     if (command == "--server-config") {
-      if (argc != 3) throw std::invalid_argument("--server-config requires one JSON file");
-      elman::run_server(std::filesystem::u8path(argv[2]));
+      const bool open_web = argc == 4 && std::string_view(argv[3]) == "--open";
+      if (argc != 3 && !open_web) throw std::invalid_argument("Use --server-config <server.json> [--open]");
+      elman::run_server(std::filesystem::u8path(argv[2]), open_web);
       return 0;
     }
     if (command == "--help" || command == "help" || command == "-h") {
@@ -69,12 +78,12 @@ int main(int argc, char** argv) {
       if (argc != 2) {
         throw std::runtime_error("devices takes no arguments");
       }
-      for (auto backend : {elman::Backend::CPU, elman::Backend::CUDA, elman::Backend::Metal}) {
+      for (elman::Backend backend : {elman::Backend::CPU, elman::Backend::CUDA, elman::Backend::Metal}) {
         std::cout << elman::backend_name(backend) << ": "
                   << (elman::backend_available(backend) ? "available"
                                                         : "unavailable")
                   << '\n';
-        if (elman::backend_available(backend)) for (const auto& device : elman::devices(backend))
+        if (elman::backend_available(backend)) for (const elman::DeviceInfo& device : elman::devices(backend))
           std::cout << "  " << device.ordinal << ": " << device.name << " (" << device.total_bytes << " bytes)\n";
       }
       return 0;
@@ -111,6 +120,8 @@ int main(int argc, char** argv) {
       }
     }
     if (command == "train") {
+      if (elman::Json::read(std::filesystem::u8path(argv[2])).string_or("format", "") == "elman.training_graph")
+        return elman::train_graph(std::filesystem::u8path(argv[2]), options);
       return elman::train(argv[2], options);
     }
     if (!options.resume.empty() || options.steps) {
@@ -122,3 +133,32 @@ int main(int argc, char** argv) {
     return 1;
   }
 }
+
+#ifdef _WIN32
+int wmain(int argc, wchar_t** wide_argv) {
+  try {
+    std::vector<std::string> arguments;
+    arguments.reserve(argc);
+    for (int i = 0; i < argc; ++i) {
+      const int length = WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide_argv[i], -1,
+                                            nullptr, 0, nullptr, nullptr);
+      if (!length) throw std::runtime_error("Cannot convert command line to UTF-8");
+      std::string argument(static_cast<size_t>(length), '\0');
+      if (!WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, wide_argv[i], -1,
+                               argument.data(), length, nullptr, nullptr))
+        throw std::runtime_error("Cannot convert command line to UTF-8");
+      argument.pop_back();
+      arguments.push_back(std::move(argument));
+    }
+    std::vector<char*> argv;
+    argv.reserve(arguments.size());
+    for (std::string& argument : arguments) argv.push_back(argument.data());
+    return run(argc, argv.data());
+  } catch (const std::exception& error) {
+    std::cerr << "Elman error: " << error.what() << '\n';
+    return 1;
+  }
+}
+#else
+int main(int argc, char** argv) { return run(argc, argv); }
+#endif

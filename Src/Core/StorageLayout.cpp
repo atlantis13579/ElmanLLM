@@ -1,4 +1,5 @@
 #include "Operators/storage_layout.h"
+#include "Core/LocalFunction.h"
 #include <algorithm>
 #include <cstring>
 #include <limits>
@@ -6,7 +7,7 @@
 
 namespace elman {
 void validate_storage_layout(StorageLayout op, const BufferPtr& output, const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     // Indexed copy has its own validated scalar normalization, duplicate and alias rules.
     if (op == StorageLayout::IndexCopy) return;
     const int arity = op == StorageLayout::Concat || op == StorageLayout::Gather || op == StorageLayout::IndexSelect ? 2 : 1;
@@ -18,7 +19,7 @@ void validate_storage_layout(StorageLayout op, const BufferPtr& output, const st
         for (int i = arity; i < 4; ++i)
             require(p.input_rank(KernelInput(i)) == -1, "Unexpected storage input descriptor");
     }
-    auto shape_count = [&](const std::vector<int>& shape) {
+    LocalFunction shape_count{[&](const std::vector<int>& shape) {
         size_t forward = 1, backward = 1;
         for (size_t i = 0; i < shape.size(); ++i) {
             const int a = shape[i], b = shape[shape.size() - i - 1];
@@ -28,11 +29,11 @@ void validate_storage_layout(StorageLayout op, const BufferPtr& output, const st
             forward *= size_t(a); backward *= size_t(b);
         }
         return forward;
-    };
+    }};
     std::vector<std::vector<int>> shape(arity);
     for (int i = 0; i < arity; ++i) {
         require(bool(inputs[i]), "Missing storage layout operand");
-        const auto input = KernelInput(i);
+        const KernelInput input = KernelInput(i);
         const int rank = p.input_rank(input);
         require(rank >= 0 && rank <= 8, "Invalid storage layout input rank");
         shape[i].resize(rank);
@@ -52,7 +53,7 @@ void validate_storage_layout(StorageLayout op, const BufferPtr& output, const st
     std::vector<int> target(rank);
     for (int d = 0; d < rank; ++d) target[d] = p.output_shape(d);
     require(shape_count(target) == output->count && p.output_count() == int(output->count), "Storage layout output shape differs from storage");
-    const auto& source = shape[0];
+    const std::vector<int>& source = shape[0];
     const int source_rank = int(source.size()), axis = p.attribute(0);
     if (op == StorageLayout::Copy) {
         require(inputs[0]->count == output->count, "Storage reshape changes element count");
@@ -101,7 +102,7 @@ void validate_storage_layout(StorageLayout op, const BufferPtr& output, const st
             if (op == StorageLayout::Concat) require(shape[1][d] == source[d], "Storage concat non-axis dimensions differ");
         }
         if ((op == StorageLayout::Gather || op == StorageLayout::IndexSelect) && output->count) {
-            const auto bytes = backend_download_raw(inputs[1]);
+            const std::vector<uint8_t> bytes = backend_download_raw(inputs[1]);
             for (size_t i = 0; i < inputs[1]->count; ++i) {
                 int32_t selected;
                 std::memcpy(&selected, bytes.data() + i * 4, 4);
@@ -111,7 +112,7 @@ void validate_storage_layout(StorageLayout op, const BufferPtr& output, const st
     }
     for (int i = 0; i < arity; ++i) {
         if (!output->bytes || !inputs[i]->bytes) continue;
-        const auto a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
+        const uintptr_t a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
         const bool overlap = a <= b ? b - a < output->bytes : a - b < inputs[i]->bytes;
         require(!overlap || (op == StorageLayout::Copy && a == b), "Storage layout output overlaps an input");
     }

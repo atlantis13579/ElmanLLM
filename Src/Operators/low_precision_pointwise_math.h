@@ -11,21 +11,19 @@
 #endif
 namespace elman {
 ELMAN_LOW_POINTWISE_HD inline uint8_t low_precision_code(const uint32_t* data, int index, DType dtype) {
-    const auto* bytes = reinterpret_cast<const uint8_t*>(data);
+    const uint8_t* bytes = reinterpret_cast<const uint8_t*>(data);
     return dtype == DType::Float4E2M1FN ? uint8_t((bytes[index / 2] >> ((index & 1) * 4)) & 15) : bytes[index];
 }
 ELMAN_LOW_POINTWISE_HD inline float low_precision_value(const uint32_t* data, int index, DType dtype) {
     if (dtype == DType::Float32) return reinterpret_cast<const float*>(data)[index];
     const uint8_t code = low_precision_code(data, index, dtype);
     if (dtype == DType::Bool) return float(code != 0);
-    return dtype == DType::Float4E2M1FN ? float(numeric::float4_to_double(code)) : numeric::float8_to_float(code, dtype);
+    return dtype == DType::Float4E2M1FN ? numeric::float4_to_float(code) : numeric::float8_to_float(code, dtype);
 }
 ELMAN_LOW_POINTWISE_HD inline uint8_t low_precision_encode(float value, DType dtype) {
     if (dtype == DType::Bool) return uint8_t(value != 0);
     if (is_float8(dtype)) return numeric::float_to_float8(value, dtype);
-    const uint8_t code = numeric::double_to_float4(double(value));
-    // The original Float32 sign also specifies the signed-zero NaN result.
-    return uint8_t((code & 7) | ((numeric::low_float_bits(value) >> 28) & 8));
+    return numeric::float_to_float4(value);
 }
 ELMAN_LOW_POINTWISE_HD inline float low_precision_pointwise_value(LowPrecisionPointwise op, float x, float y, float slope) {
     switch (op) {
@@ -87,7 +85,7 @@ ELMAN_LOW_POINTWISE_HD inline float low_precision_pointwise_value(LowPrecisionPo
 ELMAN_LOW_POINTWISE_HD inline uint8_t low_precision_pointwise_result(LowPrecisionPointwise op, int index,
     const uint32_t* a, const uint32_t* b, const uint32_t* c, const KernelParams& p) {
     const int ai = broadcast_index(index, KernelInput::A, p);
-    const auto dtype = DType(p.output_dtype());
+    const DType dtype = DType(p.output_dtype());
     const float x = low_precision_value(a, ai, DType(p.input_dtype(KernelInput::A)));
 #ifndef __CUDACC__
     // CPU FP8 abs preserves negative zero and unordered inputs.
@@ -95,7 +93,7 @@ ELMAN_LOW_POINTWISE_HD inline uint8_t low_precision_pointwise_result(LowPrecisio
         return x < 0 ? low_precision_encode(-x, dtype) : low_precision_code(a, ai, dtype);
 #endif
     if (op == LowPrecisionPointwise::Where) {
-        const auto selected = x != 0 ? KernelInput::B : KernelInput::C;
+        const KernelInput selected = x != 0 ? KernelInput::B : KernelInput::C;
         return low_precision_code(x != 0 ? b : c, broadcast_index(index, selected, p), dtype);
     }
     const float y = low_precision_pointwise_arity(op) == 2 ?

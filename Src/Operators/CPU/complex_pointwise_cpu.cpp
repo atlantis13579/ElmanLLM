@@ -7,7 +7,7 @@ struct Reader {
     double operator()(const uint32_t* data, uint64_t index, DType dtype) const {
         if (dtype == DType::Float64) return reinterpret_cast<const double*>(data)[index];
         if (dtype == DType::Float32) return reinterpret_cast<const float*>(data)[index];
-        const auto bits = reinterpret_cast<const uint16_t*>(data)[index];
+        const uint16_t bits = reinterpret_cast<const uint16_t*>(data)[index];
         return dtype == DType::Float16 ? numeric::half_to_float(bits) : numeric::bfloat_to_float(bits);
     }
 };
@@ -24,9 +24,9 @@ void execute(ComplexPointwise operation, uint32_t* out, const uint32_t* a, const
               const uint32_t* c, const KernelParams& p) {
     const int arity = complex_pointwise_arity(operation);
     for (int i = 0; i < p.output_count(); ++i) {
-        const auto x = complex_read<Real>(a, uint64_t(broadcast_index(i, KernelInput::A, p)), DType(p.input_dtype(KernelInput::A)), Reader{});
-        const auto y = arity > 1 ? complex_read<Real>(b, uint64_t(broadcast_index(i, KernelInput::B, p)), DType(p.input_dtype(KernelInput::B)), Reader{}) : ComplexNumber<Real>{};
-        const auto z = arity > 2 ? complex_read<Real>(c, uint64_t(broadcast_index(i, KernelInput::C, p)), DType(p.input_dtype(KernelInput::C)), Reader{}) : ComplexNumber<Real>{};
+        const ComplexNumber<Real> x = complex_read<Real>(a, uint64_t(broadcast_index(i, KernelInput::A, p)), DType(p.input_dtype(KernelInput::A)), Reader{});
+        const ComplexNumber<Real> y = arity > 1 ? complex_read<Real>(b, uint64_t(broadcast_index(i, KernelInput::B, p)), DType(p.input_dtype(KernelInput::B)), Reader{}) : ComplexNumber<Real>{};
+        const ComplexNumber<Real> z = arity > 2 ? complex_read<Real>(c, uint64_t(broadcast_index(i, KernelInput::C, p)), DType(p.input_dtype(KernelInput::C)), Reader{}) : ComplexNumber<Real>{};
         complex_write(out, uint64_t(i), DType(p.output_dtype()), complex_pointwise_value(operation, x, y, z), Writer{});
     }
 }

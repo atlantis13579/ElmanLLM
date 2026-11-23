@@ -5,11 +5,11 @@
 namespace elman::io::tensorflow {
 
 Tensor constant(const protobuf::Message& proto, Backend backend) {
-    const auto type = dtype(proto.integer(1));
-    const auto shape = dimensions(protobuf::Message(proto.bytes(2)));
-    const auto count = shape_element_count(shape);
-    const auto size = dtype_storage_bytes(type, count);
-    const auto content = proto.bytes(4);
+    const DType type = dtype(proto.integer(1));
+    const Shape shape = dimensions(protobuf::Message(proto.bytes(2)));
+    const size_t count = shape_element_count(shape);
+    const size_t size = dtype_storage_bytes(type, count);
+    const Bytes content = proto.bytes(4);
     if (content.size) {
         require(content.size == size, "TensorFlow tensor content has the wrong size");
         return Tensor::from_raw(shape, type, {content.data, content.data + content.size}, backend);
@@ -28,16 +28,16 @@ Tensor constant(const protobuf::Message& proto, Backend backend) {
         case DType::Complex128: field = 12; fixed = 8; components = 2; break;
         default: break;
     }
-    const auto values = proto.numbers(field, fixed);
+    const std::vector<uint64_t> values = proto.numbers(field, fixed);
     require(values.size() % components == 0 && values.size() / components <= count, "Invalid TensorFlow tensor values");
     std::vector<uint8_t> data(size);
-    const auto width = dtype_info(type).bits / (8 * components);
+    const size_t width = dtype_info(type).bits / (8 * components);
     if (!values.empty()) {
         for (size_t i = 0; i < count; ++i) {
-            const auto source = std::min(i, values.size() / components - 1);
+            const uint64_t source = std::min(i, values.size() / components - 1);
             for (size_t component = 0; component < components; ++component) {
-                const auto bits = values[source * components + component];
-                const auto start = (i * components + component) * width;
+                const uint64_t bits = values[source * components + component];
+                const size_t start = (i * components + component) * width;
                 for (size_t byte = 0; byte < width; ++byte) data[start + byte] = uint8_t(bits >> (byte * 8));
             }
         }

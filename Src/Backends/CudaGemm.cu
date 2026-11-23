@@ -75,7 +75,7 @@ struct BlasContext {
   }
 };
 BlasContext& context() {
-  auto& context = current_cuda_blas();
+  std::shared_ptr<void>& context = current_cuda_blas();
   if (!context) context = std::make_shared<BlasContext>();
   return *static_cast<BlasContext*>(context.get());
 }
@@ -83,7 +83,7 @@ cudaDataType_t gemm_storage(DType dtype) {
   return dtype == DType::Float32 ? CUDA_R_32F : dtype == DType::Float16 ? CUDA_R_16F : CUDA_R_16BF;
 }
 uint32_t lt_alignment(const void* pointer) {
-  const auto address = reinterpret_cast<uintptr_t>(pointer);
+  const uintptr_t address = reinterpret_cast<uintptr_t>(pointer);
   uint32_t alignment = 256;
   while (address % alignment) alignment /= 2;
   return alignment;
@@ -93,7 +93,7 @@ void prepare_lt_plan(LtDescriptors& d, BlasContext& blas, cudaDataType_t dtype, 
                      uint32_t align_left, uint32_t align_right, uint32_t align_output) {
   check(cublasLtMatmulDescCreate(&d.operation, wide ? CUBLAS_COMPUTE_64F : CUBLAS_COMPUTE_32F,
                                 wide ? CUDA_R_64F : CUDA_R_32F), "cublasLtMatmulDescCreate");
-  auto transpose = linear ? CUBLAS_OP_T : CUBLAS_OP_N;
+  cublasOperation_t transpose = linear ? CUBLAS_OP_T : CUBLAS_OP_N;
   check(cublasLtMatmulDescSetAttribute(d.operation, CUBLASLT_MATMUL_DESC_TRANSA, &transpose, sizeof(transpose)), "Lt transpose");
   cublasLtEpilogue_t epilogue = CUBLASLT_EPILOGUE_BIAS;
   check(cublasLtMatmulDescSetAttribute(d.operation, CUBLASLT_MATMUL_DESC_EPILOGUE, &epilogue, sizeof(epilogue)), "Lt bias epilogue");
@@ -114,7 +114,7 @@ void prepare_lt_plan(LtDescriptors& d, BlasContext& blas, cudaDataType_t dtype, 
   check(cublasLtMatmulPreferenceSetAttribute(d.preference, CUBLASLT_MATMUL_PREF_REDUCTION_SCHEME_MASK,
                                              &reduction, sizeof(reduction)), "Lt reduction precision");
   int count = 0;
-  auto status = cublasLtMatmulAlgoGetHeuristic(blas.lt, d.operation, d.left, d.right, d.output, d.output,
+  cublasStatus_t status = cublasLtMatmulAlgoGetHeuristic(blas.lt, d.operation, d.left, d.right, d.output, d.output,
                                              d.preference, 1, &d.algorithm, &count);
   if (status != CUBLAS_STATUS_NOT_SUPPORTED) {
     check(status, "cublasLtMatmulAlgoGetHeuristic");
@@ -125,21 +125,21 @@ template<class Scalar>
 bool biased_gemm(BlasContext& blas, void* out, const void* a, const void* b, const void* bias,
                  int rows, int columns, int shared, bool linear, cudaDataType_t dtype, Scalar alpha) {
   constexpr bool wide = std::is_same_v<Scalar,double>;
-  const auto left = lt_alignment(b), right = lt_alignment(a), dest = lt_alignment(out);
+  const uint32_t left = lt_alignment(b), right = lt_alignment(a), dest = lt_alignment(out);
   const std::array<int,10> key{rows,columns,shared,int(dtype),int(wide),int(linear),
                                int(left),int(right),int(dest),int(lt_alignment(bias))};
   auto it = blas.plans.find(key);
   if (it == blas.plans.end()) {
-    auto plan = std::make_unique<LtDescriptors>();
+    std::unique_ptr<LtDescriptors> plan = std::make_unique<LtDescriptors>();
     prepare_lt_plan(*plan, blas, dtype, wide, linear, rows, columns, shared, bias, left, right, dest);
     if (blas.plans.size() >= 128) blas.plans.clear();
     it = blas.plans.emplace(key, std::move(plan)).first;
   }
-  auto& d = *it->second;
+  LtDescriptors& d = *it->second;
   if (!d.supported) return false;
   check(cublasLtMatmulDescSetAttribute(d.operation, CUBLASLT_MATMUL_DESC_BIAS_POINTER, &bias, sizeof(bias)), "Lt bias pointer");
   Scalar beta = 0;
-  auto status = cublasLtMatmul(blas.lt, d.operation, &alpha, b, d.left, a, d.right, &beta, out, d.output,
+  cublasStatus_t status = cublasLtMatmul(blas.lt, d.operation, &alpha, b, d.left, a, d.right, &beta, out, d.output,
                          out, d.output, &d.algorithm.algo, blas.workspace, BlasContext::workspace_bytes, current_cuda_stream());
   if (status == CUBLAS_STATUS_NOT_SUPPORTED) return false;
   check(status, "cublasLtMatmul");
@@ -200,9 +200,9 @@ void attention_gemm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
     attention_empty_gemm<<<(count + 255u) / 256u, 256, 0, current_cuda_stream()>>>(out, s);
     return;
   }
-  auto& blas = context();
-  auto transpose = s.transpose_b ? CUBLAS_OP_T : CUBLAS_OP_N;
-  const auto storage = gemm_storage(s.dtype);
+  BlasContext& blas = context();
+  cublasOperation_t transpose = s.transpose_b ? CUBLAS_OP_T : CUBLAS_OP_N;
+  const cudaDataType_t storage = gemm_storage(s.dtype);
   float alpha = 1, beta = 0;
   int leading_b = s.b_leading ? s.b_leading : s.transpose_b ? s.shared : s.columns;
   if (s.batches == 1) {
@@ -215,7 +215,7 @@ void attention_gemm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
                 &beta, out, storage, s.columns, s.output_stride, s.batches, CUBLAS_COMPUTE_32F,
                 CUBLAS_GEMM_DEFAULT), "attention cublasGemmStridedBatchedEx");
   } else {
-    auto arrays = static_cast<void**>(pointers);
+    void** arrays = static_cast<void**>(pointers);
     attention_pointers<<<(unsigned(s.batches) + 255u) / 256u, 256, 0, current_cuda_stream()>>>(
         arrays, out, a, b, s, int(dtype_storage_bytes(s.dtype, 1)));
     check(cublasGemmBatchedEx(blas.handle, transpose, CUBLAS_OP_N, s.columns, s.rows, s.shared,
@@ -227,11 +227,11 @@ void attention_gemm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
 }
 
 void attention_gemm_cuda_pointers(void* pointers, const AttentionGemm& s) {
-  auto& blas = context();
-  const auto transpose = s.transpose_b ? CUBLAS_OP_T : CUBLAS_OP_N;
-  const auto storage = gemm_storage(s.dtype);
+  BlasContext& blas = context();
+  const cublasOperation_t transpose = s.transpose_b ? CUBLAS_OP_T : CUBLAS_OP_N;
+  const cudaDataType_t storage = gemm_storage(s.dtype);
   const int leading = s.b_leading ? s.b_leading : s.transpose_b ? s.shared : s.columns;
-  auto arrays = static_cast<void**>(pointers);
+  void** arrays = static_cast<void**>(pointers);
   float alpha = 1, beta = 0;
   check(cublasGemmBatchedEx(blas.handle, transpose, CUBLAS_OP_N, s.columns, s.rows, s.shared,
       &alpha, reinterpret_cast<const void* const*>(arrays), storage, leading,
@@ -246,9 +246,9 @@ void launch_low_attention_matrix_cuda(uint32_t* output, const uint32_t* a, const
     check_cuda_execution(cudaMemsetAsync(output, 0, size_t(p.output_count()) * sizeof(float), current_cuda_stream()), "attention empty matrix");
     return;
   }
-  auto& blas = context();
-  const auto left = p.attribute(1) ? CUBLAS_OP_T : CUBLAS_OP_N;
-  const auto right = p.attribute(0) ? CUBLAS_OP_T : CUBLAS_OP_N;
+  BlasContext& blas = context();
+  const cublasOperation_t left = p.attribute(1) ? CUBLAS_OP_T : CUBLAS_OP_N;
+  const cublasOperation_t right = p.attribute(0) ? CUBLAS_OP_T : CUBLAS_OP_N;
   const int leading_left = p.attribute(1) ? shared : columns, leading_right = p.attribute(0) ? rows : shared;
   const int batches = p.output_shape(0) * p.output_shape(1);
   float alpha = 1, beta = 0;
@@ -271,11 +271,11 @@ bool try_biased_float64_gemm_cuda(double* out, const double* a, const double* b,
 bool try_conv2d_gemm_cuda(void* output, const void* columns, const void* weights, DType dtype,
                          int positions, int channels, int shared, int input_pitch, int output_pitch,
                          bool output_float32, int groups) {
-  const auto storage = gemm_storage(dtype);
-  const auto destination = output_float32 ? CUDA_R_32F : storage;
+  const cudaDataType_t storage = gemm_storage(dtype);
+  const cudaDataType_t destination = output_float32 ? CUDA_R_32F : storage;
   const float alpha = 1, beta = 0;
   // Each column of the output matrix is one channel plane in NCHW storage.
-  auto handle = context().handle;
+  cublasHandle_t handle = context().handle;
   cublasStatus_t status;
   if (groups == 1) {
     status = cublasGemmEx(handle, CUBLAS_OP_N, CUBLAS_OP_N, positions, channels, shared,
@@ -319,10 +319,10 @@ bool try_pointwise_conv_gradient_cuda(CudaConvolution operation, uint32_t* out,
   const int outputs = dx ? p.input_shape(KernelInput::A, kChannelAxis) : p.output_shape(kOutputChannelAxis);
   if (kernel_h != 1 || kernel_w != 1 || !batches || !positions || int64_t(positions) * inputs * outputs < (1 << 15))
     return false;
-  auto handle = context().handle;
-  auto* left = reinterpret_cast<const float*>(a);
-  auto* right = reinterpret_cast<const float*>(b);
-  auto* destination = reinterpret_cast<float*>(out);
+  cublasHandle_t handle = context().handle;
+  const float* left = reinterpret_cast<const float*>(a);
+  const float* right = reinterpret_cast<const float*>(b);
+  float* destination = reinterpret_cast<float*>(out);
   const float one = 1, zero = 0;
   if (dx) {
     check(cublasSgemmStridedBatched(handle, CUBLAS_OP_N, CUBLAS_OP_T, positions, inputs, outputs,
@@ -330,8 +330,8 @@ bool try_pointwise_conv_gradient_cuda(CudaConvolution operation, uint32_t* out,
         &zero, destination, positions, int64_t(inputs) * positions, batches), "Pointwise convolution input gradient");
   } else {
     for (int batch = 0; batch < batches; ++batch) {
-      const auto* x = left + size_t(batch) * inputs * positions;
-      const auto* dy = right + size_t(batch) * outputs * positions;
+      const float* x = left + size_t(batch) * inputs * positions;
+      const float* dy = right + size_t(batch) * outputs * positions;
       check(cublasSgemm(handle, CUBLAS_OP_T, CUBLAS_OP_N, inputs, outputs, positions, &one,
           x, positions, dy, positions, batch ? &one : &zero, destination, inputs), "Pointwise convolution weight gradient");
     }
@@ -341,7 +341,7 @@ bool try_pointwise_conv_gradient_cuda(CudaConvolution operation, uint32_t* out,
 
 bool try_gemm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
                    const uint32_t* c, const KernelParams& p, GemmOperation operation) {
-  const auto dtype = static_cast<DType>(p.output_dtype());
+  const DType dtype = static_cast<DType>(p.output_dtype());
   if (!is_compute_float(dtype) || p.input_dtype(KernelInput::A) != p.output_dtype() ||
       p.input_dtype(KernelInput::B) != p.output_dtype()) return false;
   if (p.output_count() == 0) return true;
@@ -358,8 +358,8 @@ bool try_gemm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
   } else if (linear && p.input_rank(KernelInput::C) >= 0) beta = 1;
   // Preserve the reference kernel's empty-inner-dimension and ignored-NaN rules.
   if (shared == 0 || alpha == 0) return false;
-  const auto storage = gemm_storage(dtype);
-  auto& blas = context();
+  const cudaDataType_t storage = gemm_storage(dtype);
+  BlasContext& blas = context();
   if (beta == 1 && p.input_rank(KernelInput::C) == 1 && p.input_shape(KernelInput::C, 0) == columns &&
       p.input_dtype(KernelInput::C) == p.output_dtype() && shared > 1 && columns > 1 && batches == 1 &&
       (linear || operation == GemmOperation::Addmm)) {
@@ -386,9 +386,9 @@ bool try_gemm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
     }
   }
   for (int batch = 0; batch < batches; ++batch) {
-    const auto* left = reinterpret_cast<const uint8_t*>(a) + size_t(linear ? 0 : batch_offset(batch, KernelInput::A, p)) * width;
-    const auto* right = reinterpret_cast<const uint8_t*>(b) + size_t(linear ? 0 : batch_offset(batch, KernelInput::B, p)) * width;
-    auto* destination = reinterpret_cast<uint8_t*>(out) + size_t(batch) * rows * columns * width;
+    const uint8_t* left = reinterpret_cast<const uint8_t*>(a) + size_t(linear ? 0 : batch_offset(batch, KernelInput::A, p)) * width;
+    const uint8_t* right = reinterpret_cast<const uint8_t*>(b) + size_t(linear ? 0 : batch_offset(batch, KernelInput::B, p)) * width;
+    uint8_t* destination = reinterpret_cast<uint8_t*>(out) + size_t(batch) * rows * columns * width;
     // Row-major C=A*B is column-major C^T=B^T*A^T. Linear stores W as [out,in].
     check(cublasGemmEx(blas.handle, transposed ? CUBLAS_OP_T : CUBLAS_OP_N, CUBLAS_OP_N,
                       columns, rows, shared, &alpha, right, storage, transposed ? shared : columns,

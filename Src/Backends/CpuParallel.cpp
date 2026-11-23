@@ -1,4 +1,5 @@
 #include "Backends/CpuParallel.h"
+#include "Core/LocalFunction.h"
 
 #include "Backends/CpuMath.h"
 
@@ -48,7 +49,7 @@ class ThreadPool {
   ~ThreadPool() { stop(); }
 
   std::future<void> submit(std::packaged_task<void()> task) {
-    auto result = task.get_future();
+    std::future<void> result = task.get_future();
     {
       std::lock_guard<std::mutex> lock(mutex_);
       tasks_.push(std::move(task));
@@ -64,7 +65,7 @@ class ThreadPool {
       stopped_ = true;
     }
     ready_.notify_all();
-    for (auto& thread : threads_) thread.join();
+    for (std::thread& thread : threads_) thread.join();
   }
 
   void work() {
@@ -105,9 +106,9 @@ int environment_threads() {
   const char* value = std::getenv("ELMAN_CPU_THREADS");
   if (!value) return 0;
   const std::string_view text(value);
-  const auto end = text.data() + text.size();
+  const char* const end = text.data() + text.size();
   int threads = 0;
-  const auto parsed = std::from_chars(text.data(), end, threads);
+  const std::from_chars_result parsed = std::from_chars(text.data(), end, threads);
   if (parsed.ec != std::errc{} || parsed.ptr != end || threads < 1 || threads > maximum_threads)
     throw std::invalid_argument("ELMAN_CPU_THREADS must be in [1,256]");
   return threads;
@@ -146,14 +147,14 @@ void parallel_for_cpu(int64_t count, int64_t grain, const std::function<void(int
 
   // Keep one partition on the caller. Observe all submitted tasks before
   // propagating errors so tensor references stay alive until workers finish.
-  auto pool = pool_for(partitions - 1);
-  auto range = [&](int part) {
-    const auto segment = count / partitions;
-    const auto remainder = count % partitions;
-    const auto begin = segment * part + std::min<int64_t>(part, remainder);
-    const auto length = segment + (part < remainder ? 1 : 0);
+  std::shared_ptr<ThreadPool> pool = pool_for(partitions - 1);
+  LocalFunction range{[&](int part) {
+    const int64_t segment = count / partitions;
+    const int64_t remainder = count % partitions;
+    const int64_t begin = segment * part + std::min<int64_t>(part, remainder);
+    const int64_t length = segment + (part < remainder ? 1 : 0);
     task(begin, begin + length);
-  };
+  }};
   std::vector<std::future<void>> jobs;
   jobs.reserve(partitions - 1);
   std::exception_ptr failure;
@@ -166,7 +167,7 @@ void parallel_for_cpu(int64_t count, int64_t grain, const std::function<void(int
   } catch (...) {
     failure = std::current_exception();
   }
-  for (auto& job : jobs) {
+  for (std::future<void>& job : jobs) {
     try {
       job.get();
     } catch (...) {

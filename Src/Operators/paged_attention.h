@@ -23,7 +23,7 @@ struct PagedAttentionShape {
         p.v[KernelParams::kOutputDTypeSlot] = dtype;
         for (int i = 0; i < 4; ++i) p.v[KernelParams::input_slot(KernelInput(i))] = -1;
         for (int input = 0; input < 2; ++input) {
-            const auto id = KernelInput(input);
+            const KernelInput id = KernelInput(input);
             const int base = KernelParams::input_slot(id);
             p.v[base] = 4;
             p.v[KernelParams::input_dtype_slot(id)] = dtype;

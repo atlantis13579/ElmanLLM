@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Core/LocalFunction.h"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -34,7 +36,7 @@ float contiguous_narrow_dot(int count, ReadLeft left, ReadRight right) {
     for (int group = 0; group < distance; ++group)
       for (int lane = 0; lane < 8; ++lane)
         partial[group][lane] += partial[group + distance][lane];
-  auto reduce = [](float* lanes) {
+  LocalFunction reduce{[](float* lanes) {
 #if defined(__GNUC__) && __GNUC__ > 5 && !defined(_MSC_VER)
     for (int distance = 4; distance; distance /= 2)
       for (int lane = 0; lane < distance; ++lane) lanes[lane] += lanes[lane + distance];
@@ -44,7 +46,7 @@ float contiguous_narrow_dot(int count, ReadLeft left, ReadRight right) {
     for (int lane = 1; lane < 8; ++lane) total += lanes[lane];
     return total;
 #endif
-  };
+  }};
   float total = reduce(partial[0]), tail[8]{};
   for (; offset <= count - 16; offset += 16)
     for (int half = 0; half < 2; ++half)
@@ -67,12 +69,12 @@ float contiguous_float_sum(int count, Read read) {
   const int power = std::max(4, logarithm / 4), block = 1 << power;
   float sums[4][4][8] = {};
   int group = 0;
-  auto accumulate = [&] {
+  LocalFunction accumulate{[&] {
     for (int part = 0; part < 4; ++part)
       for (int lane = 0; lane < 8; ++lane)
         sums[0][part][lane] += read(group * 32 + part * 8 + lane);
     ++group;
-  };
+  }};
   while (group + block <= groups) {
     for (int i = 0; i < block; ++i) accumulate();
     for (int level = 1; level < 4; ++level) {

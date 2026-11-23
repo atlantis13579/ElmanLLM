@@ -31,7 +31,7 @@ ELMAN_FLOATING_RANDOM_HD inline float floating_random_unit(uint64_t index, const
 #endif
 }
 ELMAN_FLOATING_RANDOM_HD inline float floating_random_value(bool normal, int index, const KernelParams& p) {
-    const auto dtype = DType(p.output_dtype());
+    const DType dtype = DType(p.output_dtype());
     const double first = float64_random_parameter(p, 0), second = float64_random_parameter(p, 1);
     if (!normal) {
         const float low = floating_random_round(float(first), dtype), high = floating_random_round(float(second), dtype);

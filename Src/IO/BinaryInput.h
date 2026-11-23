@@ -29,7 +29,7 @@ struct Bytes {
     }
     uint64_t le(size_t start, size_t width) const {
         require(width <= sizeof(uint64_t), "Binary model integer width exceeds 64 bits");
-        const auto field = sub(start, width);
+        const Bytes field = sub(start, width);
         uint64_t value = 0;
         for (size_t i = 0; i < width; ++i) value |= uint64_t(field.data[i]) << (8 * i);
         return value;
@@ -47,7 +47,7 @@ public:
     explicit BinaryInput(const std::filesystem::path& path) : stream_(path, std::ios::binary) {
         if (!stream_) throw std::runtime_error("Cannot open binary model file: " + path.u8string());
         stream_.seekg(0, std::ios::end);
-        const auto end = stream_.tellg();
+        const std::streampos end = stream_.tellg();
         if (end < 0) throw std::runtime_error("Cannot read binary file size");
         size_ = static_cast<uint64_t>(end);
         seek(0);

@@ -43,25 +43,25 @@ void bindings(Backend backend) {
     check(first.host_staging_stats().allocated_bytes == 0, "Empty stream allocated staging");
 }
 void storage(Backend backend) {
-    auto host_before = memory_stats(Backend::CPU).live_bytes();
-    auto device_before = memory_stats(backend).live_bytes();
+    size_t host_before = memory_stats(Backend::CPU).live_bytes();
+    size_t device_before = memory_stats(backend).live_bytes();
     for (bool reuse : {false, true}) for (bool asynchronous : {false, true}) for (bool pinned : {false, true}) {
         ExecutionStream stream(backend, {16384, 4});
         StreamScope scope(stream, asynchronous, pinned);
         AllocationPool pool(backend, 0, reuse);
-        for (auto dtype : all_dtypes()) for (size_t count : {size_t(0), size_t(1), size_t(17), size_t(257)}) {
-            auto buffer = backend_allocate(backend, count, dtype);
+        for (elman::DType dtype : all_dtypes()) for (size_t count : {size_t(0), size_t(1), size_t(17), size_t(257)}) {
+            BufferPtr buffer = backend_allocate(backend, count, dtype);
             std::vector<uint8_t> expected(buffer->bytes);
             for (size_t i = 0; i < expected.size(); ++i) expected[i] = uint8_t(i * 73 + 11);
-            auto caller = expected;
+            std::vector<uint8_t> caller = expected;
             backend_upload_raw(buffer, caller);
             std::fill(caller.begin(), caller.end(), uint8_t(0));
             check(backend_download_raw(buffer) == expected, "Staging changed raw storage bytes");
         }
-        auto a = Tensor::from_data({4}, {1, -2, 3, -4}, backend);
+        Tensor a = Tensor::from_data({4}, {1, -2, 3, -4}, backend);
         check(mul(a, a).data() == std::vector<float>({1, 4, 9, 16}), "Staged arithmetic input differs");
         stream.synchronize();
-        auto stats = stream.host_staging_stats();
+        HostStagingStats stats = stream.host_staging_stats();
         bool active = backend == Backend::CUDA && asynchronous && pinned;
         check((stats.uploads > 0) == active && (stats.downloads > 0) == active, "Staging selection differs");
         check(stats.allocated_bytes <= 16384 && stats.buffers <= 4 && stats.pending_bytes == 0, "Staging capacity or retirement differs");
@@ -77,7 +77,7 @@ void storage(Backend backend) {
 int main(int argc, char** argv) {
     try {
         if (argc != 2) throw std::invalid_argument("Usage: elman_staging_tests cpu|cuda");
-        auto backend = elman::parse_backend(argv[1]);
+        Backend backend = elman::parse_backend(argv[1]);
         if (!elman::backend_available(backend)) return 77;
         bindings(backend); storage(backend);
 #ifdef ELMAN_HAS_CUDA

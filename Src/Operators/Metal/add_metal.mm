@@ -2,9 +2,9 @@
 
 namespace elman::metal {
 Tensor lower_add(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto lhs = m.float_work(inputs[0]), rhs = m.float_work(inputs[1]);
+  Tensor lhs = m.float_work(inputs[0]), rhs = m.float_work(inputs[1]);
   if (lhs.dataType != rhs.dataType) {
-    auto type = is_compute_float(DType(p.input_dtype(KernelInput::A))) ||
+    MPSDataType type = is_compute_float(DType(p.input_dtype(KernelInput::A))) ||
                         is_compute_float(DType(p.input_dtype(KernelInput::B)))
                     ? MPSDataTypeFloat32
                     : storage_type(DType(p.output_dtype()));

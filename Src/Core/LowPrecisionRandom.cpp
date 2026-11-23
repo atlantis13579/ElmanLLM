@@ -7,7 +7,7 @@
 namespace elman {
 void validate_low_precision_random(LowPrecisionRandom op, const BufferPtr& output,
         const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     const bool dropout = op == LowPrecisionRandom::Dropout;
     const int arity = dropout ? 1 : 0;
     require(inputs.size() >= size_t(arity) && inputs.size() <= 4, "Invalid low precision random operand count");
@@ -42,7 +42,7 @@ void validate_low_precision_random(LowPrecisionRandom op, const BufferPtr& outpu
     else {
         require(first >= 0. && first <= 1. && (p.attribute(3) == 0 || p.attribute(3) == 1), "Invalid low precision dropout parameters");
         if (output->bytes && inputs[0]->bytes) {
-            const auto a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[0]->raw_pointer());
+            const uintptr_t a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[0]->raw_pointer());
             const bool overlap = a <= b ? b - a < output->bytes : a - b < inputs[0]->bytes;
             require(!overlap || a == b, "Partially overlapping low precision dropout buffers");
         }

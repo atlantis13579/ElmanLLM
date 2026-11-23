@@ -21,8 +21,8 @@ namespace {
 
 template<class T> T integer(const std::string& option, const std::string& text) {
   T result{};
-  const auto end = text.data() + text.size();
-  const auto parsed = std::from_chars(text.data(), end, result);
+  const char* const end = text.data() + text.size();
+  const std::from_chars_result parsed = std::from_chars(text.data(), end, result);
   if (parsed.ec != std::errc{} || parsed.ptr != end) throw std::invalid_argument("Invalid integer for " + option);
   return result;
 }
@@ -63,27 +63,27 @@ int diffusion_command(int argc, char** argv) {
     else if (option == "--trace-dir") trace_directory = value;
     else throw std::invalid_argument("Unknown diffusion option " + option);
   }
-  auto output_type = std::filesystem::path(output).extension().string();
+  std::string output_type = std::filesystem::path(output).extension().string();
   std::transform(output_type.begin(), output_type.end(), output_type.begin(), [](unsigned char c) { return std::tolower(c); });
   const bool jpeg = output_type == ".jpg" || output_type == ".jpeg";
   if (!has_prompt || (!jpeg && output_type != ".png" && output_type != ".safetensors") || width < 0 || height < 0 || guidance < 0)
     throw std::invalid_argument("diffusion requires --prompt and --output ending in .png, .jpg, .jpeg or .safetensors");
-  const auto dtype = requested_dtype.empty() ? (backend == Backend::CUDA ? DType::Float16 : DType::Float32)
+  const DType dtype = requested_dtype.empty() ? (backend == Backend::CUDA ? DType::Float16 : DType::Float32)
                                              : parse_dtype(requested_dtype);
   if (!is_compute_float(dtype)) throw std::invalid_argument("diffusion requires float32, float16 or bfloat16");
   const int device = current_device(backend);
   std::cerr << "[sd] Loading model " << root.string() << " (" << backend_name(backend) << ", " << dtype_name(dtype) << ")\n";
-  auto session = DiffusionSession::load(root, backend, device, dtype);
+  DiffusionSession session = DiffusionSession::load(root, backend, device, dtype);
   DiffusionInput input{prompt, negative, width, height, steps, seed, guidance, {}};
   if (!latent_path.empty()) input.initial_latent = SafetensorsFile(latent_path).load("latent", backend);
   DiffusionTrace trace;
   if (!trace_directory.empty()) {
     trace = [&](const std::string& name, const Tensor& tensor) {
-      auto path = std::filesystem::path(trace_directory) / (name + ".safetensors");
+      std::filesystem::path path = std::filesystem::path(trace_directory) / (name + ".safetensors");
       save_safetensors(path.string(), {{name, tensor}});
     };
   }
-  const auto result = session.generate(input, trace, [](const DiffusionProgress& progress) {
+  const StableDiffusionOutput result = session.generate(input, trace, [](const DiffusionProgress& progress) {
     std::cerr << "[sd] " << diffusion_progress_text(progress) << '\n';
   });
   std::cerr << "[sd] Writing " << output << '\n';

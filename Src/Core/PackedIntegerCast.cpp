@@ -4,9 +4,9 @@
 
 namespace elman {
 void validate_packed_integer_cast(const BufferPtr& output, const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     require(inputs.size() >= 1 && inputs.size() <= 4 && inputs[0], "Packed integer cast requires one operand");
-    auto numeric = [](DType dtype) { return is_arithmetic_integer(dtype) || is_arithmetic_float(dtype) || is_low_precision_float(dtype); };
+    bool (*const numeric)(DType) = [](DType dtype) { return is_arithmetic_integer(dtype) || is_arithmetic_float(dtype) || is_low_precision_float(dtype); };
     require(numeric(output->dtype) && numeric(inputs[0]->dtype), "Packed integer cast requires numeric operands");
     require(output->backend == inputs[0]->backend && p.output_dtype() == int(output->dtype) &&
             p.input_dtype(KernelInput::A) == int(inputs[0]->dtype), "Packed integer cast backend or dtype mismatch");

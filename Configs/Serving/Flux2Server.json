@@ -8,6 +8,8 @@
   },
   "http": {
     "host": "127.0.0.1",
-    "port": 8082
+    "port": 8082,
+    "web_root": "../../Web",
+    "cors_origins": ["http://127.0.0.1:8000"]
   }
 }

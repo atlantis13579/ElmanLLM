@@ -26,7 +26,7 @@ struct TiledAttentionShape {
         int shape[4] = {one_head ? 1 : batch, one_head ? 1 : heads, rows, keys};
         p.v[KernelParams::kOutputCountSlot] = shape[0] * shape[1] * rows * keys;
         p.v[KernelParams::kOutputRankSlot] = 4;
-        for (auto input : {KernelInput::A, KernelInput::B, KernelInput::C, KernelInput::D})
+        for (KernelInput input : {KernelInput::A, KernelInput::B, KernelInput::C, KernelInput::D})
             p.v[KernelParams::input_slot(input)] = -1;
         int base = KernelParams::input_slot(KernelInput::A), stride = 1;
         p.v[base] = 4;

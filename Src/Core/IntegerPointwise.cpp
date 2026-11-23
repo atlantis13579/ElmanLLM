@@ -6,15 +6,15 @@
 namespace elman {
 void validate_integer_pointwise(IntegerPointwise op, const BufferPtr& output,
                                 const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
-    auto numeric = [](DType type) { return is_standard_integer(type) || is_compute_float(type) || type == DType::Float64; };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    bool (*const numeric)(DType) = [](DType type) { return is_standard_integer(type) || is_compute_float(type) || type == DType::Float64; };
     const int arity = integer_pointwise_arity(op);
     require(inputs.size() >= size_t(arity) && inputs.size() <= 4, "Invalid integer pointwise operand count");
     for (size_t i = arity; i < inputs.size(); ++i) require(!inputs[i], "Unexpected integer pointwise operand");
     std::vector<int> shape;
     for (int i = 0; i < arity; ++i) {
         require(bool(inputs[i]), "Missing integer pointwise operand");
-        const auto input = KernelInput(i);
+        const KernelInput input = KernelInput(i);
         const int rank = p.input_rank(input);
         require(rank >= 0 && rank <= 8, "Invalid integer pointwise input rank");
         size_t count = 1, prefix = 1;
@@ -69,8 +69,8 @@ void validate_integer_pointwise(IntegerPointwise op, const BufferPtr& output,
     }
     for (int i = 0; i < arity; ++i) {
         if (!output->bytes || !inputs[i]->bytes) continue;
-        const auto first = reinterpret_cast<uintptr_t>(output->raw_pointer());
-        const auto second = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
+        const uintptr_t first = reinterpret_cast<uintptr_t>(output->raw_pointer());
+        const uintptr_t second = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
         const bool overlap = first <= second ? second - first < output->bytes : first - second < inputs[i]->bytes;
         if (!overlap) continue;
         require(first == second && out == inputs[i]->dtype && output->count == inputs[i]->count &&

@@ -1,4 +1,5 @@
 #include "Core/AllocationPool.h"
+#include "Core/LocalFunction.h"
 #include "Core/Execution.h"
 #include "Backends/CudaStream.h"
 #include <atomic>
@@ -36,21 +37,21 @@ KernelParams addition() {
     return p;
 }
 BufferPtr values(float value) {
-    auto buffer = backend_allocate(Backend::CUDA, 16, DType::Float32);
+    BufferPtr buffer = backend_allocate(Backend::CUDA, 16, DType::Float32);
     backend_upload(buffer, std::vector<float>(16, value));
     return buffer;
 }
 }
 int cuda_execution_ordering_checks() {
     int checks = 0;
-    auto check = [&](bool valid, const char* message) {
+    LocalFunction check{[&](bool valid, const char* message) {
         ++checks;
         if (!valid) throw std::runtime_error(message);
-    };
+    }};
     ExecutionStream first(Backend::CUDA), second(Backend::CUDA), third(Backend::CUDA);
-    auto a = values(1), b = values(2), output = values(0), independent = values(0), dependent = values(0);
-    auto params = addition();
-    auto snapshot = first.record();
+    BufferPtr a = values(1), b = values(2), output = values(0), independent = values(0), dependent = values(0);
+    KernelParams params = addition();
+    ExecutionEvent snapshot = first.record();
     {
         Gate gate(first);
         {
@@ -58,24 +59,24 @@ int cuda_execution_ordering_checks() {
             gate.enqueue();
             backend_dispatch("add", output, {a, b}, params);
         }
-        auto blocked = first.record();
+        ExecutionEvent blocked = first.record();
         snapshot.synchronize();
         check(snapshot.ready() && !blocked.ready() && !first.ready(), "Events did not retain independent queue snapshots");
         {
             StreamScope scope(second);
             backend_dispatch("add", independent, {a, b}, params);
         }
-        auto free = second.record();
+        ExecutionEvent free = second.record();
         free.synchronize();
         check(free.ready() && !blocked.ready(), "Independent stream waited for the blocked stream");
         second.wait(blocked);
-        auto explicit_dependency = second.record();
+        ExecutionEvent explicit_dependency = second.record();
         check(!explicit_dependency.ready(), "Explicit event dependency was ignored");
         {
             StreamScope scope(third);
             backend_dispatch("add", dependent, {output, b}, params);
         }
-        auto automatic_dependency = third.record();
+        ExecutionEvent automatic_dependency = third.record();
         check(!automatic_dependency.ready(), "Buffer producer dependency was ignored");
         first.synchronize(); second.synchronize(); third.synchronize();
     }
@@ -109,8 +110,8 @@ int cuda_execution_ordering_checks() {
     }
     {
         AllocationPool pool(Backend::CUDA);
-        auto recycled = values(1);
-        auto address = recycled->raw_pointer();
+        BufferPtr recycled = values(1);
+        void* address = recycled->raw_pointer();
         Gate gate(first);
         {
             StreamScope scope(first);
@@ -123,7 +124,7 @@ int cuda_execution_ordering_checks() {
             StreamScope scope(second);
             replacement = backend_allocate(Backend::CUDA, 16, DType::Float32);
         }
-        auto cleared = second.record();
+        ExecutionEvent cleared = second.record();
         bool pending = !cleared.ready();
         first.synchronize(); second.synchronize();
         check(pending && replacement->raw_pointer() == address && pool.stats().reuses == 1,

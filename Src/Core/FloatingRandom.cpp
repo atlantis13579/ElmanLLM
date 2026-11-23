@@ -6,7 +6,7 @@
 namespace elman {
 void validate_floating_random(bool normal, const BufferPtr& output,
         const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     require(is_compute_float(output->dtype) && inputs.size() <= 4, "Floating random operation requires a native floating output");
     for (int i = 0; i < 4; ++i) {
         require(size_t(i) >= inputs.size() || !inputs[i], "Unexpected floating random operand");

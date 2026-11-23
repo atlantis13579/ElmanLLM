@@ -10,12 +10,12 @@ namespace elman {
 void check_cuda_execution(cudaError_t status, const char* operation) {
     if (status == cudaSuccess) return;
     cudaGetLastError();
-    auto message = std::string(operation) + ": " + cudaGetErrorString(status);
+    std::string message = std::string(operation) + ": " + cudaGetErrorString(status);
     if (status == cudaErrorMemoryAllocation) throw AllocationFailure(message);
     throw std::runtime_error(message);
 }
 std::recursive_mutex& cuda_submission_mutex() {
-    static auto* value = new std::recursive_mutex;
+    static std::recursive_mutex* value = new std::recursive_mutex;
     return *value;
 }
 namespace {
@@ -80,7 +80,7 @@ struct CudaEventState final : detail::EventState {
     }
     bool ready() const override {
         DeviceGuard guard(device);
-        auto status = cudaEventQuery(event);
+        cudaError_t status = cudaEventQuery(event);
         if (status == cudaErrorNotReady) { cudaGetLastError(); return false; }
         check_cuda_execution(status, "cudaEventQuery");
         return true;
@@ -121,7 +121,7 @@ class HostStagingPool {
         reap();
         for (;;) {
             Slot* best = nullptr;
-            for (auto& slot : slots_) if (!slot.busy && slot.bytes >= bytes && (!best || slot.bytes < best->bytes)) best = &slot;
+            for (HostStagingPool::Slot& slot : slots_) if (!slot.busy && slot.bytes >= bytes && (!best || slot.bytes < best->bytes)) best = &slot;
             if (best) {
                 best->reservation.reclassify(MemoryKind::Workspace);
                 best->busy = true;
@@ -178,7 +178,7 @@ class HostStagingPool {
 public:
     explicit HostStagingPool(const HostStagingOptions& options) : options_(options) {}
     void reap() {
-        for (auto& slot : slots_) if (slot.completion && slot.completion->ready()) recycle(slot);
+        for (HostStagingPool::Slot& slot : slots_) if (slot.completion && slot.completion->ready()) recycle(slot);
     }
     void trim() {
         reap();
@@ -191,7 +191,7 @@ public:
     }
     // The owner has already synchronized its queue, including on exceptional exit.
     void clear() noexcept {
-        for (auto& slot : slots_) cudaFreeHost(slot.data);
+        for (HostStagingPool::Slot& slot : slots_) cudaFreeHost(slot.data);
         slots_.clear();
         std::vector<Slot>().swap(slots_);
         metadata_ = {};
@@ -199,16 +199,16 @@ public:
     }
     HostStagingStats stats() {
         reap();
-        auto result = stats_;
+        HostStagingStats result = stats_;
         result.buffers = slots_.size();
-        for (const auto& slot : slots_) {
+        for (const HostStagingPool::Slot& slot : slots_) {
             if (slot.busy) result.pending_bytes += slot.bytes;
             else result.cached_bytes += slot.bytes;
         }
         return result;
     }
     std::shared_ptr<CudaEventState> upload(void* destination, const void* source, size_t bytes) {
-        auto* slot = acquire(bytes);
+        Slot* slot = acquire(bytes);
         if (!slot) return {};
         std::memcpy(slot->data, source, bytes);
         try {
@@ -224,7 +224,7 @@ public:
         }
     }
     bool download(void* destination, const void* source, size_t bytes) {
-        auto* slot = acquire(bytes);
+        Slot* slot = acquire(bytes);
         if (!slot) return false;
         try {
             check_cuda_execution(cudaMemcpyAsync(slot->data, source, bytes, cudaMemcpyDeviceToHost, current_cuda_stream()), "Staged CUDA download");
@@ -270,13 +270,13 @@ struct CudaStreamState final : detail::StreamState {
     void wait(const std::shared_ptr<detail::EventState>& event) override {
         std::lock_guard<std::recursive_mutex> lock(cuda_submission_mutex());
         DeviceGuard guard(device);
-        auto native = std::dynamic_pointer_cast<CudaEventState>(event);
+        std::shared_ptr<CudaEventState> native = std::dynamic_pointer_cast<CudaEventState>(event);
         if (!native) throw std::invalid_argument("Expected a CUDA event");
         check_cuda_execution(cudaStreamWaitEvent(stream, native->event, 0), "cudaStreamWaitEvent");
     }
     bool ready() const override {
         DeviceGuard guard(device);
-        auto status = cudaStreamQuery(stream);
+        cudaError_t status = cudaStreamQuery(stream);
         if (status == cudaErrorNotReady) { cudaGetLastError(); return false; }
         check_cuda_execution(status, "cudaStreamQuery");
         return true;
@@ -316,15 +316,15 @@ void wait_for(const std::shared_ptr<CudaEventState>& event) {
 namespace detail {
 std::shared_ptr<StreamState> create_cuda_stream(const HostStagingOptions& options) { return std::make_shared<CudaStreamState>(options); }
 }
-cudaStream_t current_cuda_stream() { auto* value = current(); return value ? value->stream : nullptr; }
+cudaStream_t current_cuda_stream() { CudaStreamState* value = current(); return value ? value->stream : nullptr; }
 uint64_t current_cuda_stream_id() {
-    if (auto* value = current()) return value->id;
+    if (CudaStreamState* value = current()) return value->id;
     int device = 0;
     check_cuda_execution(cudaGetDevice(&device), "Default stream device");
     return default_stream_id(device);
 }
 std::shared_ptr<void>& current_cuda_blas() {
-    if (auto* value = current()) return value->blas;
+    if (CudaStreamState* value = current()) return value->blas;
     int device = 0;
     check_cuda_execution(cudaGetDevice(&device), "cudaGetDevice");
     thread_local std::map<int, std::shared_ptr<void>> contexts;
@@ -332,27 +332,27 @@ std::shared_ptr<void>& current_cuda_blas() {
 }
 void synchronize_cuda_stream() { check_cuda_execution(cudaStreamSynchronize(current_cuda_stream()), "CUDA stream execution"); }
 std::shared_ptr<CudaEventState> stage_cuda_upload(void* destination, const void* source, size_t bytes) {
-    auto* stream = current();
+    CudaStreamState* stream = current();
     return stream && pinned_staging_enabled(Backend::CUDA) ? stream->staging.upload(destination, source, bytes) : nullptr;
 }
 bool stage_cuda_download(void* destination, const void* source, size_t bytes) {
-    auto* stream = current();
+    CudaStreamState* stream = current();
     return stream && pinned_staging_enabled(Backend::CUDA) && stream->staging.download(destination, source, bytes);
 }
 std::shared_ptr<CudaEventState> record_cuda_completion() {
-    if (auto* state = current())
+    if (CudaStreamState* state = current())
         return std::make_shared<CudaEventState>(state->device, state->id, state->stream, state->events);
     int device = 0;
     check_cuda_execution(cudaGetDevice(&device), "cudaGetDevice");
     thread_local std::map<int, std::shared_ptr<CudaEventPool>> pools;
-    auto& pool = pools[device];
+    std::shared_ptr<CudaEventPool>& pool = pools[device];
     if (!pool) pool = std::make_shared<CudaEventPool>(device);
     return std::make_shared<CudaEventState>(device, default_stream_id(device), nullptr, pool);
 }
 void prepare_cuda_read(const CudaAccess& access) { wait_for(access.writer); }
 void prepare_cuda_write(const CudaAccess& access) {
     wait_for(access.writer);
-    for (const auto& reader : access.readers) wait_for(reader.second);
+    for (const std::pair<const uint64_t, std::shared_ptr<CudaEventState>>& reader : access.readers) wait_for(reader.second);
 }
 void finish_cuda_read(CudaAccess& access, const std::shared_ptr<CudaEventState>& event) {
     if (!event) return;

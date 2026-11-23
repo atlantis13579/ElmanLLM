@@ -50,13 +50,13 @@ Tensor latent_attention(const Tensor& query_plain, const Tensor& query_rotary, c
                         double scale, int causal_offset, int query_tile) {
     require(query_plain.defined() && query_plain.shape().size() == 4 && is_compute_float(query_plain.dtype()), "invalid query");
     DeviceScope owner(query_plain.backend(), query_plain.device());
-    const auto backend = query_plain.backend();
-    const auto dtype = query_plain.dtype();
-    for (const auto* value : {&query_plain, &query_rotary, &cache.latent, &cache.rotary, &key_weight, &value_weight}) {
+    const Backend backend = query_plain.backend();
+    const DType dtype = query_plain.dtype();
+    for (const Tensor* value : {&query_plain, &query_rotary, &cache.latent, &cache.rotary, &key_weight, &value_weight}) {
         tensor(*value, backend, dtype);
         require(value->device() == query_plain.device(), "operand device differs");
     }
-    const auto& q = query_plain.shape();
+    const Shape& q = query_plain.shape();
     require(q[0] > 0 && q[1] > 0 && q[3] > 0 && query_rotary.shape().size() == 4 &&
             query_rotary.shape()[0] == q[0] && query_rotary.shape()[1] == q[1] && query_rotary.shape()[2] == q[2],
             "query geometry differs");
@@ -77,26 +77,26 @@ Tensor latent_attention(const Tensor& query_plain, const Tensor& query_rotary, c
     }
     graph::RecordingGuard inference;
     if (!q[2]) return Tensor::zeros({q[0], q[1], 0, value_weight.shape()[1]}, backend, false, dtype);
-    auto latent = unsqueeze(cache.latent, 1), rotary = unsqueeze(cache.rotary, 1);
-    const auto padding_mask = padding.defined() ? padding : Tensor::zeros({q[0], 1, 1, keys}, backend, false, dtype);
+    Tensor latent = unsqueeze(cache.latent, 1), rotary = unsqueeze(cache.rotary, 1);
+    const Tensor padding_mask = padding.defined() ? padding : Tensor::zeros({q[0], 1, 1, keys}, backend, false, dtype);
     std::vector<Tensor> tiles;
     for (int start = 0; start < q[2]; start += query_tile) {
         const int end = std::min(start + query_tile, q[2]);
         const bool full_query = start == 0 && end == q[2];
-        auto compressed_query = matmul(full_query ? query_plain : slice(query_plain, 2, start, end), key_weight);
-        auto scores = add(matmul_transposed(compressed_query, latent),
+        Tensor compressed_query = matmul(full_query ? query_plain : slice(query_plain, 2, start, end), key_weight);
+        Tensor scores = add(matmul_transposed(compressed_query, latent),
                           matmul_transposed(full_query ? query_rotary : slice(query_rotary, 2, start, end), rotary));
         scores = mul(scores, scale);
-        auto mask = padding_mask;
+        Tensor mask = padding_mask;
         if (causal_offset + start < keys - 1) {
-            auto future = cast(triu(Tensor::ones({1, 1, end - start, keys}, backend), causal_offset + start + 1), DType::Bool);
+            Tensor future = cast(triu(Tensor::ones({1, 1, end - start, keys}, backend), causal_offset + start + 1), DType::Bool);
             const float minimum = dtype == DType::Float16 ? -65504.f :
                 dtype == DType::BFloat16 ? -3.3895313892515355e38f : std::numeric_limits<float>::lowest();
-            auto excluded = add(Tensor::zeros({1, 1, end - start, keys}, backend, false, dtype), minimum);
+            Tensor excluded = add(Tensor::zeros({1, 1, end - start, keys}, backend, false, dtype), minimum);
             mask = where(future, excluded, mask);
         }
-        auto probabilities = attention_softmax(scores, mask);
-        auto values = matmul(probabilities, latent);
+        Tensor probabilities = attention_softmax(scores, mask);
+        Tensor values = matmul(probabilities, latent);
         tiles.push_back(matmul_transposed(values, value_weight));
     }
     return tiles.size() == 1 ? tiles.front() : concat(tiles, 2);

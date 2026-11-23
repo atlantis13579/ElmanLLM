@@ -1,4 +1,5 @@
 #include "Inference/Diffusion/Flux2Session.h"
+#include "Core/LocalFunction.h"
 
 #include <algorithm>
 #include <stdexcept>
@@ -39,13 +40,13 @@ StableDiffusionOutput Flux2Session::generate(const DiffusionInput& input, const 
   DeviceScope owner(backend_, device_);
   graph::RecordingGuard no_grad;
   using Stage = DiffusionProgress::Stage;
-  auto update = [&](Stage stage, int step) {
+  LocalFunction update{[&](Stage stage, int step) {
     if (progress) progress({stage, step, input.steps});
-  };
+  }};
 
   update(Stage::Preparing, 0);
   const Shape shape{1, 128, input.height / spatial_factor, input.width / spatial_factor};
-  auto noise = input.initial_latent;
+  Tensor noise = input.initial_latent;
   if (!noise.defined()) {
     noise = Tensor::normal(shape, 0, 1, input.seed, backend_, false, dtype_);
   } else if (noise.shape() != shape || noise.backend() != backend_ || noise.device() != device_ || noise.dtype() != dtype_) {
@@ -54,13 +55,13 @@ StableDiffusionOutput Flux2Session::generate(const DiffusionInput& input, const 
   if (trace) trace("initial_latent", noise);
 
   update(Stage::EncodingPrompt, 0);
-  auto tokens = tokenizer_.encode("<|im_start|>user\n" + input.prompt +
+  std::vector<int32_t> tokens = tokenizer_.encode("<|im_start|>user\n" + input.prompt +
                                   "<|im_end|>\n<|im_start|>assistant\n<think>\n\n</think>\n\n", false);
-  const auto valid = std::min(tokens.size(), size_t(text_length));
+  const uint64_t valid = std::min(tokens.size(), size_t(text_length));
   tokens.resize(text_length, tokenizer_.pad_id());
   std::vector<int32_t> mask(text_length, 0);
   std::fill_n(mask.begin(), valid, 1);
-  auto prompt = text_encoder_.encode(Tensor::from_int_data({1, text_length}, tokens, backend_),
+  Tensor prompt = text_encoder_.encode(Tensor::from_int_data({1, text_length}, tokens, backend_),
                                      Tensor::from_int_data({1, text_length}, mask, backend_));
   if (trace) trace("text_embeddings", prompt);
 
@@ -70,14 +71,14 @@ StableDiffusionOutput Flux2Session::generate(const DiffusionInput& input, const 
   if (after_step) {
     options.on_step = [&](int step, const Tensor& latent) { after_step(step, input.steps, latent); };
   }
-  auto latent = flux2::sample(transformer_, noise, prompt, {}, {}, options);
+  Tensor latent = flux2::sample(transformer_, noise, prompt, {}, {}, options);
   update(Stage::Decoding, input.steps);
-  auto image = decode(latent);
+  Tensor image = decode(latent);
   return {std::move(latent), std::move(image)};
 }
 
 Tensor Flux2Session::decode(const Tensor& latent) const {
-  auto image = add(mul(vae_decoder_.run({{"latent", latent}}).at("image"), 0.5), 0.5);
+  Tensor image = add(mul(vae_decoder_.run({{"latent", latent}}).at("image"), 0.5), 0.5);
   return maximum(Tensor::zeros({}, backend_, false, dtype_), minimum(image, Tensor::ones({}, backend_, false, dtype_)));
 }
 

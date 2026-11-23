@@ -27,17 +27,17 @@ Tensor payload(Backend backend, DType dtype, int batch, int begin, const std::ve
 void equal(PagedKVCache& cache, const std::vector<int>& tags) {
     check(cache.length()==int(tags.size()),"Shared cache length differs");
     for (int layer=0; layer<cache.shape().layers; ++layer) {
-        auto actual=cache.read(layer);
+        PagedKVLayer actual=cache.read(layer);
         check(actual.key.raw_data()==payload(cache.backend(),cache.dtype(),cache.batch(),0,tags,layer,true).raw_data(),"Shared key prefix or suffix differs");
         check(actual.value.raw_data()==payload(cache.backend(),cache.dtype(),cache.batch(),0,tags,layer,false).raw_data(),"Shared value prefix or suffix differs");
     }
 }
 void append(PagedKVCache& cache, std::vector<int>& history, int count, int tag, int written=-1) {
-    auto expected=history;expected.insert(expected.end(),size_t(count),tag);
-    auto transaction=cache.append(count);
+    std::vector<int> expected=history;expected.insert(expected.end(),size_t(count),tag);
+    std::unique_ptr<PagedKVAppend> transaction=cache.append(count);
     int layers=written<0 ? cache.shape().layers : written;
     for (int layer=0; layer<layers; ++layer) {
-        auto actual=transaction->write(layer,payload(cache.backend(),cache.dtype(),cache.batch(),int(history.size()),std::vector<int>(size_t(count),tag),layer,true),
+        PagedKVLayer actual=transaction->write(layer,payload(cache.backend(),cache.dtype(),cache.batch(),int(history.size()),std::vector<int>(size_t(count),tag),layer,true),
             payload(cache.backend(),cache.dtype(),cache.batch(),int(history.size()),std::vector<int>(size_t(count),tag),layer,false));
         check(actual.key.raw_data()==payload(cache.backend(),cache.dtype(),cache.batch(),0,expected,layer,true).raw_data(),"Transactional shared key differs");
         check(actual.value.raw_data()==payload(cache.backend(),cache.dtype(),cache.batch(),0,expected,layer,false).raw_data(),"Transactional shared value differs");
@@ -49,22 +49,22 @@ void same_stats(const CacheBlockStats& a,const CacheBlockStats& b) {
     check(a.live==b.live && a.references==b.references && a.shared==b.shared,"Shared rollback changed ownership counts");
 }
 void branching(Backend backend,DType dtype,bool pooled,int page,int batch) {
-    auto baseline=memory_stats(backend).live_bytes(),host_baseline=memory_stats(Backend::CPU).live_bytes();
+    size_t baseline=memory_stats(backend).live_bytes(),host_baseline=memory_stats(Backend::CPU).live_bytes();
     {
         AllocationPool allocations(backend,0,pooled);
         ExecutionStream first(backend),second(backend);
         PagedKVPool pool({3,2,3,page,64},backend,dtype);
         PagedKVCache original(pool,batch,page*6);
         std::vector<int> source;{StreamScope scope(first);append(original,source,page*2+1,7);}
-        auto child=original.fork(page+1,page*6), sibling=original.fork(page+1,page*6);
-        auto nested=child->fork(1,page*6), whole=original.fork(original.length(),page*6);
+        std::unique_ptr<PagedKVCache> child=original.fork(page+1,page*6), sibling=original.fork(page+1,page*6);
+        std::unique_ptr<PagedKVCache> nested=child->fork(1,page*6), whole=original.fork(original.length(),page*6);
         std::vector<int> child_tags(source.begin(),source.begin()+page+1), sibling_tags=child_tags,nested_tags(1,7),whole_tags=source;
         check(pool.stats().live==size_t(3*batch),"Fork allocated physical payload pages");
         check(pool.stats().shared==size_t(3*batch),"Fork did not retain all shared pages");
         rejects<std::invalid_argument>([&] {original.fork(-1,32);},"Negative prefix accepted");
         rejects<std::invalid_argument>([&] {original.fork(original.length()+1,32);},"Uncommitted prefix accepted");
         rejects<std::invalid_argument>([&] {original.fork(2,1);},"Fork context smaller than prefix accepted");
-        auto before=pool.stats();
+        CacheBlockStats before=pool.stats();
         {
             allocations.clear();
             MemoryLimit limit(Backend::CPU,memory_stats(Backend::CPU).live_bytes());
@@ -88,11 +88,11 @@ void branching(Backend backend,DType dtype,bool pooled,int page,int batch) {
         equal(original,source);equal(*whole,whole_tags);equal(*child,child_tags);
         {StreamScope scope(second);append(*nested,nested_tags,2,80);}
         equal(*nested,nested_tags);equal(*sibling,sibling_tags);equal(original,source);
-        auto aligned=original.fork(page*2,page*6);std::vector<int> aligned_tags(source.begin(),source.begin()+page*2);
-        auto live=pool.stats().live;append(*aligned,aligned_tags,1,22);
+        std::unique_ptr<PagedKVCache> aligned=original.fork(page*2,page*6);std::vector<int> aligned_tags(source.begin(),source.begin()+page*2);
+        size_t live=pool.stats().live;append(*aligned,aligned_tags,1,22);
         check(pool.stats().live==live+size_t(batch),"Aligned fork copied a complete read-only page");
         equal(*aligned,aligned_tags);equal(original,source);
-        auto empty=original.fork(0,page*6);std::vector<int> empty_tags;append(*empty,empty_tags,1,6);equal(*empty,empty_tags);
+        std::unique_ptr<PagedKVCache> empty=original.fork(0,page*6);std::vector<int> empty_tags;append(*empty,empty_tags,1,6);equal(*empty,empty_tags);
         original.reset();sibling.reset();whole.reset();aligned.reset();empty.reset();
         equal(*child,child_tags);equal(*nested,nested_tags);
         child.reset();nested.reset();
@@ -105,14 +105,14 @@ void batches(Backend backend,DType dtype,int page) {
     ExecutionStream stream(backend);StreamScope execution(stream);AllocationPool allocations(backend);
     PagedKVPool pool({3,2,3,page,32},backend,dtype);PagedKVCache source(pool,1,page*5),empty(pool,1,page*5);
     std::vector<int> source_tags;append(source,source_tags,page*2+1,11);
-    auto a=source.fork(page+1,page*5),b=source.fork(page*2-1,page*5);
+    std::unique_ptr<PagedKVCache> a=source.fork(page+1,page*5),b=source.fork(page*2-1,page*5);
     std::vector<std::vector<int>> histories{{source_tags.begin(),source_tags.begin()+page+1},{source_tags.begin(),source_tags.begin()+page*2-1},{}};
     std::vector<PagedKVCache*> requests{a.get(),b.get(),&empty};std::vector<int> tags{71,91,133};
-    auto before=pool.stats();
+    CacheBlockStats before=pool.stats();
     for (int written=0; written<=3; ++written) {
         const int previous=page*2-1,total=previous+2;PagedKVBatch view(requests);
         {
-            auto transaction=view.append(2);
+            std::unique_ptr<PagedKVAppend> transaction=view.append(2);
             for (int layer=0; layer<written; ++layer) {
                 std::vector<float> keys,values,expected_keys,expected_values;
                 for (size_t row=0; row<requests.size(); ++row) for (int head=0; head<2; ++head) {
@@ -126,7 +126,7 @@ void batches(Backend backend,DType dtype,int page) {
                         expected_values.push_back(position<0 ? 0 : value(0,head,position,channel,layer,tag+1));
                     }
                 }
-                auto actual=transaction->write(layer,Tensor::from_data({3,2,2,3},keys,backend,false,dtype),Tensor::from_data({3,2,2,3},values,backend,false,dtype));
+                PagedKVLayer actual=transaction->write(layer,Tensor::from_data({3,2,2,3},keys,backend,false,dtype),Tensor::from_data({3,2,2,3},values,backend,false,dtype));
                 check(actual.key.raw_data()==Tensor::from_data({3,2,total,3},expected_keys,backend,false,dtype).raw_data(),"Shared batch keys or padding differ");
                 check(actual.value.raw_data()==Tensor::from_data({3,2,total,3},expected_values,backend,false,dtype).raw_data(),"Shared batch values or padding differ");
             }
@@ -140,7 +140,7 @@ void batches(Backend backend,DType dtype,int page) {
 }
 void exhaustion(Backend backend) {
     PagedKVPool pool({3,2,3,4,1},backend,DType::BFloat16);PagedKVCache source(pool,1,4);
-    std::vector<int> tags;append(source,tags,2,10);auto a=source.fork(2,4),b=source.fork(2,4);auto before=pool.stats();
+    std::vector<int> tags;append(source,tags,2,10);std::unique_ptr<PagedKVCache> a=source.fork(2,4),b=source.fork(2,4);CacheBlockStats before=pool.stats();
     rejects<CacheCapacityExceeded>([&]{a->append(1);},"Shared tail overwrite succeeded without a private page");
     same_stats(pool.stats(),before);equal(source,tags);equal(*a,tags);equal(*b,tags);
     a.reset();b.reset();append(source,tags,1,20);equal(source,tags);
@@ -153,11 +153,11 @@ void concurrent(Backend backend) {
         try {
             ExecutionStream stream(backend);StreamScope execution(stream);
             for(int repeat=0;repeat<24;++repeat) {
-                auto child=source.fork(3,12);std::vector<int> tags(3,13);tags.insert(tags.end(),2,40+worker*20+repeat);
+                std::unique_ptr<PagedKVCache> child=source.fork(3,12);std::vector<int> tags(3,13);tags.insert(tags.end(),2,40+worker*20+repeat);
                 {
-                    auto transaction=child->append(2);
+                    std::unique_ptr<PagedKVAppend> transaction=child->append(2);
                     for(int layer=0;layer<3;++layer) {
-                        auto actual=transaction->write(layer,payload(backend,DType::BFloat16,1,3,{tags[3],tags[4]},layer,true),
+                        PagedKVLayer actual=transaction->write(layer,payload(backend,DType::BFloat16,1,3,{tags[3],tags[4]},layer,true),
                             payload(backend,DType::BFloat16,1,3,{tags[3],tags[4]},layer,false));
                         if(actual.key.raw_data()!=payload(backend,DType::BFloat16,1,0,tags,layer,true).raw_data())++failures;
                         if(actual.value.raw_data()!=payload(backend,DType::BFloat16,1,0,tags,layer,false).raw_data())++failures;
@@ -167,7 +167,7 @@ void concurrent(Backend backend) {
             }
         } catch(...) {++failures;}
     });
-    for(auto& thread:threads)thread.join();
+    for(std::thread& thread:threads)thread.join();
     check(failures==0 && pool.stats().live==2 && pool.stats().references==2 && pool.stats().shared==0,"Concurrent forks leaked or mixed payloads");
     equal(source,history);
 }
@@ -175,8 +175,8 @@ void concurrent(Backend backend) {
 int main(int argc,char** argv) {
     try {
         if(argc!=2)throw std::invalid_argument("Usage: elman_shared_cache cpu|cuda");
-        auto backend=parse_backend(argv[1]);if(!backend_available(backend))return 77;
-        for(auto dtype:{DType::Float32,DType::Float16,DType::BFloat16}) {
+        Backend backend=parse_backend(argv[1]);if(!backend_available(backend))return 77;
+        for(elman::DType dtype:{DType::Float32,DType::Float16,DType::BFloat16}) {
             for(bool pooled:{false,true})for(int page:{3,16})for(int batch:{1,2})branching(backend,dtype,pooled,page,batch);
             for(int page:{3,16})batches(backend,dtype,page);
         }

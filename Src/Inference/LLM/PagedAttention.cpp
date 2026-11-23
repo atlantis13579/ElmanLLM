@@ -85,8 +85,8 @@ void validate_paged_attention(const BufferPtr& output, const std::vector<BufferP
     require(bool(output) && inputs.size() == 4, "four operands are required");
     require(is_compute_float(output->dtype) && p.output_dtype() == int(output->dtype), "unsupported output dtype");
     for (int i = 0; i < 4; ++i) {
-        const auto id = KernelInput(i);
-        const auto type = i == 3 ? DType::Int32 : output->dtype;
+        const KernelInput id = KernelInput(i);
+        const DType type = i == 3 ? DType::Int32 : output->dtype;
         require(inputs[i] && inputs[i]->backend == output->backend && inputs[i]->dtype == type && p.input_dtype(id) == int(type),
                 "operand backend or dtype differs");
         const int rank = i == 0 ? 4 : 2;
@@ -100,7 +100,7 @@ void validate_paged_attention(const BufferPtr& output, const std::vector<BufferP
         }
         require(count == inputs[i]->count, "operand storage size differs");
         if (inputs[i]->bytes && output->bytes) {
-            const auto a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
+            const uintptr_t a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
             require(a <= b ? b - a >= output->bytes : a - b >= inputs[i]->bytes, "output overlaps an operand");
         }
     }

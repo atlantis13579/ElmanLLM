@@ -26,7 +26,7 @@ __global__ void packed_integer_cast_kernel(uint32_t* output, const uint32_t* inp
 }
 void launch_packed_integer_cast_cuda(uint32_t* output, const uint32_t* input, const KernelParams& p) {
     if (!p.output_count()) return;
-    const auto source = DType(p.input_dtype(KernelInput::A)), target = DType(p.output_dtype());
+    const DType source = DType(p.input_dtype(KernelInput::A)), target = DType(p.output_dtype());
     const unsigned bits = packed_integer_bits(target);
     const uint64_t work = bits ? (uint64_t(p.output_count()) * bits + 7) / 8 : uint64_t(p.output_count());
     packed_integer_cast_kernel<<<unsigned((work + 255) / 256), 256, 0, current_cuda_stream()>>>(output, input, p.output_count(), source, target);

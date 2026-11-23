@@ -170,6 +170,8 @@ Tensor batch_norm(const Tensor& x, const Tensor& weight, const Tensor& bias, dou
 Tensor group_norm(const Tensor& x, int groups, const Tensor& weight, const Tensor& bias, double eps = 1e-5);
 Tensor mse_loss(const Tensor& prediction, const Tensor& target);
 Tensor cross_entropy(const Tensor& logits, const Tensor& targets);
+// Dense probability targets, final axis classes, mean over examples.
+Tensor soft_target_cross_entropy(const Tensor& logits, const Tensor& probabilities);
 Tensor conv2d(const Tensor& x, const Tensor& weight, const Tensor& bias, int stride = 1, int padding = 0);
 Tensor max_pool2d(const Tensor& x, int kernel, int stride = 0, int padding = 0);
 Tensor avg_pool2d(const Tensor& x, int kernel, int stride = 0, int padding = 0);

@@ -39,7 +39,7 @@ void launch_low_precision_normalization_cpu(LowPrecisionNormalization op, uint32
         std::memcpy(output, result.data(), result.size() * sizeof(float));
         return;
     }
-    auto* bytes = reinterpret_cast<uint8_t*>(output);
+    uint8_t* bytes = reinterpret_cast<uint8_t*>(output);
     if (layout.dtype == DType::Float4E2M1FN) {
         for (int i = 0; i < p.output_count(); i += 2) bytes[i / 2] = uint8_t(low_precision_encode(result[i], layout.dtype) |
             (i + 1 < p.output_count() ? low_precision_encode(result[i + 1], layout.dtype) << 4 : 0));

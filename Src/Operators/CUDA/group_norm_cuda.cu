@@ -119,7 +119,7 @@ void launch_group_norm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
   const int channels = p.input_shape(KernelInput::A, tensor_axis::image::kChannels);
   const int spatial = p.input_stride(KernelInput::A, tensor_axis::image::kChannels);
   const int length = (channels / p.attribute(operator_attr::group_norm::kGroups)) * spatial;
-  const auto stream = current_cuda_stream();
+  const cudaStream_t stream = current_cuda_stream();
   BufferPtr workspace;
   float2* stats = nullptr;
   if (length > 32) {
@@ -128,7 +128,7 @@ void launch_group_norm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
     const size_t partial_bytes = tiles > 1 ? size_t(groups) * tiles * sizeof(Moments) : 0;
     workspace = backend_workspace(Backend::CUDA, size_t(groups) * sizeof(float2) + partial_bytes);
     stats = static_cast<float2*>(workspace->raw_pointer());
-    auto* partial = reinterpret_cast<Moments*>(stats + groups);
+    Moments* partial = reinterpret_cast<Moments*>(stats + groups);
     collect_moments<<<groups * tiles, threads, 0, stream>>>(a, partial, stats, length, tiles, p);
     if (tiles > 1) merge_group_moments<<<groups, threads, 0, stream>>>(partial, stats, tiles, p);
   }

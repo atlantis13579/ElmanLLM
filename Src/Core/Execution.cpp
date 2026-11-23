@@ -12,7 +12,7 @@ namespace detail {
 std::shared_ptr<StreamState> create_cuda_stream(const HostStagingOptions& options);
 #endif
 StreamBinding& stream_binding(Backend backend) {
-    const auto index = static_cast<size_t>(backend);
+    const size_t index = static_cast<size_t>(backend);
     thread_local std::array<StreamBinding, 3> bindings;
     if (index >= bindings.size()) throw std::invalid_argument("Invalid execution backend");
     return bindings[index];

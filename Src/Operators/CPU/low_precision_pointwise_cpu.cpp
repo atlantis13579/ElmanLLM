@@ -4,7 +4,7 @@
 namespace elman {
 void launch_low_precision_pointwise_cpu(LowPrecisionPointwise op, uint32_t* output, const uint32_t* a,
                                         const uint32_t* b, const uint32_t* c, const KernelParams& p) {
-    auto* bytes = reinterpret_cast<uint8_t*>(output);
+    uint8_t* bytes = reinterpret_cast<uint8_t*>(output);
     if (p.output_dtype() == int(DType::Float4E2M1FN)) {
         for (int i = 0; i < p.output_count(); i += 2) {
             const uint8_t low = low_precision_pointwise_result(op, i, a, b, c, p);

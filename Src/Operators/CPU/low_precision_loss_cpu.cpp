@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "Core/LocalFunction.h"
 #include "Operators/low_precision_loss_math.h"
 #include "Operators/low_precision_softmax.h"
 #include "Core/AllocationPool.h"
@@ -8,15 +9,15 @@
 namespace elman {
 void launch_low_precision_loss_cpu(LowPrecisionLoss op, uint32_t* output, const uint32_t* a,
                                    const uint32_t* b, const uint32_t* c, const KernelParams& p) {
-    const auto dtype = DType(p.input_dtype(KernelInput::A));
+    const DType dtype = DType(p.input_dtype(KernelInput::A));
     const int count = low_loss_count(p);
-    auto store = [&](int i, float value) {
+    LocalFunction store{[&](int i, float value) {
         if (p.output_dtype() == int(DType::Float32)) { reinterpret_cast<float*>(output)[i] = value; return; }
-        auto* bytes = reinterpret_cast<uint8_t*>(output);
+        uint8_t* bytes = reinterpret_cast<uint8_t*>(output);
         const uint8_t code = low_precision_encode(value, dtype);
         if (dtype != DType::Float4E2M1FN) bytes[i] = code;
         else bytes[i / 2] = uint8_t((bytes[i / 2] & ~(15 << ((i & 1) * 4))) | (code << ((i & 1) * 4)));
-    };
+    }};
     if (dtype == DType::Float4E2M1FN && p.output_dtype() != int(DType::Float32)) std::memset(output, 0, (size_t(p.output_count()) + 1) / 2);
     if (op == LowPrecisionLoss::MeanSquaredError) {
         const float total = contiguous_float_sum(count, [&](int i) {
@@ -31,10 +32,10 @@ void launch_low_precision_loss_cpu(LowPrecisionLoss op, uint32_t* output, const 
     }
     const int rows = p.input_shape(KernelInput::A, 0), columns = p.input_shape(KernelInput::A, 1);
     if (op == LowPrecisionLoss::CrossEntropy && !rows) { store(0, std::numeric_limits<float>::quiet_NaN()); return; }
-    auto workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(count), sizeof(float)));
-    auto* values = static_cast<float*>(workspace->raw_pointer());
+    BufferPtr workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(count), sizeof(float)));
+    float* values = static_cast<float*>(workspace->raw_pointer());
     launch_low_precision_softmax_cpu(LowPrecisionSoftmax::LogSoftmax, reinterpret_cast<uint32_t*>(values), a, nullptr, low_loss_softmax_params(p));
-    const auto* ids = reinterpret_cast<const int32_t*>(b);
+    const int32_t* ids = reinterpret_cast<const int32_t*>(b);
     if (op == LowPrecisionLoss::CrossEntropy) {
         int logarithm = 0;
         for (unsigned n = rows > 0 ? unsigned(rows - 1) : 0; n; n >>= 1) ++logarithm;

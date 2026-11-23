@@ -37,13 +37,13 @@ struct UNetConfig {
         config.number_or("mid_block_scale_factor", 1) != 1 || config.number_or("resnet_out_scale_factor", 1) != 1 ||
         config.string_or("mid_block_type", "UNetMidBlock2DCrossAttn") != "UNetMidBlock2DCrossAttn")
       throw std::invalid_argument("Unsupported Stable Diffusion U-Net configuration");
-    for (const auto& value : config.at("down_block_types").array()) {
-      const auto type = value.string();
+    for (const Json& value : config.at("down_block_types").array()) {
+      const std::string type = value.string();
       if (type != "CrossAttnDownBlock2D" && type != "DownBlock2D") throw std::invalid_argument("Unknown U-Net down block " + type);
       down_attention.push_back(type == "CrossAttnDownBlock2D");
     }
-    for (const auto& value : config.at("up_block_types").array()) {
-      const auto type = value.string();
+    for (const Json& value : config.at("up_block_types").array()) {
+      const std::string type = value.string();
       if (type != "CrossAttnUpBlock2D" && type != "UpBlock2D") throw std::invalid_argument("Unknown U-Net up block " + type);
       up_attention.push_back(type == "CrossAttnUpBlock2D");
     }
@@ -63,7 +63,7 @@ struct UNetBlock {
                                          config.context, config.heads, config.groups);
   }
   Tensor operator()(const Tensor& input, const Tensor& context, const Tensor& time) const {
-    auto value = resnet(input, time);
+    Tensor value = resnet(input, time);
     return attention ? (*attention)(value, context) : value;
   }
 };
@@ -93,7 +93,7 @@ struct UNet {
     for (size_t level = 0; level < config.channels.size(); ++level) {
       const std::string prefix = "down_blocks." + std::to_string(level);
       const int width = config.channels[level];
-      auto& stage = down.emplace_back();
+      UNetStage& stage = down.emplace_back();
       for (int layer = 0; layer < config.repeats; ++layer) {
         stage.blocks.emplace_back(weights, prefix, layer, current, width, config.down_attention[level], config);
         current = width;
@@ -107,7 +107,7 @@ struct UNet {
     for (size_t level = 0; level < config.channels.size(); ++level) {
       const std::string prefix = "up_blocks." + std::to_string(level);
       const int width = config.channels[config.channels.size() - 1 - level];
-      auto& stage = up.emplace_back();
+      UNetStage& stage = up.emplace_back();
       for (int layer = 0; layer <= config.repeats; ++layer) {
         stage.blocks.emplace_back(weights, prefix, layer, current + skip.back(), width, config.up_attention[level], config);
         skip.pop_back();
@@ -117,20 +117,20 @@ struct UNet {
     }
   }
   Tensor time_embedding(int step, Backend backend, DType dtype) const {
-    auto features = sinusoidal_embedding(step, config.channels.front(), config.frequency_shift, config.flip, backend, dtype);
+    Tensor features = sinusoidal_embedding(step, config.channels.front(), config.frequency_shift, config.flip, backend, dtype);
     return time_second(silu(time_first(features)));
   }
   Tensor forward(const Tensor& sample, const Tensor& context, int timestep) const {
-    const auto& shape = sample.shape();
+    const Shape& shape = sample.shape();
     const int factor = 1 << (config.channels.size() - 1);
     if (shape[0] <= 0 || shape[0] != context.shape()[0] || context.shape()[1] <= 0 ||
         shape[2] <= 0 || shape[3] <= 0 || shape[2] % factor || shape[3] % factor)
       throw std::invalid_argument("U-Net latent sizes must match the batch and downsampling factor");
-    auto time = time_embedding(timestep, sample.backend(), sample.dtype());
-    auto x = input(sample);
+    Tensor time = time_embedding(timestep, sample.backend(), sample.dtype());
+    Tensor x = input(sample);
     std::vector<Tensor> skip{x};
-    for (const auto& stage : down) {
-      for (const auto& block : stage.blocks) {
+    for (const UNetStage& stage : down) {
+      for (const UNetBlock& block : stage.blocks) {
         x = block(x, context, time);
         skip.push_back(x);
       }
@@ -140,9 +140,9 @@ struct UNet {
       }
     }
     x = mid_second(mid_first(x, context, time), context, time);
-    for (const auto& stage : up) {
-      for (const auto& block : stage.blocks) {
-        auto joined = concat({x, skip.back()}, 1);
+    for (const UNetStage& stage : up) {
+      for (const UNetBlock& block : stage.blocks) {
+        Tensor joined = concat({x, skip.back()}, 1);
         skip.pop_back();
         x = block(joined, context, time);
       }
@@ -157,7 +157,7 @@ struct UNet {
 InferenceSession load_diffusion_unet(const std::filesystem::path& directory, Backend backend, int device, DType dtype) {
   DeviceScope owner(backend, device);
   const UNetConfig config(Json::read((directory / "config.json").string()));
-  auto model = std::make_shared<UNet>(config, ComponentWeights(directory, "diffusion_pytorch_model", backend, dtype));
+  std::shared_ptr<UNet> model = std::make_shared<UNet>(config, ComponentWeights(directory, "diffusion_pytorch_model", backend, dtype));
   return InferenceSession(backend, device, {{"sample", {dtype, {-1, config.in, -1, -1}}},
       {"encoder_hidden_states", {dtype, {-1, -1, config.context}}}, {"timestep", {DType::Int32, {}}}},
       {{"sample", {dtype, {-1, config.out, -1, -1}}}}, [model = std::move(model)](const NamedTensors& inputs) {

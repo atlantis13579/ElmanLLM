@@ -36,7 +36,7 @@ void Tensor::zero_grad() {
 
 Tensor Tensor::detach() const {
   require(defined(), "Undefined tensor");
-  auto detached = std::make_shared<TensorNode>();
+  std::shared_ptr<TensorNode> detached = std::make_shared<TensorNode>();
   detached->shape = shape();
   detached->value = node_->value;
   return Tensor(detached);
@@ -52,7 +52,7 @@ void accumulate(const Tensor& tensor, const Tensor& gradient) {
   require(tensor.backend() == gradient.backend() && tensor.device() == gradient.device(), "Gradient device mismatch");
   DeviceScope owner(tensor.backend(), tensor.device());
   const Tensor converted = cast(gradient, tensor.dtype());
-  auto& current = tensor.node()->gradient;
+  std::shared_ptr<TensorNode>& current = tensor.node()->gradient;
   current = current ? add(Tensor(current), converted).node()
                     : converted.detach().node();
 }
@@ -73,8 +73,8 @@ void Tensor::backward(const Tensor& seed) {
           "Backward seed mismatch");
   require(is_complex(seed.dtype()) == is_complex(dtype()), "Backward seed must match the real or complex output category");
   graph::RecordingGuard no_grad;
-  auto topology = graph::topological_order(*this);
-  for (auto& node : topology) {
+  std::vector<std::shared_ptr<TensorNode>> topology = graph::topological_order(*this);
+  for (std::shared_ptr<TensorNode>& node : topology) {
     if (!node->parents.empty()) {
       node->gradient.reset();
     }

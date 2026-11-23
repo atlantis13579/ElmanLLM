@@ -4,14 +4,14 @@
 
 namespace elman::metal {
 Tensor lower_slice(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto a = inputs[0];
-  auto source = shape(p, 0);
-  auto result = shape(p);
+  Tensor a = inputs[0];
+  Shape source = shape(p, 0);
+  Shape result = shape(p);
   const int stride = p.attribute(2);
   const int rank = p.output_rank(), axis = p.attribute(0), start = p.attribute(1);
-  auto starts = [NSMutableArray<NSNumber*> arrayWithCapacity:rank];
-  auto ends = [NSMutableArray<NSNumber*> arrayWithCapacity:rank];
-  auto strides = [NSMutableArray<NSNumber*> arrayWithCapacity:rank];
+  NSMutableArray<NSNumber*>* starts = [NSMutableArray<NSNumber*> arrayWithCapacity:rank];
+  NSMutableArray<NSNumber*>* ends = [NSMutableArray<NSNumber*> arrayWithCapacity:rank];
+  NSMutableArray<NSNumber*>* strides = [NSMutableArray<NSNumber*> arrayWithCapacity:rank];
   for (int d = 0; d < rank; ++d) {
     [starts addObject:@(axis == d ? start : 0)];
     [strides addObject:@(axis == d ? stride : 1)];

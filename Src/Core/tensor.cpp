@@ -61,7 +61,7 @@ Tensor Tensor::from_raw(Shape shape, DType dtype, const std::vector<uint8_t>& by
   size_t count = shape_element_count(shape);
   require(bytes.size() == dtype_storage_bytes(dtype, count), "Raw data and tensor shape sizes differ");
   require(!grad || is_differentiable_float(dtype) || is_complex(dtype), "Gradients are not implemented for this storage dtype");
-  auto node = std::make_shared<TensorNode>();
+  std::shared_ptr<TensorNode> node = std::make_shared<TensorNode>();
   node->shape = std::move(shape);
   node->value = backend_allocate(backend, count, dtype);
   node->requires_grad = grad;
@@ -89,7 +89,7 @@ void Tensor::assign(const std::vector<float>& values) {
 }
 std::vector<double> Tensor::double_data() const {
   require(dtype() == DType::Float64, "Double data requires Float64 storage");
-  const auto bytes = raw_data();
+  const std::vector<uint8_t> bytes = raw_data();
   std::vector<double> result(numel());
   if (!bytes.empty()) std::memcpy(result.data(), bytes.data(), bytes.size());
   return result;
@@ -130,7 +130,7 @@ void Tensor::assign_int64(const std::vector<int64_t>& values) {
 }
 Tensor Tensor::from_int64_data(Shape shape, const std::vector<int64_t>& data, Backend backend) {
   require(shape_element_count(shape) == data.size(), "Int64 data and tensor shape sizes differ");
-  auto node = std::make_shared<TensorNode>();
+  std::shared_ptr<TensorNode> node = std::make_shared<TensorNode>();
   node->shape = std::move(shape);
   node->value = backend_allocate(backend, data.size(), DType::Int64);
   backend_upload_int64(node->value, data);
@@ -141,7 +141,7 @@ Tensor Tensor::from_int_data(Shape shape, const std::vector<int32_t>& data,
   require(dtype == DType::Int32 || dtype == DType::Bool || is_packed_integer(dtype),
           "Integer data requires int32, bool, or packed integer dtype");
   require(shape_element_count(shape) == data.size(), "Integer data and tensor shape sizes differ");
-  auto node = std::make_shared<TensorNode>();
+  std::shared_ptr<TensorNode> node = std::make_shared<TensorNode>();
   node->shape = std::move(shape);
   node->value = backend_allocate(backend, data.size(), dtype);
   backend_upload_int(node->value, data);
@@ -155,7 +155,7 @@ Tensor Tensor::from_data(Shape shape, const std::vector<float>& data, Backend b,
           "Only implemented floating tensors can require gradients");
   if (is_complex(dtype)) return from_complex_data(shape,
       std::vector<std::complex<double>>(data.begin(), data.end()), b, grad, dtype);
-  auto n = std::make_shared<TensorNode>();
+  std::shared_ptr<TensorNode> n = std::make_shared<TensorNode>();
   n->shape = std::move(shape);
   n->value = backend_allocate(b, data.size(), dtype);
   n->requires_grad = grad;
@@ -199,8 +199,8 @@ Tensor Tensor::to(Backend b, int ordinal) const {
 static void dispatch_bound(const std::string& op, const Tensor& output,
                           const std::vector<Tensor>& inputs, const std::vector<int>& attrs,
                           size_t count, int device) {
-  const auto& shape = output.shape();
-  auto backend = output.backend();
+  const Shape& shape = output.shape();
+  Backend backend = output.backend();
   KernelParams p;
   p.v[KernelParams::kOutputCountSlot] = int(count);
   p.v[KernelParams::kOutputRankSlot] = int(shape.size());
@@ -239,14 +239,14 @@ Tensor dispatch_tensor(const std::string& op, const Shape& shape,
                        const std::vector<Tensor>& inputs,
                        const std::vector<int>& attrs, DType dtype,
                        Backend backend) {
-  auto n = std::make_shared<TensorNode>();
+  std::shared_ptr<TensorNode> n = std::make_shared<TensorNode>();
   n->shape = shape;
   if (!inputs.empty()) {
     backend = inputs[0].backend();
   }
   const int device = inputs.empty() ? current_device(backend) : inputs[0].device();
   DeviceScope owner(backend, device);
-  const auto count = shape_element_count(shape);
+  const size_t count = shape_element_count(shape);
   n->value = detail::allocate_dispatch_output(op, backend, count, dtype, inputs);
   n->operation = op;
   dispatch_bound(op, Tensor(n), inputs, attrs, count, device);

@@ -5,8 +5,8 @@
 namespace elman {
 void validate_float64_pointwise(Float64Pointwise op, const BufferPtr& output,
                                 const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
-    auto floating = [](DType type) { return is_compute_float(type) || type == DType::Float64; };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    bool (*const floating)(DType) = [](DType type) { return is_compute_float(type) || type == DType::Float64; };
     const int arity = float64_pointwise_arity(op);
     const bool fusion = op == Float64Pointwise::SiluMul || op == Float64Pointwise::Rotary;
     require(inputs.size() >= size_t(arity) && inputs.size() <= 4, "Invalid Float64 pointwise operand count");
@@ -19,7 +19,7 @@ void validate_float64_pointwise(Float64Pointwise op, const BufferPtr& output,
     for (int i = 0; i < arity; ++i) {
         require(bool(inputs[i]), "Missing Float64 pointwise operand");
         require(!fusion || inputs[i]->dtype == DType::Float64, "Double fused operation requires matching Double operands");
-        const auto input = KernelInput(i);
+        const KernelInput input = KernelInput(i);
         const int rank = p.input_rank(input);
         require(rank >= 0 && rank <= 8, "Invalid Float64 pointwise input rank");
         size_t count = 1, prefix = 1;
@@ -66,8 +66,8 @@ void validate_float64_pointwise(Float64Pointwise op, const BufferPtr& output,
             "Invalid Float64 pointwise output dtype");
     for (int i = 0; i < arity; ++i) {
         if (!output->bytes || !inputs[i]->bytes) continue;
-        const auto first = reinterpret_cast<uintptr_t>(output->raw_pointer());
-        const auto second = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
+        const uintptr_t first = reinterpret_cast<uintptr_t>(output->raw_pointer());
+        const uintptr_t second = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
         const bool overlap = first <= second ? second - first < output->bytes : first - second < inputs[i]->bytes;
         if (!overlap) continue;
         require(op != Float64Pointwise::Rotary, "Double rotary output overlaps an operand");

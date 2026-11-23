@@ -5,7 +5,7 @@
 
 namespace elman {
 void validate_floating_dropout(const BufferPtr& output, const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     require(inputs.size() >= 1 && inputs.size() <= 4 && inputs[0] && inputs[0]->dtype == output->dtype && is_compute_float(output->dtype), "Floating dropout requires matching operands");
     for (int i = 1; i < 4; ++i) {
         require(size_t(i) >= inputs.size() || !inputs[i], "Unexpected floating dropout operand");
@@ -28,7 +28,7 @@ void validate_floating_dropout(const BufferPtr& output, const std::vector<Buffer
     }
     require(forward == output->count && forward == inputs[0]->count && p.output_count() == int(forward), "Floating dropout shape differs from storage");
     if (output->bytes && inputs[0]->bytes) {
-        const auto a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[0]->raw_pointer());
+        const uintptr_t a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[0]->raw_pointer());
         const bool overlap = a <= b ? b - a < output->bytes : a - b < inputs[0]->bytes;
         require(!overlap || a == b, "Partially overlapping floating dropout buffers");
     }

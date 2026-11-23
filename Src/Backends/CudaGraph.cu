@@ -1,4 +1,5 @@
 #include "Core/CommandGraph.h"
+#include "Core/LocalFunction.h"
 #include "Core/Device.h"
 #include "Core/Memory.h"
 #include "Backends/CudaExecution.h"
@@ -31,7 +32,7 @@ CudaCommandRecording::CudaCommandRecording(const std::string& op, const BufferPt
     const std::vector<BufferPtr>& inputs, const KernelParams& parameters) : previous_(current_command) {
     if (!recording) return;
     require(!current_command, "Nested CUDA dispatch cannot be recorded as an independent command");
-    auto command = std::make_unique<Command>();
+    std::unique_ptr<Command> command = std::make_unique<Command>();
     command->operation = op; command->output = output; command->inputs = inputs; command->parameters = parameters;
     current_command = command.get();
     recording->push_back(std::move(command));
@@ -41,7 +42,7 @@ bool lowering_cuda_graph() { return lowering; }
 BufferPtr replay_cuda_graph_workspace(size_t bytes) {
     if (!lowering) return {};
     require(current_command && workspace_index < current_command->workspace.size(), "CUDA graph scratch count changed");
-    auto buffer = current_command->workspace[workspace_index++];
+    BufferPtr buffer = current_command->workspace[workspace_index++];
     require(buffer->bytes == bytes, "CUDA graph scratch size changed");
     return buffer;
 }
@@ -68,7 +69,7 @@ struct CommandGraph::Impl {
 CommandGraph::CommandGraph() : impl_(std::make_unique<Impl>()) {}
 CommandGraph::~CommandGraph() = default;
 void CommandGraph::record(const std::function<void()>& forward) {
-    auto& s = *impl_;
+    CommandGraph::Impl& s = *impl_;
     require(!s.recorded && !s.failed && !recording && !lowering, "CUDA graph recording is not reusable or nestable");
     DeviceScope owner(Backend::CUDA, s.device);
     StreamScope scope(s.stream, true, false);
@@ -78,23 +79,23 @@ void CommandGraph::record(const std::function<void()>& forward) {
     recording = nullptr;
     require(!s.commands.empty(), "CUDA graph recording contains no native commands");
     std::set<const Buffer*> seen;
-    auto retain = [&](const BufferPtr& buffer) {
+    LocalFunction retain{[&](const BufferPtr& buffer) {
         if (!buffer) return;
         require(buffer->backend == Backend::CUDA && buffer->device_ordinal() == s.device, "CUDA graph has mixed devices");
         if (seen.insert(&buffer->allocation()).second) {
             s.buffers.push_back(buffer);
             s.bytes = checked_memory_add(s.bytes, buffer->allocation().bytes);
         }
-    };
-    for (const auto& command : s.commands) {
+    }};
+    for (const std::unique_ptr<Command>& command : s.commands) {
         retain(command->output);
-        for (const auto& input : command->inputs) retain(input);
-        for (const auto& scratch : command->workspace) retain(scratch);
+        for (const BufferPtr& input : command->inputs) retain(input);
+        for (const BufferPtr& scratch : command->workspace) retain(scratch);
     }
     s.recorded = true;
 }
 void CommandGraph::compile() {
-    auto& s = *impl_;
+    CommandGraph::Impl& s = *impl_;
     require(s.recorded && !s.failed && !s.executable, "CUDA graph is not ready for capture");
     DeviceScope owner(Backend::CUDA, s.device);
     StreamScope scope(s.stream, true, false);
@@ -105,7 +106,7 @@ void CommandGraph::compile() {
     LoweringScope lowering_scope;
     check_cuda_execution(cudaStreamBeginCapture(current_cuda_stream(), cudaStreamCaptureModeThreadLocal), "Begin whole-model capture");
     try {
-        for (const auto& command : s.commands) {
+        for (const std::unique_ptr<Command>& command : s.commands) {
             current_command = command.get(); workspace_index = 0;
             dispatch_cuda(command->operation, command->output, command->inputs, command->parameters);
             require(workspace_index == command->workspace.size(), "CUDA graph did not consume all recorded scratch");
@@ -123,7 +124,7 @@ void CommandGraph::compile() {
     } catch (...) { s.failed = true; throw; }
 }
 void CommandGraph::replay() {
-    auto& s = *impl_;
+    CommandGraph::Impl& s = *impl_;
     require(s.executable && !s.failed, "CUDA graph is not executable");
     DeviceScope owner(Backend::CUDA, s.device);
     StreamScope scope(s.stream, true, false);

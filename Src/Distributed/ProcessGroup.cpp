@@ -35,6 +35,7 @@ using Clock = std::chrono::steady_clock;
 #ifdef _WIN32
 using SocketHandle = SOCKET;
 using SocketLength = int;
+using SocketReadSize = int;
 constexpr SocketHandle invalid_socket = INVALID_SOCKET;
 int socket_error() { return WSAGetLastError(); }
 bool interrupted() { return socket_error() == WSAEINTR; }
@@ -43,6 +44,7 @@ void close_socket(SocketHandle handle) { closesocket(handle); }
 #else
 using SocketHandle = int;
 using SocketLength = socklen_t;
+using SocketReadSize = ssize_t;
 constexpr SocketHandle invalid_socket = -1;
 int socket_error() { return errno; }
 bool interrupted() { return socket_error() == EINTR; }
@@ -128,7 +130,7 @@ void nonblocking(const Socket& socket_handle, bool enabled) {
 
 bool ready(const Socket& socket_handle, bool writing, Clock::time_point deadline) {
   for (;;) {
-    const auto remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
+    const std::chrono::milliseconds::rep remaining = std::chrono::duration_cast<std::chrono::milliseconds>(deadline - Clock::now()).count();
     if (remaining <= 0) return false;
 #ifdef _WIN32
     fd_set sockets, errors;
@@ -148,13 +150,13 @@ bool ready(const Socket& socket_handle, bool writing, Clock::time_point deadline
 }
 
 void send_all(const Socket& socket_handle, const void* data, size_t bytes) {
-  auto* next = static_cast<const char*>(data);
+  const char* next = static_cast<const char*>(data);
   while (bytes > 0) {
     const int chunk = static_cast<int>(std::min<size_t>(bytes, 1 << 20));
 #ifdef MSG_NOSIGNAL
-    const auto sent = send(socket_handle.get(), next, chunk, MSG_NOSIGNAL);
+    const ssize_t sent = send(socket_handle.get(), next, chunk, MSG_NOSIGNAL);
 #else
-    const auto sent = send(socket_handle.get(), next, chunk, 0);
+    const int sent = send(socket_handle.get(), next, chunk, 0);
 #endif
     if (sent < 0 && interrupted()) continue;
     if (sent <= 0) fail("send");
@@ -164,10 +166,10 @@ void send_all(const Socket& socket_handle, const void* data, size_t bytes) {
 }
 
 void receive_all(const Socket& socket_handle, void* data, size_t bytes) {
-  auto* next = static_cast<char*>(data);
+  char* next = static_cast<char*>(data);
   while (bytes > 0) {
     const int chunk = static_cast<int>(std::min<size_t>(bytes, 1 << 20));
-    const auto received = recv(socket_handle.get(), next, chunk, 0);
+    const SocketReadSize received = recv(socket_handle.get(), next, chunk, 0);
     if (received < 0 && interrupted()) continue;
     if (received < 0) fail("receive");
     if (received == 0) throw std::runtime_error("A process group peer disconnected");
@@ -184,8 +186,8 @@ int environment_int(const char* key, int fallback) {
   if (!value) return fallback;
   std::string_view text(value);
   int result = 0;
-  const auto end = text.data() + text.size();
-  const auto parsed = std::from_chars(text.data(), end, result);
+  const char* const end = text.data() + text.size();
+  const std::from_chars_result parsed = std::from_chars(text.data(), end, result);
   if (parsed.ec != std::errc{} || parsed.ptr != end)
     throw std::invalid_argument(std::string("Invalid distributed option ") + key);
   return result;
@@ -207,7 +209,7 @@ class ProcessGroup::Impl {
     address.sin_port = htons(static_cast<uint16_t>(options.port));
     if (inet_pton(AF_INET, options.address.c_str(), &address.sin_addr) != 1)
       throw std::invalid_argument("Process group master address must be a numeric IPv4 address");
-    const auto deadline = Clock::now() + std::chrono::seconds(options.timeout_seconds);
+    const std::chrono::steady_clock::time_point deadline = Clock::now() + std::chrono::seconds(options.timeout_seconds);
     peers_.resize(options.size);
     if (options.rank == 0) {
       listen_for_peers(address, deadline);
@@ -259,7 +261,7 @@ class ProcessGroup::Impl {
 
  private:
   void listen_for_peers(const sockaddr_in& address, Clock::time_point deadline) {
-    auto listener = tcp_socket();
+    Socket listener = tcp_socket();
     const int enabled = 1;
 #ifdef _WIN32
     set_option(listener, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, &enabled, sizeof(enabled));
@@ -285,7 +287,7 @@ class ProcessGroup::Impl {
 
   void connect_to_master(const sockaddr_in& address, Clock::time_point deadline) {
     while (Clock::now() < deadline) {
-      auto peer = tcp_socket();
+      Socket peer = tcp_socket();
       nonblocking(peer, true);
       bool connected = connect(peer.get(), reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == 0;
       if (!connected && connect_pending() && ready(peer, true, deadline)) {

@@ -9,7 +9,7 @@ ProjectionWeight ProjectionWeight::to_device(int ordinal) const {
 }
 Tensor ProjectionWeight::materialize(const Tensor& workspace) const {
     if (!affine.defined()) return dense;
-    auto result = contiguous_view(workspace, affine.shape());
+    Tensor result = contiguous_view(workspace, affine.shape());
     affine.dequantize_into(result);
     return result;
 }
@@ -30,7 +30,7 @@ ProjectionWeight ProjectionWeight::concat_rows(const std::vector<ProjectionWeigh
     const bool quantized = weights[0].affine.defined();
     std::vector<Tensor> dense;
     std::vector<QuantizedTensor> affine;
-    for (const auto& weight : weights) {
+    for (const ProjectionWeight& weight : weights) {
         if (weight.affine.defined() != quantized)
             throw std::invalid_argument("Projection weight: packed partitions must share dense/affine storage");
         if (quantized) affine.push_back(weight.affine);

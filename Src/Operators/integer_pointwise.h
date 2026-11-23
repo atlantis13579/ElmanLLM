@@ -1,4 +1,6 @@
 #pragma once
+
+#include "Core/LocalFunction.h"
 #include "Core/Backend.h"
 #include "Operators/integer_reduction.h"
 
@@ -20,9 +22,9 @@ ELMAN_INTEGER_HD inline int integer_pointwise_arity(IntegerPointwise op) {
 }
 
 inline IntegerPointwise integer_pointwise_operation(const std::string& name, const KernelParams& p) {
-    const auto a = DType(p.input_dtype(KernelInput::A));
-    const auto b = DType(p.input_dtype(KernelInput::B));
-    const auto out = DType(p.output_dtype());
+    const DType a = DType(p.input_dtype(KernelInput::A));
+    const DType b = DType(p.input_dtype(KernelInput::B));
+    const DType out = DType(p.output_dtype());
     if (name == "cast" && (is_standard_integer(a) || is_standard_integer(out))) return IntegerPointwise::Cast;
     if (name == "where") {
         if (kernel_integer(int(b)) && (p.input_dtype(KernelInput::C) != int(b) || out != b))
@@ -34,15 +36,15 @@ inline IntegerPointwise integer_pointwise_operation(const std::string& name, con
         return name == "logical_and" ? IntegerPointwise::LogicalAnd : IntegerPointwise::LogicalOr;
     }
     if (!is_standard_integer(a)) return IntegerPointwise::None;
-    auto select = [&](IntegerPointwise kind) {
+    LocalFunction select{[&](IntegerPointwise kind) {
         // Preserve the established mixed Int32/Bool/float raw-kernel ABI.
         // Public integer operations promote operands before dispatch.
         if (integer_pointwise_arity(kind) == 2 && a != b && kernel_integer(int(a)) &&
             (kernel_integer(int(b)) || is_compute_float(b))) return IntegerPointwise::None;
         return kind;
-    };
+    }};
 #define ELMAN_INTEGER_OP(label, kind) if (operation_name == label) return select(IntegerPointwise::kind)
-    const auto& operation_name = name;
+    const std::string& operation_name = name;
     ELMAN_INTEGER_OP("add", Add);
     ELMAN_INTEGER_OP("sub", Sub);
     ELMAN_INTEGER_OP("mul", Mul);

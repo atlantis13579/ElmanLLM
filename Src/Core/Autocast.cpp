@@ -20,7 +20,7 @@ DType dtype() { return compute_dtype; }
 bool should_cast(std::initializer_list<const Tensor*> operands, DType target) {
   if (compute_dtype == DType::Float32) return false;
   bool different = false;
-  for (const auto* operand : operands) {
+  for (const Tensor* operand : operands) {
     if (!operand->defined()) continue;
     if (!is_compute_float(operand->dtype())) return false;
     different |= operand->dtype() != target;

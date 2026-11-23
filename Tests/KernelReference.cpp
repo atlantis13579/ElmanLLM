@@ -1,4 +1,5 @@
 #include "Core/Backend.h"
+#include "Core/LocalFunction.h"
 #include <algorithm>
 #include <cmath>
 #include <cstring>
@@ -26,12 +27,12 @@ std::vector<float> call(Backend backend,const std::string& op,const std::vector<
     for(int index=0;index<4;++index){
         int base=KernelParams::input_slot(static_cast<KernelInput>(index));p.v[base]=-1;
         if(index>=int(inputs.size())){buffers.push_back(nullptr);continue;}
-        const auto& input=inputs[index];
+        const Input& input=inputs[index];
         if(count(input.shape)!=int(input.values.size()))throw std::runtime_error("Malformed native-kernel fixture");
         p.v[base]=int(input.shape.size());std::copy(input.shape.begin(),input.shape.end(),p.v+base+1);
         int stride=1;for(int axis=int(input.shape.size())-1;axis>=0;--axis){p.v[base+9+axis]=stride;stride*=input.shape[axis];}
         p.v[KernelParams::input_dtype_slot(static_cast<KernelInput>(index))]=int(input.dtype);
-        auto buffer=backend_allocate(backend,input.values.size(),input.dtype);
+        BufferPtr buffer=backend_allocate(backend,input.values.size(),input.dtype);
         if(input.dtype==DType::QInt8){
             std::vector<uint8_t> codes;for(float value:input.values)codes.push_back(uint8_t(int8_t(value)));
             backend_upload_raw(buffer,codes);
@@ -39,9 +40,9 @@ std::vector<float> call(Backend backend,const std::string& op,const std::vector<
         buffers.push_back(buffer);
     }
     std::copy(attributes.begin(),attributes.end(),p.v+64);p.v[255]=int(dtype);
-    auto output=backend_allocate(backend,p.v[0],dtype);backend_dispatch(op,output,buffers,p);
+    BufferPtr output=backend_allocate(backend,p.v[0],dtype);backend_dispatch(op,output,buffers,p);
     std::vector<float> result;
-    if(dtype==DType::QInt8){for(auto code:backend_download_raw(output))result.push_back(float(int8_t(code)));}
+    if(dtype==DType::QInt8){for(unsigned char code:backend_download_raw(output))result.push_back(float(int8_t(code)));}
     else result=backend_download(output);
     visited.insert(op);
     if(backend!=Backend::CPU)close(op+" CPU parity",result,call(Backend::CPU,op,shape,inputs,attributes,dtype),3e-4f);
@@ -75,17 +76,17 @@ void flux_kernel_reference(Backend backend) {
 }
 
 void spatial_forward_parity(Backend backend) {
-    auto patterned = [](std::vector<int> shape, DType dtype, int period) {
+    Input (*const patterned)(std::vector<int>, DType, int) = [](std::vector<int> shape, DType dtype, int period) {
         Input input{shape, std::vector<float>(count(shape)), dtype};
         for (size_t i = 0; i < input.values.size(); ++i)
             input.values[i] = (int(i % period) - period / 2) / 32.0f;
         return input;
     };
-    for (const auto dtype : {DType::Float32, DType::Float16, DType::BFloat16}) {
+    for (const elman::DType dtype : {DType::Float32, DType::Float16, DType::BFloat16}) {
         // Odd plane sizes and filter widths also exercise scratch and batch alignment.
-        const auto input = patterned({2, 17, 17, 25}, dtype, 17);
-        const auto filter = patterned({19, 17, 3, 3}, dtype, 13);
-        const auto bias = patterned({19}, dtype, 7);
+        const Input input = patterned({2, 17, 17, 25}, dtype, 17);
+        const Input filter = patterned({19, 17, 3, 3}, dtype, 13);
+        const Input bias = patterned({19}, dtype, 7);
         call(backend, "conv2d", {2, 19, 9, 13}, {input, filter, bias}, {2, 2, 2, 2, 2, 2, 1}, dtype);
         call(backend, "conv2d", {2, 19, 9, 13},
              {patterned({2, 17, 9, 13}, dtype, 17), patterned({19, 17, 1, 1}, dtype, 13)},
@@ -96,7 +97,7 @@ void spatial_forward_parity(Backend backend) {
         std::vector<float> expected(features.values.size());
         for (size_t i = 0; i < features.values.size(); ++i) {
             const float sign = i % 2 ? 1.0f : -1.0f;
-            const auto channel = (i / 85) % 4;
+            const size_t channel = (i / 85) % 4;
             features.values[i] = 2.0f * float(i / 170) + sign;
             expected[i] = sign * scale.values[channel] + shift.values[channel];
         }
@@ -109,15 +110,15 @@ void spatial_forward_parity(Backend backend) {
     const float mean = 2.0f / 4098.0f;
     const float inverse = 1.0f / std::sqrt(1.0f - mean * mean + 1e-5f);
     std::vector<float> expected;
-    for (const auto value : features.values) expected.push_back((value - mean) * inverse);
+    for (const float value : features.values) expected.push_back((value - mean) * inverse);
     close("group norm partial statistics tile",
           call(backend, "group_norm", features.shape, {features}, {1, bits(1e-5f)}), expected);
 }
 void index_limits(Backend backend) {
-    for (auto dtype : {DType::Float32, DType::Float16, DType::BFloat16, DType::Int32}) {
+    for (elman::DType dtype : {DType::Float32, DType::Float16, DType::BFloat16, DType::Int32}) {
         for (const std::string op : {"linear", "packed_linear"}) {
-            auto input = backend_allocate(backend, 1, dtype), weight = backend_allocate(backend, 0, dtype);
-            auto output = backend_allocate(backend, 0, dtype);
+            BufferPtr input = backend_allocate(backend, 1, dtype), weight = backend_allocate(backend, 0, dtype);
+            BufferPtr output = backend_allocate(backend, 0, dtype);
             KernelParams p;
             p.v[1] = op == "linear" ? 2 : 1;
             if (op == "linear") p.v[2] = 2;
@@ -133,7 +134,7 @@ void index_limits(Backend backend) {
             // Simulate a large storage descriptor without allocating gigabytes.
             // Empty output makes the unfixed path safe to exercise: no data reads.
             input->count = size_t(std::numeric_limits<int>::max()) + 1;
-            auto dispatches = backend_dispatch_count(backend);
+            uint64_t dispatches = backend_dispatch_count(backend);
             bool rejected = false;
             try { backend_dispatch(op, output, {input, weight}, p); }
             catch (const std::invalid_argument& error) { rejected = std::string(error.what()).find("Int32 indexing") != std::string::npos; }
@@ -142,7 +143,7 @@ void index_limits(Backend backend) {
                 throw std::runtime_error(op + ": oversized input reached native dispatch");
         }
     }
-    auto output = backend_allocate(backend, 0, DType::Float32);
+    BufferPtr output = backend_allocate(backend, 0, DType::Float32);
     output->count = size_t(std::numeric_limits<int>::max()) + 1;
     bool rejected = false;
     try { backend_dispatch("copy", output, {}, KernelParams{}); }
@@ -171,7 +172,7 @@ void test_kernel_reference(elman::Backend backend) {
     close("index_copy", call(backend, "index_copy", {3, 2},
           {{{3, 2}, {1, 2, 3, 4, 5, 6}}, {{3}, {2, 0, 2}, DType::Int32}, {{3, 2}, {7, 8, 9, 10, 11, 12}}},
           {0}), {9, 10, 3, 4, 11, 12}, 0);
-    for (auto dtype : {DType::Float32, DType::Float16, DType::BFloat16}) {
+    for (elman::DType dtype : {DType::Float32, DType::Float16, DType::BFloat16}) {
         close("packed_linear", call(backend, "packed_linear", {6},
               {{{2, 2}, {1, 2, 3, 4}, dtype}, {{3, 2}, {1, 0, 0, 1, 1, 1}, dtype}, {{3}, {1, 2, 3}, dtype}},
               {2, 1, 2}, dtype), {2, 4, 4, 6, 6, 10}, 0);
@@ -218,7 +219,7 @@ void test_kernel_reference(elman::Backend backend) {
     close("leaky_relu",call(backend,"leaky_relu",{3},{signed_values},{bits(0.1f)}),{-0.2f,0,2});
     for(const char* name:{"silu","swish"})close(name,call(backend,name,{3},{signed_values}),{-2/(1+std::exp(2.0f)),0,2/(1+std::exp(-2.0f))});
     close("silu_mul",call(backend,"silu_mul",{3},{signed_values,two}),{-4/(1+std::exp(2.0f)),0,4/(1+std::exp(-2.0f))});
-    for(auto dtype:{DType::Float32,DType::Float16,DType::BFloat16})
+    for(elman::DType dtype:{DType::Float32,DType::Float16,DType::BFloat16})
         close("rotary_embedding",call(backend,"rotary_embedding",{2,4},{{{2,4},{1,2,3,4,5,6,7,8},dtype},{{4},{1,0,1,0},dtype},{{4},{0,1,0,1},dtype}},{},dtype),{1,-4,3,2,5,-8,7,6},0);
     std::vector<float> gelu;for(float x:signed_values.values)gelu.push_back(0.5f*x*(1+std::tanh(0.7978845608028654f*(x+0.044715f*x*x*x))));
     close("gelu",call(backend,"gelu",{3},{signed_values}),gelu);
@@ -256,11 +257,11 @@ void test_kernel_reference(elman::Backend backend) {
     close("tril",call(backend,"tril",{2,2},{matrix},{-1}),{0,0,3,0});
     close("softmax",call(backend,"softmax",{2,2},{{{2,2},{0,0,0,0}}},{1}),{0.5f,0.5f,0.5f,0.5f});
     close("log_softmax",call(backend,"log_softmax",{2,2},{{{2,2},{0,0,0,0}}},{1}),{-std::log(2.0f),-std::log(2.0f),-std::log(2.0f),-std::log(2.0f)});
-    auto uniform=call(backend,"uniform",{1024},{},{42,0,bits(0),bits(1)});
+    std::vector<float> uniform=call(backend,"uniform",{1024},{},{42,0,bits(0),bits(1)});
     close("uniform reproducibility",call(backend,"uniform",{1024},{},{42,0,bits(0),bits(1)}),uniform);
     float average=0;for(float value:uniform){if(value<0||value>=1)throw std::runtime_error("Uniform random range");average+=value/1024;}
     if(std::fabs(average-0.5f)>0.05f)throw std::runtime_error("Uniform random mean");
-    auto normal=call(backend,"normal",{1024},{},{43,0,bits(0),bits(1)});average=0;float variance=0;
+    std::vector<float> normal=call(backend,"normal",{1024},{},{43,0,bits(0),bits(1)});average=0;float variance=0;
     for(float value:normal){average+=value/1024;variance+=value*value/1024;}
     if(std::fabs(average)>0.15f||std::fabs(variance-1)>0.2f)throw std::runtime_error("Normal random moments");
     // Dropout preserves its original stream; uniform has a dtype-specific grid.
@@ -306,10 +307,10 @@ void test_kernel_reference(elman::Backend backend) {
     for(size_t i=0;i<w.values.size();++i)w.values[i]=0.03f*float(int(i)-3);
     const std::vector<int> conv_attributes{2,2,1,1,2,2,2};
     Input upstream{{1,2,2,2},{0.2f,-0.3f,0.1f,0.4f,-0.2f,0.1f,0.3f,-0.4f}};
-    const auto dx=call(backend,"conv2d_input_grad",x.shape,{upstream,w},conv_attributes);
-    const auto dw=call(backend,"conv2d_weight_grad",w.shape,{x,upstream},conv_attributes);
-    auto objective=[&](){auto value=call(backend,"conv2d",upstream.shape,{x,w},conv_attributes);float result=0;for(size_t i=0;i<value.size();++i)result+=value[i]*upstream.values[i];return result;};
-    for(int input=0;input<2;++input){auto& values=input==0?x.values:w.values;const auto& derivatives=input==0?dx:dw;
+    const std::vector<float> dx=call(backend,"conv2d_input_grad",x.shape,{upstream,w},conv_attributes);
+    const std::vector<float> dw=call(backend,"conv2d_weight_grad",w.shape,{x,upstream},conv_attributes);
+    LocalFunction objective{[&](){std::vector<float> value=call(backend,"conv2d",upstream.shape,{x,w},conv_attributes);float result=0;for(size_t i=0;i<value.size();++i)result+=value[i]*upstream.values[i];return result;}};
+    for(int input=0;input<2;++input){std::vector<float>& values=input==0?x.values:w.values;const std::vector<float>& derivatives=input==0?dx:dw;
         for(size_t i=0;i<values.size();++i){float old=values[i];values[i]=old+0.001f;float positive=objective();values[i]=old-0.001f;float negative=objective();values[i]=old;close("native conv finite difference",{derivatives[i]},{(positive-negative)/0.002f},2e-4f);}
     }
     close("where",call(backend,"where",{2,2},{{{2,1},{1,0},DType::Bool},{{1,2},{2,3}},{{},{4}}}),{2,3,4,4});
@@ -326,8 +327,8 @@ void test_kernel_reference(elman::Backend backend) {
     Input norm_x{{1,4,1,2},{1,2,3,4,5,6,7,8}};
     const Input norm_w{{4},{0.5f,0.6f,0.7f,0.8f}};
     const Input norm_g{{1,4,1,2},{0.2f,-0.3f,0.1f,0.4f,-0.2f,0.1f,0.3f,-0.4f}};
-    const auto norm_dx=call(backend,"group_norm_input_grad",norm_x.shape,{norm_x,norm_w,norm_g},{2,bits(1e-5f)});
-    auto norm_objective=[&](){auto y=call(backend,"group_norm",norm_x.shape,{norm_x,norm_w},{2,bits(1e-5f)});float value=0;for(size_t i=0;i<y.size();++i)value+=y[i]*norm_g.values[i];return value;};
+    const std::vector<float> norm_dx=call(backend,"group_norm_input_grad",norm_x.shape,{norm_x,norm_w,norm_g},{2,bits(1e-5f)});
+    LocalFunction norm_objective{[&](){std::vector<float> y=call(backend,"group_norm",norm_x.shape,{norm_x,norm_w},{2,bits(1e-5f)});float value=0;for(size_t i=0;i<y.size();++i)value+=y[i]*norm_g.values[i];return value;}};
     for(size_t i=0;i<norm_x.values.size();++i){float old=norm_x.values[i];norm_x.values[i]=old+0.001f;float positive=norm_objective();norm_x.values[i]=old-0.001f;float negative=norm_objective();norm_x.values[i]=old;close("native group norm finite difference",{norm_dx[i]},{(positive-negative)/0.002f},2e-4f);}
     close("linear",call(backend,"linear",{2,2},{{{2,3},{1,2,3,4,5,6}},{{2,3},{1,0,-1,0,1,0}},{{2},{0.5f,-0.5f}}}),{-1.5f,1.5f,-1.5f,4.5f});
     close("argsort",call(backend,"argsort",{2,3},{{{2,3},{3,1,1,-2,0,0}}},{1,0},DType::Int32),{1,2,0,0,1,2});
@@ -339,7 +340,7 @@ void test_kernel_reference(elman::Backend backend) {
         for (int descending : {0, 1}) {
             std::iota(indices.begin(), indices.end(), 0.f);
             std::stable_sort(indices.begin(), indices.end(), [&](int i, int j) {
-                const auto a = values[i], b = values[j];
+                const float a = values[i], b = values[j];
                 if (std::isnan(a) || std::isnan(b))
                     return descending ? std::isnan(a) && !std::isnan(b) : !std::isnan(a) && std::isnan(b);
                 return descending ? a > b : a < b;
@@ -359,7 +360,7 @@ void test_kernel_reference(elman::Backend backend) {
         optimizer_attributes.insert(optimizer_attributes.end(),words,words+2);
     }
     for(int code=16;code<=21;++code){
-        const auto dtype=DType(code);
+        const DType dtype=DType(code);
         const std::vector<Input> operands={{{4},{1,2,4,4},dtype},{{4},{1,2,4,4},dtype},{{4},{0,0,0,0}},{{4},{0,0,0,0}}};
         for(int mode=0;mode<4;++mode){
             optimizer_attributes[1]=mode;
@@ -375,12 +376,12 @@ void test_kernel_reference(elman::Backend backend) {
 #undef ELMAN_CPU_KERNEL
 #undef ELMAN_CPU_KERNEL4
     };
-    for(const auto& name:expected)if(!visited.count(name))throw std::runtime_error("Missing native kernel test: "+name);
+    for(const std::string& name:expected)if(!visited.count(name))throw std::runtime_error("Missing native kernel test: "+name);
 }
 
 int main(int argc,char** argv) {
     try{
-        const auto backend=elman::parse_backend(argc>1?argv[1]:"cpu");
+        const Backend backend=elman::parse_backend(argc>1?argv[1]:"cpu");
         if(!elman::backend_available(backend))throw std::runtime_error("Requested native test backend unavailable");
         test_kernel_reference(backend);
         std::cout<<"PASS "<<visited.size()<<" native operators on "<<elman::backend_name(backend)<<"; expected values, CPU parity, and convolution finite differences\n";

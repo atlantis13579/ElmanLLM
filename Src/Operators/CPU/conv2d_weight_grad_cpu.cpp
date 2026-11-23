@@ -48,7 +48,7 @@ void launch_conv2d_weight_grad_cpu(uint32_t* out, const uint32_t* a,
           }
         }
         value += batch_value;
-        const auto dtype = static_cast<DType>(p.input_dtype(KernelInput::A));
+        const DType dtype = static_cast<DType>(p.input_dtype(KernelInput::A));
         // The CPU fallback accumulates batch GEMMs into a narrow output buffer.
         if (dtype == DType::Float16) value = numeric::half_to_float(numeric::float_to_half(value));
         if (dtype == DType::BFloat16) value = numeric::bfloat_to_float(numeric::float_to_bfloat(value));

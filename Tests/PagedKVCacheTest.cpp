@@ -1,4 +1,5 @@
 #include "Inference/LLM/PagedKVCache.h"
+#include "Core/LocalFunction.h"
 #include "Core/AllocationPool.h"
 #include "Core/Execution.h"
 #include <algorithm>
@@ -30,9 +31,9 @@ void equal(const PagedKVLayer& actual, Backend backend, DType dtype, int batch, 
     check(actual.value.raw_data() == data(backend, dtype, batch, 0, count, layer, tag+1).raw_data(), "Value payload differs");
 }
 void append(PagedKVCache& cache, int count, int tag) {
-    auto transaction = cache.append(count);
+    std::unique_ptr<PagedKVAppend> transaction = cache.append(count);
     for (int layer = 0; layer < cache.shape().layers; ++layer) {
-        auto output = transaction->write(layer,
+        PagedKVLayer output = transaction->write(layer,
             data(cache.backend(), cache.dtype(), cache.batch(), transaction->previous(), count, layer, tag),
             data(cache.backend(), cache.dtype(), cache.batch(), transaction->previous(), count, layer, tag+1));
         equal(output, cache.backend(), cache.dtype(), cache.batch(), transaction->total(), layer, tag);
@@ -41,7 +42,7 @@ void append(PagedKVCache& cache, int count, int tag) {
     rejects([&] { transaction->commit(); }, "Repeated commit accepted");
 }
 void exercise(Backend backend, DType dtype, bool pooled, int page) {
-    auto before = memory_stats(backend).live_bytes(), host_before = memory_stats(Backend::CPU).live_bytes();
+    size_t before = memory_stats(backend).live_bytes(), host_before = memory_stats(Backend::CPU).live_bytes();
     {
         AllocationPool allocations(backend, 0, pooled);
         ExecutionStream first(backend), second(backend);
@@ -57,10 +58,10 @@ void exercise(Backend backend, DType dtype, bool pooled, int page) {
             append(a, page, 7);
         }
         { StreamScope scope(second); append(b, page+1, 90); }
-        auto live = pool.stats().live;
+        size_t live = pool.stats().live;
         for (int written = 0; written < 3; ++written) {
             StreamScope scope(second);
-            auto transaction = a.append(page+1);
+            std::unique_ptr<PagedKVAppend> transaction = a.append(page+1);
             for (int layer = 0; layer < written; ++layer)
                 transaction->write(layer, data(backend,dtype,2,page,page+1,layer,180), data(backend,dtype,2,page,page+1,layer,181));
             rejects([&] { transaction->commit(); }, "Incomplete append committed");
@@ -80,22 +81,22 @@ void exercise(Backend backend, DType dtype, bool pooled, int page) {
         }
         check(a.length() == page && pool.stats().live == live, "Failed constructor leaked pages");
         {
-            auto transaction = a.append(1);
-            auto good = data(backend,dtype,2,page,1,0,7);
+            std::unique_ptr<PagedKVAppend> transaction = a.append(1);
+            Tensor good = data(backend,dtype,2,page,1,0,7);
             rejects([&] { transaction->write(-1,good,good); }, "Negative layer accepted");
             rejects([&] { transaction->write(3,good,good); }, "End layer accepted");
             rejects([&] { transaction->write(0,{},good); }, "Undefined key accepted");
             rejects([&] { transaction->write(0,good,Tensor::ones({2,2,2,3},backend,false,dtype)); }, "Bad shape accepted");
             rejects([&] { transaction->write(0,good,Tensor::ones({2,2,1,3},backend,true,dtype)); }, "Gradient payload accepted");
-            auto written = transaction->write(0,good,data(backend,dtype,2,page,1,0,8));
+            PagedKVLayer written = transaction->write(0,good,data(backend,dtype,2,page,1,0,8));
             rejects([&] { transaction->write(0,good,good); }, "Duplicate layer accepted");
             { StreamScope other(second); rejects([&] { transaction->write(1,good,good); }, "Changed stream accepted"); }
         }
         check(a.length() == page && pool.stats().live == live, "Invalid write committed data");
         { StreamScope scope(first); append(a, page+1, 7); }
-        auto snapshot = a.read(0);
+        PagedKVLayer snapshot = a.read(0);
         {
-            auto transaction = a.append(1);
+            std::unique_ptr<PagedKVAppend> transaction = a.append(1);
             for (int layer = 0; layer < 3; ++layer)
                 transaction->write(layer, data(backend,dtype,2,page*2+1,1,layer,150), data(backend,dtype,2,page*2+1,1,layer,151));
         }
@@ -120,7 +121,7 @@ void exercise(Backend backend, DType dtype, bool pooled, int page) {
         "Paged cache leaked tensor or metadata memory");
 }
 void contracts(Backend backend) {
-    for (auto shape : {PagedKVShape{0,2,3,4,5}, PagedKVShape{2,0,3,4,5}, PagedKVShape{2,2,0,4,5},
+    for (elman::PagedKVShape shape : {PagedKVShape{0,2,3,4,5}, PagedKVShape{2,0,3,4,5}, PagedKVShape{2,2,0,4,5},
                       PagedKVShape{2,2,3,0,5}, PagedKVShape{2,2,3,4,-1}, PagedKVShape{2,2,3,4,std::numeric_limits<int>::max()}})
         rejects([&] { PagedKVPool pool(shape,backend,DType::Float32); }, "Invalid pool shape accepted");
     rejects([&] { PagedKVPool pool({2,2,3,4,5},backend,DType::Int32); }, "Integer cache accepted");
@@ -150,10 +151,10 @@ void concurrent(Backend backend) {
             PagedKVCache cache(pool,1,6);
             for (int attempt = 0; attempt < 12; ++attempt) {
                 for (int chunk : {1,3,2}) {
-                    auto transaction = cache.append(chunk);
+                    std::unique_ptr<PagedKVAppend> transaction = cache.append(chunk);
                     for (int layer = 0; layer < 2; ++layer) {
-                        auto value = data(backend,DType::BFloat16,1,transaction->previous(),chunk,layer,worker*30+attempt);
-                        auto result = transaction->write(layer,value,value);
+                        Tensor value = data(backend,DType::BFloat16,1,transaction->previous(),chunk,layer,worker*30+attempt);
+                        PagedKVLayer result = transaction->write(layer,value,value);
                         if (result.key.raw_data() != data(backend,DType::BFloat16,1,0,transaction->total(),layer,worker*30+attempt).raw_data())
                             ++failures;
                     }
@@ -163,11 +164,11 @@ void concurrent(Backend backend) {
             }
         } catch (...) { ++failures; }
     });
-    for (auto& thread : threads) thread.join();
+    for (std::thread& thread : threads) thread.join();
     check(failures == 0 && pool.stats().live == 0, "Concurrent requests leaked or mixed payloads");
 }
 void batched(Backend backend, DType dtype, bool pooled, int page) {
-    auto baseline = memory_stats(backend).tensor_bytes;
+    size_t baseline = memory_stats(backend).tensor_bytes;
     {
         ExecutionStream stream(backend), other(backend);
         StreamScope execution(stream);
@@ -183,22 +184,22 @@ void batched(Backend backend, DType dtype, bool pooled, int page) {
         PagedKVBatch batch({&b,&c,&a});
         std::vector<int> lengths{page+1,0,page}, tags{90,150,7};
         check(batch.batch()==3 && batch.lengths()==lengths && batch.length()==page+1, "Batch lengths differ");
-        auto live = pool.stats().live;
-        auto joined = [&](int layer, bool value, bool full) {
+        size_t live = pool.stats().live;
+        LocalFunction joined{[&](int layer, bool value, bool full) {
             std::vector<Tensor> rows;
             for (size_t i = 0; i < lengths.size(); ++i) {
-                auto row = data(backend,dtype,1,full ? 0 : lengths[i],full ? lengths[i]+page : page,layer,tags[i]+int(value));
+                Tensor row = data(backend,dtype,1,full ? 0 : lengths[i],full ? lengths[i]+page : page,layer,tags[i]+int(value));
                 int padding = page+1-lengths[i];
                 if (full && padding) row = concat({Tensor::zeros({1,2,padding,3},backend,false,dtype),row},2);
                 rows.push_back(row);
             }
             return concat(rows,0);
-        };
+        }};
         for (int count : {0,1,2}) {
-            auto transaction = batch.append(page);
+            std::unique_ptr<PagedKVAppend> transaction = batch.append(page);
             check(transaction->previous()==page+1 && transaction->total()==page*2+1, "Padded batch extent differs");
             for (int layer = 0; layer < count; ++layer) {
-                auto result = transaction->write(layer,joined(layer,false,false),joined(layer,true,false));
+                PagedKVLayer result = transaction->write(layer,joined(layer,false,false),joined(layer,true,false));
                 check(result.key.raw_data()==joined(layer,false,true).raw_data() && result.value.raw_data()==joined(layer,true,true).raw_data(),
                       "Batched gather or structural padding differs");
             }
@@ -213,12 +214,12 @@ void batched(Backend backend, DType dtype, bool pooled, int page) {
         rejects([&] { batch.append(0); }, "Empty batched append accepted");
         rejects([&] { batch.append(page*5); }, "Per-request context overflow accepted");
         {
-            auto transaction = batch.append(page);
-            const auto& mask = transaction->padding_mask();
+            std::unique_ptr<PagedKVAppend> transaction = batch.append(page);
+            const std::vector<int32_t>& mask = transaction->padding_mask();
             int total = transaction->total();
             for (int row = 0; row < 3; ++row) for (int t = 0; t < total; ++t)
                 check(mask[size_t(row)*total+t] == int(t >= page+1-lengths[size_t(row)]), "Structural batch mask differs");
-            auto key = joined(0,false,false), value = joined(0,true,false);
+            Tensor key = joined(0,false,false), value = joined(0,true,false);
             { StreamScope changed(other); rejects([&] { transaction->write(0,key,value); }, "Batch changed execution stream"); }
             rejects([&] { transaction->write(-1,key,value); }, "Negative batch layer accepted");
             rejects([&] { transaction->write(0,{},value); }, "Undefined batched key accepted");
@@ -244,25 +245,25 @@ void batched_failures(Backend backend) {
     PagedKVPool pool({1,1,1,1,2},backend,DType::Float32);
     PagedKVCache a(pool,1,3), b(pool,1,3);
     {
-        auto transaction=a.append(1);
-        auto value=Tensor::ones({1,1,1,1},backend);
+        std::unique_ptr<PagedKVAppend> transaction=a.append(1);
+        Tensor value=Tensor::ones({1,1,1,1},backend);
         transaction->write(0,value,value);transaction->commit();
     }
     PagedKVBatch batch({&a,&b});
-    auto dispatches=backend_dispatch_count(backend);
+    uint64_t dispatches=backend_dispatch_count(backend);
     rejects<CacheCapacityExceeded>([&] { batch.append(1); }, "Batch exhaustion did not reject");
     check(pool.stats().live==1 && a.length()==1 && b.length()==0 && backend_dispatch_count(backend)==dispatches,
           "Partial batch reservation leaked or dispatched kernels");
     a.reset();
     {
-        auto before=memory_stats(backend).live_bytes();
+        size_t before=memory_stats(backend).live_bytes();
         MemoryLimit limit(backend,before);
         rejects<MemoryLimitExceeded>([&] { batch.append(1); }, "Batch mapping ignored memory ceiling");
     }
     check(pool.stats().live==0 && a.length()==0 && b.length()==0, "Failed batch constructor leaked pages");
     {
-        auto transaction=batch.append(1);
-        auto value=Tensor::ones({2,1,1,1},backend);
+        std::unique_ptr<PagedKVAppend> transaction=batch.append(1);
+        Tensor value=Tensor::ones({2,1,1,1},backend);
         transaction->write(0,value,value);transaction->commit();
     }
     check(pool.stats().live==2 && a.length()==1 && b.length()==1, "Batch did not recover after exhaustion");
@@ -271,17 +272,17 @@ void batched_nonfinite(Backend backend, DType dtype) {
     PagedKVPool pool({1,1,1,1,4},backend,dtype);
     PagedKVCache owner(pool,1,2), short_row(pool,1,2);
     {
-        auto transaction=owner.append(1);
-        auto nan=Tensor::from_data({1,1,1,1},{std::numeric_limits<float>::quiet_NaN()},backend,false,dtype);
+        std::unique_ptr<PagedKVAppend> transaction=owner.append(1);
+        Tensor nan=Tensor::from_data({1,1,1,1},{std::numeric_limits<float>::quiet_NaN()},backend,false,dtype);
         transaction->write(0,nan,nan); transaction->commit();
     }
     {
         PagedKVBatch batch({&owner,&short_row});
-        auto transaction=batch.append(1);
-        auto value=Tensor::ones({2,1,1,1},backend,false,dtype);
-        auto result=transaction->write(0,value,value);
-        for (const auto* tensor : {&result.key,&result.value}) {
-            auto values=tensor->data();
+        std::unique_ptr<PagedKVAppend> transaction=batch.append(1);
+        Tensor value=Tensor::ones({2,1,1,1},backend,false,dtype);
+        PagedKVLayer result=transaction->write(0,value,value);
+        for (const elman::Tensor* tensor : {&result.key,&result.value}) {
+            std::vector<float> values=tensor->data();
             check(std::isnan(values[0]) && values[1]==1 && values[2]==0 && values[3]==1,
                   "Structural padding disclosed a nonfinite payload from another request");
         }
@@ -299,9 +300,9 @@ void concurrent_batches(Backend backend) {
             for (int attempt=0; attempt<12; ++attempt) {
                 int tag=worker*40+attempt, lengths[2]{1,0};
                 {
-                    auto transaction=a.append(1);
+                    std::unique_ptr<PagedKVAppend> transaction=a.append(1);
                     for (int layer=0; layer<2; ++layer) {
-                        auto value=data(backend,DType::BFloat16,1,0,1,layer,tag);
+                        Tensor value=data(backend,DType::BFloat16,1,0,1,layer,tag);
                         transaction->write(layer,value,value);
                     }
                     transaction->commit();
@@ -309,18 +310,18 @@ void concurrent_batches(Backend backend) {
                 bool reverse=attempt%2!=0;
                 PagedKVBatch batch(reverse ? std::vector<PagedKVCache*>{&b,&a} : std::vector<PagedKVCache*>{&a,&b});
                 for (int count : {3,2}) {
-                    auto transaction=batch.append(count);
+                    std::unique_ptr<PagedKVAppend> transaction=batch.append(count);
                     for (int layer=0; layer<2; ++layer) {
                         std::vector<Tensor> inputs,expected;
                         for (int row=0; row<2; ++row) {
                             int request=reverse ? 1-row : row;
                             inputs.push_back(data(backend,DType::BFloat16,1,lengths[request],count,layer,tag+request*80));
-                            auto value=data(backend,DType::BFloat16,1,0,lengths[request]+count,layer,tag+request*80);
+                            Tensor value=data(backend,DType::BFloat16,1,0,lengths[request]+count,layer,tag+request*80);
                             if (request==1) value=concat({Tensor::zeros({1,2,1,3},backend,false,DType::BFloat16),value},2);
                             expected.push_back(value);
                         }
-                        auto input=concat(inputs,0), target=concat(expected,0);
-                        auto result=transaction->write(layer,input,input);
+                        Tensor input=concat(inputs,0), target=concat(expected,0);
+                        PagedKVLayer result=transaction->write(layer,input,input);
                         if (result.key.raw_data()!=target.raw_data() || result.value.raw_data()!=target.raw_data()) ++failures;
                     }
                     transaction->commit(); lengths[0]+=count; lengths[1]+=count;
@@ -329,11 +330,11 @@ void concurrent_batches(Backend backend) {
             }
         } catch (...) { ++failures; }
     });
-    for (auto& thread : threads) thread.join();
+    for (std::thread& thread : threads) thread.join();
     check(failures==0 && pool.stats().live==0, "Concurrent batched requests leaked or mixed payloads");
 }
 void context_boundary(Backend backend) {
-    auto baseline = memory_stats(backend).tensor_bytes;
+    size_t baseline = memory_stats(backend).tensor_bytes;
     {
         ExecutionStream stream(backend); StreamScope scope(stream);
         PagedKVShape shape{28,2,128,16,256};
@@ -342,17 +343,17 @@ void context_boundary(Backend backend) {
         PagedKVPool pool(shape,backend,DType::BFloat16);
         PagedKVCache cache(pool,1,4096);
         for (int count : {4095,1}) {
-            auto transaction = cache.append(count);
-            auto value = Tensor::ones({1,2,count,128},backend,false,DType::BFloat16);
+            std::unique_ptr<PagedKVAppend> transaction = cache.append(count);
+            Tensor value = Tensor::ones({1,2,count,128},backend,false,DType::BFloat16);
             for (int layer = 0; layer < 28; ++layer) {
-                auto result = transaction->write(layer,value,value);
+                PagedKVLayer result = transaction->write(layer,value,value);
                 check(result.key.shape() == Shape{1,2,transaction->total(),128}, "Long cache gather shape differs");
             }
             transaction->commit();
         }
         check(cache.length() == 4096 && pool.stats().live == 256, "Final cache position did not commit");
         rejects([&] { cache.append(1); }, "4096-token request accepted an extra token");
-        auto value = cache.read(27).value.data();
+        std::vector<float> value = cache.read(27).value.data();
         check(std::all_of(value.begin(),value.end(),[](float v) { return v == 1; }), "Long cache payload differs");
         cache.reset();
         check(pool.stats().live == 0, "Long cache cancellation leaked pages");
@@ -363,13 +364,13 @@ void context_boundary(Backend backend) {
 int main(int argc, char** argv) {
     try {
         if (argc != 2) throw std::invalid_argument("Usage: elman_paged_cache cpu|cuda");
-        auto backend = parse_backend(argv[1]);
+        Backend backend = parse_backend(argv[1]);
         if (!backend_available(backend)) return 77;
-        for (auto dtype : {DType::Float32,DType::Float16,DType::BFloat16})
+        for (elman::DType dtype : {DType::Float32,DType::Float16,DType::BFloat16})
             for (bool pooled : {false,true}) for (int page : {1,3,16}) exercise(backend,dtype,pooled,page);
-        for (auto dtype : {DType::Float32,DType::Float16,DType::BFloat16})
+        for (elman::DType dtype : {DType::Float32,DType::Float16,DType::BFloat16})
             for (bool pooled : {false,true}) for (int page : {1,3,16}) batched(backend,dtype,pooled,page);
-        for (auto dtype : {DType::Float32,DType::Float16,DType::BFloat16}) batched_nonfinite(backend,dtype);
+        for (elman::DType dtype : {DType::Float32,DType::Float16,DType::BFloat16}) batched_nonfinite(backend,dtype);
         contracts(backend); concurrent(backend); concurrent_batches(backend); context_boundary(backend); batched_failures(backend);
         std::cout << "Paged cache " << argv[1] << ": " << checks << " checks passed\n";
         return 0;

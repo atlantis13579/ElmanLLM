@@ -1,9 +1,0 @@
-#pragma once
-
-#include <string_view>
-
-namespace elman::assets {
-inline constexpr std::string_view index = R"ELMAN_ASSET(@ELMAN_WEB_INDEX@)ELMAN_ASSET";
-inline constexpr std::string_view style = R"ELMAN_ASSET(@ELMAN_WEB_STYLE@)ELMAN_ASSET";
-inline constexpr std::string_view script = R"ELMAN_ASSET(@ELMAN_WEB_SCRIPT@)ELMAN_ASSET";
-}

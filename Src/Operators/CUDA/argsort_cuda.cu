@@ -104,9 +104,9 @@ void launch_argsort_cuda(uint32_t* out, const uint32_t* a, const uint32_t*,
   if (!count) return;
   int axis = p.attribute(operator_attr::sorting::kAxis);
   int length = p.input_shape(KernelInput::A, axis), inner = p.input_stride(KernelInput::A, axis);
-  const auto dtype = DType(p.input_dtype(KernelInput::A));
+  const DType dtype = DType(p.input_dtype(KernelInput::A));
   if (inner == 1 && length > 0 && length <= 1024 && is_compute_float(dtype)) {
-    const auto rows = count / length;
+    const int rows = count / length;
     if (length <= 128) sort_contiguous_rows<1><<<rows, 128, 0, current_cuda_stream()>>>(out, a, length, p);
     else if (length <= 512) sort_contiguous_rows<4><<<rows, 128, 0, current_cuda_stream()>>>(out, a, length, p);
     else sort_contiguous_rows<8><<<rows, 128, 0, current_cuda_stream()>>>(out, a, length, p);
@@ -114,15 +114,15 @@ void launch_argsort_cuda(uint32_t* out, const uint32_t* a, const uint32_t*,
   }
   SortBuffer keys_in(size_t(count) * sizeof(uint64_t)), keys_out(size_t(count) * sizeof(uint64_t));
   SortBuffer ids_in(size_t(count) * sizeof(int32_t)), ids_out(size_t(count) * sizeof(int32_t));
-  auto* input_keys = static_cast<uint64_t*>(keys_in.data);
-  auto* output_keys = static_cast<uint64_t*>(keys_out.data);
-  auto* input_ids = static_cast<int32_t*>(ids_in.data);
-  auto* output_ids = static_cast<int32_t*>(ids_out.data);
+  uint64_t* input_keys = static_cast<uint64_t*>(keys_in.data);
+  uint64_t* output_keys = static_cast<uint64_t*>(keys_out.data);
+  int32_t* input_ids = static_cast<int32_t*>(ids_in.data);
+  int32_t* output_ids = static_cast<int32_t*>(ids_out.data);
   size_t bytes = 0;
   if (is_standard_integer(DType(p.input_dtype(KernelInput::A))) || p.input_dtype(KernelInput::A) == int(DType::Float64)) {
     const int groups = count / length;
     SortBuffer segment_offsets((size_t(groups) + 1) * sizeof(int32_t));
-    auto* offsets = static_cast<int32_t*>(segment_offsets.data);
+    int32_t* offsets = static_cast<int32_t*>(segment_offsets.data);
     make_wide_sort_keys<<<(unsigned(count) + 255u) / 256u, 256, 0, current_cuda_stream()>>>(input_keys, input_ids, offsets, a, p, length, inner);
     check_sort(cudaGetLastError());
     // Full-width keys need independent segments rather than packed row bits.

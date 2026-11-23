@@ -58,7 +58,7 @@ void launch_comparison(uint32_t* out, const uint32_t* a, const uint32_t* b, cons
   const unsigned count = unsigned(p.output_count());
   if (!count) return;
   const unsigned blocks = (count + 255) / 256;
-  auto stream = current_cuda_stream();
+  cudaStream_t stream = current_cuda_stream();
   if (p.input_dtype(KernelInput::A) == int(DType::Float32) && p.input_dtype(KernelInput::B) == int(DType::Float32) &&
       p.output_dtype() == int(DType::Bool)) {
     const int left = comparison_period(p, KernelInput::A), right = comparison_period(p, KernelInput::B);

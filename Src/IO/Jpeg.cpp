@@ -1,4 +1,5 @@
 #include "IO/Jpeg.h"
+#include "Core/LocalFunction.h"
 
 #include <algorithm>
 #include <array>
@@ -55,12 +56,12 @@ void segment(std::string& output, unsigned type, std::string_view data) {
 std::string huffman_tables() {
   std::string tables;
   append_byte(tables, 0x00);
-  const auto dc = tables.size();
+  const size_t dc = tables.size();
   tables.append(16, '\0');
   tables[dc + 3] = 12;
   for (unsigned size = 0; size <= 11; ++size) append_byte(tables, size);
   append_byte(tables, 0x10);
-  const auto ac = tables.size();
+  const size_t ac = tables.size();
   tables.append(16, '\0');
   tables[ac + 7] = static_cast<char>(162);
   append_byte(tables, 0);
@@ -120,7 +121,7 @@ private:
     pending_ += size;
     while (pending_ >= 8) {
       pending_ -= 8;
-      const auto byte = (bits_ >> pending_) & 255;
+      const unsigned int byte = (bits_ >> pending_) & 255;
       append_byte(output_, byte);
       if (byte == 0xff) append_byte(output_, 0);
     }
@@ -132,7 +133,7 @@ private:
 };
 
 std::array<int, 64> transformed(const Block& samples) {
-  static const auto basis = [] {
+  static const Block basis = [] {
     Block result{};
     const double pi = std::acos(-1.0);
     for (int frequency = 0; frequency < 8; ++frequency) {
@@ -162,17 +163,17 @@ std::array<int, 64> transformed(const Block& samples) {
 }  // namespace
 
 std::string encode_jpeg(const Tensor& image) {
-  const auto& shape = image.shape();
+  const Shape& shape = image.shape();
   if (shape.size() != 4 || shape[0] != 1 || shape[1] != 3 || shape[2] <= 0 || shape[3] <= 0)
     throw std::invalid_argument("JPEG output requires one RGB image");
   const size_t height = shape[2], width = shape[3];
   if (width > 65535 || height > 65535) throw std::overflow_error("JPEG dimensions exceed 65535 pixels");
-  const auto pixels = image.data();
-  const auto sample = [&](size_t channel, size_t y, size_t x) {
+  const std::vector<float> pixels = image.data();
+  const LocalFunction sample{[&](size_t channel, size_t y, size_t x) {
     const float pixel = pixels[(channel * height + y) * width + x];
     if (!std::isfinite(pixel)) throw std::runtime_error("Diffusion produced a non-finite pixel");
     return 255.0 * std::clamp(pixel, 0.0f, 1.0f);
-  };
+  }};
 
   std::string jpeg;
   marker(jpeg, 0xd8);

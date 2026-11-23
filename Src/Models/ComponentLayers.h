@@ -3,7 +3,7 @@
 #include <stdexcept>
 
 #include "IO/ComponentWeights.h"
-#include "NN/InferenceLayers.h"
+#include "Layers/InferenceLayers.h"
 
 namespace elman::model_weights {
 

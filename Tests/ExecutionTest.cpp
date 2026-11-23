@@ -19,7 +19,7 @@ void check(bool valid, const char* message) {
 }
 void events(Backend backend) {
     ExecutionStream first(backend), second(backend);
-    auto initial = first.record();
+    ExecutionEvent initial = first.record();
     initial.synchronize();
     check(initial.ready(), "Completed event remained pending");
     second.wait(initial);
@@ -57,12 +57,12 @@ void events(Backend backend) {
     check(!asynchronous_execution(backend), "Scope did not restore default binding");
 }
 void numerical(Backend backend) {
-    auto before = memory_stats(backend).live_bytes();
-    for (bool reuse : {false, true}) for (auto dtype : {DType::Float32, DType::Float16, DType::BFloat16}) {
+    size_t before = memory_stats(backend).live_bytes();
+    for (bool reuse : {false, true}) for (elman::DType dtype : {DType::Float32, DType::Float16, DType::BFloat16}) {
         ExecutionStream first(backend), second(backend);
         AllocationPool pool(backend, 0, reuse);
         for (int repeat = 0; repeat < 4; ++repeat) {
-            auto x = Tensor::from_data({4}, {1, -2, 3, -4}, backend, true, dtype);
+            Tensor x = Tensor::from_data({4}, {1, -2, 3, -4}, backend, true, dtype);
             Tensor square, result;
             {
                 StreamScope scope(first);
@@ -78,7 +78,7 @@ void numerical(Backend backend) {
             }
             check(result.data() == std::vector<float>({2, 8, 18, 32}), "Cross-stream forward differs");
             check(x.grad() == std::vector<float>({4, -8, 12, -16}), "Cross-stream backward differs");
-            auto old = first.record();
+            ExecutionEvent old = first.record();
             x.assign({5, 6, 7, 8});
             old.synchronize();
             check(x.data() == std::vector<float>({5, 6, 7, 8}), "Host assignment differs");
@@ -89,13 +89,13 @@ void numerical(Backend backend) {
     check(memory_stats(backend).live_bytes() == before, "Stream arithmetic leaked storage");
 }
 void escaped(Backend backend) {
-    auto before = memory_stats(backend).live_bytes();
+    size_t before = memory_stats(backend).live_bytes();
     Tensor result;
     {
         ExecutionStream stream(backend);
         StreamScope scope(stream);
         AllocationPool pool(backend);
-        auto input = Tensor::from_data({4}, {1, 2, 3, 4}, backend);
+        Tensor input = Tensor::from_data({4}, {1, 2, 3, 4}, backend);
         result = mul(input, input);
     }
     check(result.data() == std::vector<float>({1, 4, 9, 16}), "Result did not survive stream destruction");
@@ -104,26 +104,26 @@ void escaped(Backend backend) {
     check(memory_stats(backend).live_bytes() == before, "Escaped result leaked storage");
 }
 void matrices(Backend backend) {
-    auto before = memory_stats(backend).live_bytes();
-    for (auto dtype : {DType::Float32, DType::Float16, DType::BFloat16}) {
+    size_t before = memory_stats(backend).live_bytes();
+    for (elman::DType dtype : {DType::Float32, DType::Float16, DType::BFloat16}) {
         std::vector<float> input(8 * 16), weights(12 * 16), bias(12), expected(8 * 12);
         for (size_t i = 0; i < input.size(); ++i) input[i] = float(int(i % 5) - 2);
         for (size_t i = 0; i < weights.size(); ++i) weights[i] = float(int(i % 3) - 1);
         for (int i = 0; i < 12; ++i) bias[i] = float(i - 6);
         for (int row = 0; row < 8; ++row) for (int column = 0; column < 12; ++column) {
-            auto& value = expected[row * 12 + column];
+            float& value = expected[row * 12 + column];
             value = bias[column];
             for (int k = 0; k < 16; ++k) value += input[row * 16 + k] * weights[column * 16 + k];
         }
         ExecutionStream first(backend), second(backend);
         AllocationPool pool(backend);
-        auto a = Tensor::from_data({8, 16}, input, backend, false, dtype);
-        auto w = Tensor::from_data({12, 16}, weights, backend, false, dtype);
-        auto b = Tensor::from_data({12}, bias, backend, false, dtype);
-        for (auto& value : bias) value += 2;
-        auto other_bias = Tensor::from_data({12}, bias, backend, false, dtype);
-        auto other_expected = expected;
-        for (auto& value : other_expected) value += 2;
+        Tensor a = Tensor::from_data({8, 16}, input, backend, false, dtype);
+        Tensor w = Tensor::from_data({12, 16}, weights, backend, false, dtype);
+        Tensor b = Tensor::from_data({12}, bias, backend, false, dtype);
+        for (float& value : bias) value += 2;
+        Tensor other_bias = Tensor::from_data({12}, bias, backend, false, dtype);
+        std::vector<float> other_expected = expected;
+        for (float& value : other_expected) value += 2;
         for (int repeat = 0; repeat < 6; ++repeat) {
             Tensor x, y;
             { StreamScope scope(first); x = linear(a, w, repeat % 2 ? other_bias : b); }
@@ -135,9 +135,9 @@ void matrices(Backend backend) {
     check(memory_stats(backend).live_bytes() == before, "Stream vendor contexts leaked accounted workspaces");
 }
 void threads(Backend backend) {
-    auto before = memory_stats(backend).live_bytes();
+    size_t before = memory_stats(backend).live_bytes();
     {
-        auto input = Tensor::from_data({4}, {1, 2, 3, 4}, backend);
+        Tensor input = Tensor::from_data({4}, {1, 2, 3, 4}, backend);
         std::atomic<int> failures{0};
         std::vector<std::thread> workers;
         for (int i = 0; i < 4; ++i) workers.emplace_back([&] {
@@ -150,7 +150,7 @@ void threads(Backend backend) {
                 stream.synchronize();
             } catch (...) { ++failures; }
         });
-        for (auto& worker : workers) worker.join();
+        for (std::thread& worker : workers) worker.join();
         check(failures == 0, "Concurrent readers interfered");
     }
     check(memory_stats(backend).live_bytes() == before, "Concurrent streams leaked storage");
@@ -164,7 +164,7 @@ void greedy_selection(Backend backend) {
     Tensor row;
     {
         StreamScope scope(producer);
-        auto storage = Tensor::from_data({int(values.size())}, values, backend);
+        Tensor storage = Tensor::from_data({int(values.size())}, values, backend);
         row = contiguous_view(storage, {151936}, 1);
     }
     StreamScope scope(consumer);
@@ -184,7 +184,7 @@ void greedy_selection(Backend backend) {
 int main(int argc, char** argv) {
     try {
         if (argc != 2) throw std::invalid_argument("Usage: elman_execution_tests cpu|cuda");
-        auto backend = elman::parse_backend(argv[1]);
+        Backend backend = elman::parse_backend(argv[1]);
         if (!elman::backend_available(backend)) return 77;
         events(backend); numerical(backend); matrices(backend); escaped(backend); threads(backend); greedy_selection(backend);
 #ifdef ELMAN_HAS_CUDA

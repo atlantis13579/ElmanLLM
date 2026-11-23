@@ -14,19 +14,19 @@ void check(bool valid, const char* message) {
     if (!valid) throw std::runtime_error(message);
 }
 void bounded(Backend backend, DType dtype, int queries, bool reuse, bool asynchronous, AttentionTiling tiling) {
-    auto before = memory_stats(backend).live_bytes();
+    size_t before = memory_stats(backend).live_bytes();
     {
         ExecutionStream stream(backend);
         StreamScope scope(stream, asynchronous);
         AllocationPool pool(backend, 0, reuse);
         // Initialize the selected stream's vendor workspace before admission.
         matmul(Tensor::ones({2, 2}, backend), Tensor::ones({2, 2}, backend)).data();
-        auto q = Tensor::zeros({1, 4, queries, 8}, backend, false, dtype);
-        auto k = Tensor::zeros({1, 2, 512, 8}, backend, false, dtype);
-        auto v = Tensor::from_data({1, 2, 512, 8}, std::vector<float>(2 * 512 * 8, 2), backend, false, dtype);
-        auto mask = Tensor::zeros({}, backend, false, dtype);
+        Tensor q = Tensor::zeros({1, 4, queries, 8}, backend, false, dtype);
+        Tensor k = Tensor::zeros({1, 2, 512, 8}, backend, false, dtype);
+        Tensor v = Tensor::from_data({1, 2, 512, 8}, std::vector<float>(2 * 512 * 8, 2), backend, false, dtype);
+        Tensor mask = Tensor::zeros({}, backend, false, dtype);
         pool.clear();
-        auto base = memory_stats(backend).live_bytes();
+        size_t base = memory_stats(backend).live_bytes();
         size_t width = dtype_storage_bytes(dtype, 1);
         size_t output = memory_allocation_bytes(backend, size_t(4) * queries * 8 * width);
         size_t scratch = memory_allocation_bytes(backend, size_t(tiling == AttentionTiling::Heads ? queries : 4 * 32) * 512 * width);
@@ -34,16 +34,16 @@ void bounded(Backend backend, DType dtype, int queries, bool reuse, bool asynchr
         size_t budget = base + output + scratch + 16 * 1024;
         {
             MemoryLimit limit(backend, budget);
-            auto dispatches = backend_dispatch_count(backend);
-            auto result = tiled_attention(q, k, v, mask, 2, 32, false, 0, tiling);
+            uint64_t dispatches = backend_dispatch_count(backend);
+            Tensor result = tiled_attention(q, k, v, mask, 2, 32, false, 0, tiling);
             check(backend_dispatch_count(backend) == dispatches + 1, "Tiled attention did not use one native dispatch");
-            auto values = result.data();
+            std::vector<float> values = result.data();
             check(std::all_of(values.begin(), values.end(), [](float x) { return x == 2; }), "Bounded attention output differs");
             check(limit.peak_bytes() <= budget, "Tiled attention exceeded its selected workspace bound");
             result = {};
             bool rejected = false;
             try {
-                auto repeated = reshape(expand(reshape(k, {1, 2, 1, 512, 8}), {1, 2, 2, 512, 8}), {1, 4, 512, 8});
+                Tensor repeated = reshape(expand(reshape(k, {1, 2, 1, 512, 8}), {1, 2, 2, 512, 8}), {1, 4, 512, 8});
                 matmul_transposed(q, repeated).data();
             } catch (const MemoryLimitExceeded&) { rejected = true; }
             check(rejected, "Dense scores unexpectedly fit the tiled workspace budget");
@@ -54,13 +54,13 @@ void bounded(Backend backend, DType dtype, int queries, bool reuse, bool asynchr
     check(memory_stats(backend).live_bytes() == before, "Tiled attention leaked stream or workspace storage");
 }
 void fourth_input(Backend backend, bool reuse) {
-    auto before = memory_stats(backend).live_bytes();
+    size_t before = memory_stats(backend).live_bytes();
     {
         ExecutionStream producer(backend), consumer(backend);
         AllocationPool pool(backend, 0, reuse);
-        auto q = Tensor::zeros({1, 4, 33, 8}, backend);
-        auto k = Tensor::zeros({1, 2, 2, 8}, backend);
-        auto v = Tensor::from_data({1, 2, 2, 1}, {2, 6, 3, 7}, backend);
+        Tensor q = Tensor::zeros({1, 4, 33, 8}, backend);
+        Tensor k = Tensor::zeros({1, 2, 2, 8}, backend);
+        Tensor v = Tensor::from_data({1, 2, 2, 1}, {2, 6, 3, 7}, backend);
         std::vector<float> initial(66), replacement(66), expected(4 * 33);
         for (int i = 0; i < 33; ++i) {
             initial[2 * i + 1] = -std::numeric_limits<float>::infinity();
@@ -68,7 +68,7 @@ void fourth_input(Backend backend, bool reuse) {
         }
         for (int head = 0; head < 4; ++head)
             for (int i = 0; i < 33; ++i) expected[head * 33 + i] = head < 2 ? 2 : 3;
-        auto source = Tensor::from_data({1, 1, 33, 2}, initial, backend);
+        Tensor source = Tensor::from_data({1, 1, 33, 2}, initial, backend);
         for (int repeat = 0; repeat < 4; ++repeat) {
             Tensor mask, result;
             { StreamScope scope(producer); mask = add(source, 0); }
@@ -79,8 +79,8 @@ void fourth_input(Backend backend, bool reuse) {
         }
         producer.synchronize(); consumer.synchronize();
         StreamScope scope(producer);
-        auto mask = Tensor::zeros({}, backend, true);
-        auto result = tiled_attention(q, k, v, mask);
+        Tensor mask = Tensor::zeros({}, backend, true);
+        Tensor result = tiled_attention(q, k, v, mask);
         mask.assign({1});
         bool rejected = false;
         try { result.backward(Tensor::ones(result.shape(), backend)); }
@@ -93,15 +93,15 @@ void fourth_input(Backend backend, bool reuse) {
 int main(int argc, char** argv) {
     try {
         if (argc != 2) throw std::invalid_argument("Usage: elman_attention_tests cpu|cuda");
-        auto backend = parse_backend(argv[1]);
+        Backend backend = parse_backend(argv[1]);
         if (!backend_available(backend)) return 77;
         for (bool reuse : {false, true}) {
             fourth_input(backend, reuse);
             for (bool asynchronous : {false, true}) {
                 if (backend == Backend::CPU && asynchronous) continue;
-                for (auto dtype : {DType::Float32, DType::Float16, DType::BFloat16})
+                for (elman::DType dtype : {DType::Float32, DType::Float16, DType::BFloat16})
                     for (int queries : {257, 513})
-                        for (auto tiling : {AttentionTiling::Queries, AttentionTiling::Heads})
+                        for (elman::AttentionTiling tiling : {AttentionTiling::Queries, AttentionTiling::Heads})
                             bounded(backend, dtype, queries, reuse, asynchronous, tiling);
             }
         }

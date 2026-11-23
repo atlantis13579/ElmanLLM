@@ -22,9 +22,9 @@ ELMAN_SPATIAL_HD inline Float64Image float64_image(const KernelParams& p, int in
 ELMAN_SPATIAL_HD inline double float64_convolution_value(Float64Spatial op, int i, const double* a,
                                                          const double* b, const double* bias, const KernelParams& p) {
     const bool forward = op == Float64Spatial::Convolution, input_gradient = op == Float64Spatial::InputGradient;
-    const auto x = float64_image(p, input_gradient ? -1 : 0);
-    const auto w = float64_image(p, op == Float64Spatial::WeightGradient ? -1 : 1);
-    const auto y = float64_image(p, forward ? -1 : input_gradient ? 0 : 1);
+    const Float64Image x = float64_image(p, input_gradient ? -1 : 0);
+    const Float64Image w = float64_image(p, op == Float64Spatial::WeightGradient ? -1 : 1);
+    const Float64Image y = float64_image(p, forward ? -1 : input_gradient ? 0 : 1);
     const int sh = p.attribute(0), sw = p.attribute(1), ph = p.attribute(2), pw = p.attribute(3);
     const int dh = p.attribute(4), dw = p.attribute(5), outputs_per_group = w.n / p.attribute(6);
     double value = 0.;
@@ -94,9 +94,9 @@ ELMAN_SPATIAL_HD inline double float64_spatial_value(Float64Spatial op, int i, c
     if (op <= Float64Spatial::WeightGradient) return float64_convolution_value(op, i, a, b, c, p);
     const bool gradient = op == Float64Spatial::MaximumPoolGradient || op == Float64Spatial::AveragePoolGradient;
     const bool maximum = op == Float64Spatial::MaximumPool || op == Float64Spatial::MaximumPoolGradient;
-    const auto x = float64_image(p, 0), y = float64_image(p, gradient ? 1 : -1);
+    const Float64Image x = float64_image(p, 0), y = float64_image(p, gradient ? 1 : -1);
     if (!gradient) {
-        const auto window = float64_pool_window(a, x, i / (y.h * y.w), i / y.w % y.h, i % y.w, p);
+        const Float64PoolWindow window = float64_pool_window(a, x, i / (y.h * y.w), i / y.w % y.h, i % y.w, p);
         return maximum ? window.maximum : window.sum / double(window.count);
     }
     const int ix = i % x.w, iy = i / x.w % x.h, plane = i / (x.h * x.w);
@@ -104,7 +104,7 @@ ELMAN_SPATIAL_HD inline double float64_spatial_value(Float64Spatial op, int i, c
     for (int oy = 0; oy < y.h; ++oy) for (int ox = 0; ox < y.w; ++ox) {
         const int64_t sy = int64_t(oy) * p.attribute(2) - p.attribute(4), sx = int64_t(ox) * p.attribute(3) - p.attribute(5);
         if (iy < sy || iy >= sy + p.attribute(0) || ix < sx || ix >= sx + p.attribute(1)) continue;
-        const auto window = float64_pool_window(a, x, plane, oy, ox, p);
+        const Float64PoolWindow window = float64_pool_window(a, x, plane, oy, ox, p);
         const double upstream = b[(plane * y.h + oy) * y.w + ox];
         if (maximum) { if (window.selected == i) value += upstream; }
         else value += upstream / double(window.count);

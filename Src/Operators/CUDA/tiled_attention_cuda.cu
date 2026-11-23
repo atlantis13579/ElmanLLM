@@ -187,11 +187,11 @@ void launch_tiled_attention_cuda(uint32_t* out, const uint32_t* q, const uint32_
     if (try_online_attention(out, q, k, v, mask, s, p)) return;
     size_t bytes = dtype_storage_bytes(s.dtype, 1);
     if (p.attribute(operator_attr::tiled_attention::kTiling) == 1) {
-        auto workspace = backend_workspace(Backend::CUDA, checked_memory_mul(size_t(s.queries) * s.keys, bytes));
-        auto scores = static_cast<uint32_t*>(workspace->raw_pointer());
-        auto qk = s.scores(s.queries), pv = s.attended(s.queries);
+        BufferPtr workspace = backend_workspace(Backend::CUDA, checked_memory_mul(size_t(s.queries) * s.keys, bytes));
+        uint32_t* scores = static_cast<uint32_t*>(workspace->raw_pointer());
+        AttentionGemm qk = s.scores(s.queries), pv = s.attended(s.queries);
         qk.batches = pv.batches = qk.groups = pv.groups = 1;
-        auto probabilities = s.probabilities(p, s.queries, 0, true);
+        KernelParams probabilities = s.probabilities(p, s.queries, 0, true);
         for (int head = 0; head < s.batch * s.heads; ++head) {
             size_t kv_head = size_t(head / s.groups);
             attention_gemm_cuda(scores, attention_offset(q, size_t(head) * s.queries * s.dimension, bytes),
@@ -202,13 +202,13 @@ void launch_tiled_attention_cuda(uint32_t* out, const uint32_t* q, const uint32_
         }
         return;
     }
-    auto workspace = backend_workspace(Backend::CUDA, checked_memory_mul(size_t(s.batch) * s.heads * s.tile * s.keys, bytes));
-    auto scores = static_cast<uint32_t*>(workspace->raw_pointer());
+    BufferPtr workspace = backend_workspace(Backend::CUDA, checked_memory_mul(size_t(s.batch) * s.heads * s.tile * s.keys, bytes));
+    uint32_t* scores = static_cast<uint32_t*>(workspace->raw_pointer());
     const bool merge_heads = s.groups > 1 && s.tile == s.queries;
-    const auto scores_shape = s.scores(s.tile);
-    const auto attended_shape = s.attended(s.tile);
-    const auto qk = merge_heads ? merge_grouped_query_rows(scores_shape) : scores_shape;
-    const auto pv = merge_heads ? merge_grouped_query_rows(attended_shape) : attended_shape;
+    const AttentionGemm scores_shape = s.scores(s.tile);
+    const AttentionGemm attended_shape = s.attended(s.tile);
+    const AttentionGemm qk = merge_heads ? merge_grouped_query_rows(scores_shape) : scores_shape;
+    const AttentionGemm pv = merge_heads ? merge_grouped_query_rows(attended_shape) : attended_shape;
     BufferPtr pointers;
     if (qk.groups > 1) pointers = backend_workspace(Backend::CUDA, checked_memory_mul(size_t(s.batch) * s.heads, 3 * sizeof(void*)));
     void* arrays = pointers ? pointers->raw_pointer() : nullptr;

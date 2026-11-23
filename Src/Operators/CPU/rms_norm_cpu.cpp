@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "Core/LocalFunction.h"
 #include "row_reduction.h"
 
 namespace elman {
@@ -9,7 +10,7 @@ void launch_rms_norm_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
   for (int axis = p.output_rank() - p.attribute(operator_attr::normalization::kTrailingDimensions);
        axis < p.output_rank(); ++axis) length *= p.output_shape(axis);
   for (int base = 0; base < p.output_count(); base += length) {
-    auto square = [&](int j) { float value = READ_A(base + j); return value * value; };
+    LocalFunction square{[&](int j) { float value = READ_A(base + j); return value * value; }};
     float total = 0;
     if (length >= 8) total = contiguous_float_sum(length, square);
     else for (int j = 0; j < length; ++j) total += square(j);

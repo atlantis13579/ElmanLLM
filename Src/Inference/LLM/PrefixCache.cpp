@@ -36,7 +36,7 @@ std::pair<size_t, size_t> PrefixCache::find(const std::vector<int32_t>& prompt) 
     const size_t maximum = (prompt.size() - 1) / page * page;
     // Prefer the most recently used entry when equal-length prefixes match.
     for (size_t i = entries_.size(); i > 0; --i) {
-        const auto& tokens = entries_[i - 1].tokens;
+        const std::vector<int32_t>& tokens = entries_[i - 1].tokens;
         size_t common = 0, limit = std::min(maximum, tokens.size());
         while (common < limit && tokens[common] == prompt[common]) ++common;
         common = common / page * page;
@@ -47,10 +47,10 @@ std::pair<size_t, size_t> PrefixCache::find(const std::vector<int32_t>& prompt) 
 int PrefixCache::matched_tokens(const std::vector<int32_t>& prompt) const { return int(find(prompt).second); }
 PrefixMatch PrefixCache::lookup(const std::vector<int32_t>& prompt, int max_length) {
     require(max_length > 0 && prompt.size() <= size_t(max_length), "invalid destination context");
-    auto match = find(prompt); size_t selected = match.first, length = match.second;
+    std::pair<size_t, size_t> match = find(prompt); size_t selected = match.first, length = match.second;
     if (!length) { ++stats_.misses; return {}; }
     // Allocation failure leaves the LRU order and hit counters unchanged.
-    auto branch = entries_[selected].cache->fork(int(length), max_length);
+    std::unique_ptr<PagedKVCache> branch = entries_[selected].cache->fork(int(length), max_length);
     uint64_t id = entries_[selected].id;
     std::rotate(entries_.begin() + selected, entries_.begin() + selected + 1, entries_.end());
     ++stats_.hits; stats_.reused_tokens += length;

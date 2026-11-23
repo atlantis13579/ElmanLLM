@@ -4,8 +4,8 @@
 
 namespace elman::metal {
 Tensor lower_mse_loss(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto a = inputs[0];
-  auto b = inputs[1];
+  Tensor a = inputs[0];
+  Tensor b = inputs[1];
   if (!a) {
     return m.filled(p, NAN);
   }

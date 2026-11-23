@@ -4,15 +4,15 @@
 
 namespace elman::metal {
 Tensor lower_addmm(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto a = inputs[0];
-  auto b = inputs[1];
-  auto c = inputs[2];
+  Tensor a = inputs[0];
+  Tensor b = inputs[1];
+  Tensor c = inputs[2];
   const float alpha = attribute_float(p, operator_attr::addmm::kAlpha);
   const float beta = attribute_float(p, operator_attr::addmm::kBeta);
   if (!a) {
     return c && beta ? m.spread(m.mul(c, m.number(beta, c.dataType)), shape(p)) : m.filled(p, 0);
   }
-  const auto work = is_narrow_float(DType(p.input_dtype(KernelInput::A))) ? MPSDataTypeFloat32 : a.dataType;
+  const MPSDataType work = is_narrow_float(DType(p.input_dtype(KernelInput::A))) ? MPSDataTypeFloat32 : a.dataType;
   a = m.cast(a, work);
   b = m.cast(b, work);
   if (c) {
@@ -21,7 +21,7 @@ Tensor lower_addmm(Graph m, const Operands& inputs, const KernelParams& p) {
   if (alpha == 0) {
     return beta == 0 ? m.zeros(shape(p), work) : m.spread(m.mul(c, m.number(beta, work)), shape(p));
   }
-  auto result = m.matmul(a, b);
+  Tensor result = m.matmul(a, b);
   if (alpha != 1) {
     result = m.mul(result, m.number(alpha, work));
   }

@@ -17,16 +17,16 @@ const DTypeInfo& dtype_info(DType dtype) {
 }
 const char* dtype_name(DType dtype) { return dtype_info(dtype).name; }
 DType parse_dtype(const std::string& name) {
-    for (const auto& type : types) if (name == type.name) return type.dtype;
+    for (const DTypeInfo& type : types) if (name == type.name) return type.dtype;
     throw std::invalid_argument("Unknown tensor dtype: " + name);
 }
 std::vector<DType> all_dtypes() {
     std::vector<DType> result;
-    for (const auto& type : types) result.push_back(type.dtype);
+    for (const DTypeInfo& type : types) result.push_back(type.dtype);
     return result;
 }
 size_t dtype_storage_bytes(DType dtype, size_t logical_count) {
-    auto bits = dtype_info(dtype).bits;
+    unsigned int bits = dtype_info(dtype).bits;
     // Avoid overflowing count*bits for valid large packed allocations.
     size_t groups = logical_count / 8;
     size_t tail = ((logical_count % 8) * bits + 7) / 8;

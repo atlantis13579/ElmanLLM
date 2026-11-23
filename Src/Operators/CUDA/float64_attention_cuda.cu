@@ -1,4 +1,5 @@
 #include "Operators/float64_attention_math.h"
+#include "Core/LocalFunction.h"
 #include "Backends/CudaStream.h"
 #include "Core/AllocationPool.h"
 #include <cuda_runtime.h>
@@ -37,9 +38,9 @@ __global__ void float64_attention_zero_kernel(double* output, int count) {
 void launch_float64_attention_cuda(Float64Attention op, uint32_t* output, const uint32_t* a,
         const uint32_t* b, const uint32_t* c, const uint32_t* d, const KernelParams& p) {
     if (!p.output_count()) return;
-    auto destination = reinterpret_cast<double*>(output);
-    auto query = reinterpret_cast<const double*>(a), key = reinterpret_cast<const double*>(b);
-    const auto stream = current_cuda_stream();
+    double* destination = reinterpret_cast<double*>(output);
+    const double* query = reinterpret_cast<const double*>(a), *key = reinterpret_cast<const double*>(b);
+    const cudaStream_t stream = current_cuda_stream();
     if (op == Float64Attention::Softmax) {
         const int axis = p.attribute(0), rank = p.input_rank(KernelInput::A);
         const int length = rank ? p.input_shape(KernelInput::A, axis) : 1, inner = rank ? p.input_stride(KernelInput::A, axis) : 1;
@@ -52,18 +53,18 @@ void launch_float64_attention_cuda(Float64Attention op, uint32_t* output, const 
         float64_attention_zero_kernel<<<(unsigned(p.output_count()) + 127u) / 128u, 128, 0, stream>>>(destination, p.output_count());
         return;
     }
-    auto values = reinterpret_cast<const double*>(c), mask = reinterpret_cast<const double*>(d);
+    const double* values = reinterpret_cast<const double*>(c), *mask = reinterpret_cast<const double*>(d);
     const bool by_head = p.attribute(4) != 0;
     const int tile = by_head ? s.queries : std::min(s.queries, p.attribute(1));
     const int heads = by_head ? 1 : s.batch * s.heads;
-    auto storage = backend_workspace(Backend::CUDA, checked_memory_mul(size_t(heads) * tile * s.keys, sizeof(double)));
-    auto scores = static_cast<double*>(storage->raw_pointer());
-    auto execute = [&](int first_head, int start, int rows) {
+    BufferPtr storage = backend_workspace(Backend::CUDA, checked_memory_mul(size_t(heads) * tile * s.keys, sizeof(double)));
+    double* scores = static_cast<double*>(storage->raw_pointer());
+    LocalFunction execute{[&](int first_head, int start, int rows) {
         const int score_count = heads * rows * s.keys, row_count = heads * rows, value_count = heads * rows * s.values;
         float64_attention_scores_kernel<<<(unsigned(score_count) + 127u) / 128u, 128, 0, stream>>>(scores, query, key, score_count, first_head, start, rows, s);
         float64_attention_probabilities_kernel<<<(unsigned(row_count) + 127u) / 128u, 128, 0, stream>>>(scores, mask, row_count, first_head, start, rows, s, p);
         float64_attention_values_kernel<<<(unsigned(value_count) + 127u) / 128u, 128, 0, stream>>>(destination, scores, values, value_count, first_head, start, rows, s);
-    };
+    }};
     if (by_head) for (int head = 0; head < s.batch * s.heads; ++head) execute(head, 0, s.queries);
     else for (int start = 0; start < s.queries;) {
         const int rows = std::min(tile, s.queries - start);

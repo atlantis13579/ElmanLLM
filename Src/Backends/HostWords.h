@@ -1,5 +1,7 @@
 #pragma once
 
+#include "Core/LocalFunction.h"
+
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -58,11 +60,11 @@ inline std::vector<float> decode_words(const std::vector<std::uint32_t>& words,
 inline std::vector<uint8_t> encode_host_values(const std::vector<float>& values, DType dtype) {
   if (is_packed_integer(dtype)) {
     std::vector<uint8_t> bytes(dtype_storage_bytes(dtype, values.size()));
-    const auto read = [&](uint64_t i) -> uint64_t {
+    const LocalFunction read{[&](uint64_t i) -> uint64_t {
       const double value = values[size_t(i)];
       const double bound = packed_integer_signed(dtype) ? 2147483648.0 : 9223372036854775808.0;
       return std::isfinite(value) && value >= -bound && value < bound ? uint64_t(int64_t(value)) : 0;
-    };
+    }};
     for (size_t i = 0; i < bytes.size(); ++i)
       bytes[i] = packed_integer_byte(i, values.size(), packed_integer_bits(dtype), read);
     return bytes;
@@ -91,7 +93,7 @@ inline std::vector<uint8_t> encode_host_values(const std::vector<float>& values,
     }
     return bytes;
   }
-  auto words = encode_words(values, dtype);
+  std::vector<std::uint32_t> words = encode_words(values, dtype);
   std::vector<uint8_t> bytes(dtype_storage_bytes(dtype, values.size()));
   if (dtype == DType::Bool) {
     for (size_t i = 0; i < words.size(); ++i) bytes[i] = uint8_t(words[i]);

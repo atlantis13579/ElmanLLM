@@ -1,4 +1,5 @@
 #include "Inference/Diffusion/StableDiffusion.h"
+#include "Core/LocalFunction.h"
 
 #include <algorithm>
 #include <cmath>
@@ -30,7 +31,7 @@ StableDiffusion::StableDiffusion(InferenceSession text_encoder, InferenceSession
       vae_decoder_(std::move(vae_decoder)), latent_scaling_(latent_scaling) {
   if (!(latent_scaling_ > 0) || !std::isfinite(latent_scaling_))
     throw std::invalid_argument("Invalid Stable Diffusion latent scaling");
-  for (const auto* component : {&text_encoder_, &vae_decoder_}) {
+  for (const InferenceSession* component : {&text_encoder_, &vae_decoder_}) {
     if (component->backend() != denoiser_.backend() || component->device() != denoiser_.device())
       throw std::invalid_argument("Stable Diffusion sessions must use the same device");
   }
@@ -53,46 +54,46 @@ StableDiffusionOutput StableDiffusion::generate(const Tensor& prompt_ids, const 
   const int steps = static_cast<int>(scheduler.timesteps().size());
   if (progress) progress({DiffusionProgress::Stage::EncodingPrompt, 0, steps});
 
-  auto positive = text_encoder_.run({{"input_ids", prompt_ids}}).at("last_hidden_state");
+  Tensor positive = text_encoder_.run({{"input_ids", prompt_ids}}).at("last_hidden_state");
   if (trace) trace("text_embeddings", positive);
-  auto context = positive;
+  Tensor context = positive;
   if (guided) {
-    auto negative = text_encoder_.run({{"input_ids", negative_ids}}).at("last_hidden_state");
+    Tensor negative = text_encoder_.run({{"input_ids", negative_ids}}).at("last_hidden_state");
     if (trace) trace("negative_text_embeddings", negative);
     context = concat({negative, positive}, 0);
   }
-  auto latent = initial_latent.detach();
+  Tensor latent = initial_latent.detach();
   if (trace) trace("initial_latent", latent);
   for (size_t step = 0; step < scheduler.timesteps().size(); ++step) {
     if (progress) progress({DiffusionProgress::Stage::Denoising, static_cast<int>(step + 1), steps});
-    auto model_input = guided ? concat({latent, latent}, 0) : latent;
-    auto timestep = Tensor::from_int_data({}, {scheduler.timesteps()[step]}, backend);
-    auto noise = denoiser_.run({{"sample", model_input}, {"timestep", timestep},
+    Tensor model_input = guided ? concat({latent, latent}, 0) : latent;
+    Tensor timestep = Tensor::from_int_data({}, {scheduler.timesteps()[step]}, backend);
+    Tensor noise = denoiser_.run({{"sample", model_input}, {"timestep", timestep},
                                  {"encoder_hidden_states", context}}).at("sample");
     if (guided) {
       const int batch = latent.shape()[0];
-      auto unconditioned = slice(noise, 0, 0, batch);
-      auto conditioned = slice(noise, 0, batch, batch * 2);
+      Tensor unconditioned = slice(noise, 0, 0, batch);
+      Tensor conditioned = slice(noise, 0, batch, batch * 2);
       noise = add(unconditioned, mul(sub(conditioned, unconditioned), guidance));
     }
     if (trace) trace("noise." + std::to_string(step), noise);
-    auto denoised = scheduler.step(step, noise, latent);
+    DdimStep denoised = scheduler.step(step, noise, latent);
     latent = std::move(denoised.latent);
     if (trace) trace("latent." + std::to_string(step), latent);
     if (after_step) after_step(static_cast<int>(step + 1), steps, denoised.predicted_original);
   }
   if (progress) progress({DiffusionProgress::Stage::Decoding, steps, steps});
-  auto image = decode_latent(latent, trace);
+  Tensor image = decode_latent(latent, trace);
   return {std::move(latent), std::move(image)};
 }
 
 Tensor StableDiffusion::decode_latent(const Tensor& latent, const DiffusionTrace& trace) const {
-  const auto backend = vae_decoder_.backend();
+  const Backend backend = vae_decoder_.backend();
   DeviceScope owner(backend, vae_decoder_.device());
   graph::RecordingGuard no_grad;
-  auto decoded = vae_decoder_.run({{"latent", div(latent, latent_scaling_)}}).at("sample");
+  Tensor decoded = vae_decoder_.run({{"latent", div(latent, latent_scaling_)}}).at("sample");
   if (trace) trace("vae_output", decoded);
-  auto image = add(mul(decoded, 0.5), 0.5);
+  Tensor image = add(mul(decoded, 0.5), 0.5);
   return maximum(Tensor::zeros({}, backend, false, image.dtype()),
                  minimum(image, Tensor::ones({}, backend, false, image.dtype())));
 }
@@ -105,13 +106,13 @@ DiffusionSession::DiffusionSession(StableDiffusion pipeline, ClipTokenizer token
 DiffusionSession DiffusionSession::load(const std::filesystem::path& root, Backend backend, int device, DType dtype) {
   if (!is_compute_float(dtype)) throw std::invalid_argument("Diffusion requires float32, float16 or bfloat16");
   DeviceScope owner(backend, device);
-  auto scheduler = Json::read(root / "scheduler" / "scheduler_config.json");
+  Json scheduler = Json::read(root / "scheduler" / "scheduler_config.json");
   ClipTokenizer tokenizer((root / "tokenizer").string());
-  auto text = load_clip_text_encoder(root / "text_encoder", backend, device, dtype);
+  InferenceSession text = load_clip_text_encoder(root / "text_encoder", backend, device, dtype);
   if (text.inputs().at("input_ids").shape[1] != tokenizer.length())
     throw std::invalid_argument("CLIP tokenizer and encoder length differ");
-  auto denoiser = load_diffusion_unet(root / "unet", backend, device, dtype);
-  auto vae = load_diffusion_vae(root / "vae", backend, device, dtype);
+  InferenceSession denoiser = load_diffusion_unet(root / "unet", backend, device, dtype);
+  VaeDecoder vae = load_diffusion_vae(root / "vae", backend, device, dtype);
   const int channels = denoiser.inputs().at("sample").shape[1];
   if (channels != vae.session.inputs().at("latent").shape[1] ||
       text.outputs().at("last_hidden_state").shape[2] != denoiser.inputs().at("encoder_hidden_states").shape[2])
@@ -129,31 +130,31 @@ StableDiffusionOutput DiffusionSession::generate(const DiffusionInput& input, co
     throw std::invalid_argument("Invalid Diffusion dimensions or guidance");
   const DdimScheduler schedule(scheduler_, input.steps);
   if (progress) progress({DiffusionProgress::Stage::Preparing, 0, static_cast<int>(schedule.timesteps().size())});
-  auto initial = input.initial_latent;
+  Tensor initial = input.initial_latent;
   if (initial.defined()) {
-    const auto& shape = initial.shape();
+    const Shape& shape = initial.shape();
     if (initial.dtype() != dtype_ || initial.backend() != backend_ || initial.device() != device_ ||
         shape.size() != 4 || shape[0] != 1 || shape[1] != channels_ ||
         (input.width && int64_t(shape[3]) * spatial_factor_ != input.width) ||
         (input.height && int64_t(shape[2]) * spatial_factor_ != input.height))
       throw std::invalid_argument("Initial latent has an incompatible device, dtype or shape");
   } else {
-    const auto width = input.width ? input.width : 512;
-    const auto height = input.height ? input.height : 512;
+    const int width = input.width ? input.width : 512;
+    const int height = input.height ? input.height : 512;
     if (width % spatial_factor_ || height % spatial_factor_)
       throw std::invalid_argument("Image dimensions must be divisible by the VAE factor");
     initial = Tensor::normal({1, channels_, height / spatial_factor_, width / spatial_factor_},
                              0, 1, input.seed, backend_, false, dtype_);
   }
-  auto ids = [&](const std::string& prompt) {
+  LocalFunction ids{[&](const std::string& prompt) {
     return Tensor::from_int_data({1, tokenizer_.length()}, tokenizer_.encode(prompt), backend_);
-  };
+  }};
   return pipeline_.generate(ids(input.prompt), input.guidance > 1 ? ids(input.negative_prompt) : Tensor{},
                             initial, schedule, input.guidance, trace, progress, after_step);
 }
 
 Tensor diffusion_preview_latent(const Tensor& latent, int max_extent) {
-  const auto& shape = latent.shape();
+  const Shape& shape = latent.shape();
   if (shape.size() != 4 || shape[2] <= 0 || shape[3] <= 0 || max_extent < 1)
     throw std::invalid_argument("Invalid diffusion preview dimensions");
   const int extent = std::max(shape[2], shape[3]);
@@ -162,13 +163,13 @@ Tensor diffusion_preview_latent(const Tensor& latent, int max_extent) {
   DeviceScope owner(latent.backend(), latent.device());
   graph::RecordingGuard no_grad;
   // Sample pixel centers in latent space before running the VAE.
-  auto indices = [&](int size) {
+  LocalFunction indices{[&](int size) {
     const int count = std::max(1, int((int64_t(size) * max_extent + extent / 2) / extent));
     std::vector<int32_t> selected;
     selected.reserve(count);
     for (int i = 0; i < count; ++i) selected.push_back(int32_t((2LL * i + 1) * size / (2LL * count)));
     return Tensor::from_int_data({count}, selected, latent.backend());
-  };
+  }};
   return index_select(index_select(latent, 2, indices(shape[2])), 3, indices(shape[3]));
 }
 

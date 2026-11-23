@@ -1,4 +1,5 @@
 #include "Backends/CpuParallel.h"
+#include "Core/LocalFunction.h"
 #include "Operators/conv2d_params.h"
 #include "kernel.h"
 
@@ -25,14 +26,14 @@ void launch_conv2d_input_grad_cpu(uint32_t* out, const uint32_t* a,
       int outputs_per_group = output_channels / p.attribute(operator_attr::conv2d::kGroups);
       int group = ic / channels_per_group;
       int local_channel = ic % channels_per_group;
-      const auto input_dtype = static_cast<DType>(p.input_dtype(KernelInput::A));
+      const DType input_dtype = static_cast<DType>(p.input_dtype(KernelInput::A));
       if (is_narrow_float(input_dtype)) {
         // Store GEMM columns and each col2im update in
         // the input dtype. Preserve those rounding boundaries during overlap.
-        auto round = [input_dtype](float v) {
+        LocalFunction round{[input_dtype](float v) {
           return input_dtype == DType::Float16 ? numeric::half_to_float(numeric::float_to_half(v)) :
                                                 numeric::bfloat_to_float(numeric::float_to_bfloat(v));
-        };
+        }};
         float value = 0;
         for (int ky = 0; ky < kernel_height; ++ky) {
           for (int kx = 0; kx < kernel_width; ++kx) {

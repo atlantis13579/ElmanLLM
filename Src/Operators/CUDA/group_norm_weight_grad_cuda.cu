@@ -97,11 +97,11 @@ void launch_group_norm_weight_grad_cuda(uint32_t* out, const uint32_t* a, const 
     const int batch = p.input_shape(KernelInput::A, 0), channels = p.input_shape(KernelInput::A, 1);
     const int spatial = p.input_stride(KernelInput::A, 1);
     const int per_group = channels / p.attribute(operator_attr::group_norm::kGroups);
-    const auto stream = current_cuda_stream();
+    const cudaStream_t stream = current_cuda_stream();
     if (batch && spatial >= 128 && p.output_dtype() == int(DType::Float32) &&
         p.input_dtype(KernelInput::A) == int(DType::Float32)) {
-        auto scratch = backend_workspace(Backend::CUDA, size_t(batch) * channels * sizeof(float));
-        auto* terms = static_cast<float*>(scratch->raw_pointer());
+        BufferPtr scratch = backend_workspace(Backend::CUDA, size_t(batch) * channels * sizeof(float));
+        float* terms = static_cast<float*>(scratch->raw_pointer());
         weight_gradient_terms<<<batch * channels, threads, 0, stream>>>(terms, a, b, channels, spatial, per_group, p);
         finish_weight_gradient<<<(unsigned(channels) + threads - 1) / threads, threads, 0, stream>>>(
             out, terms, batch, channels, p);

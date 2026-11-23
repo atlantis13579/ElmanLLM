@@ -17,8 +17,8 @@ Json::Object json_spec(const TensorSpec& spec) {
 std::string GraphBuilder::next_value() { return "_elman_graph/" + std::to_string(counter_++); }
 
 std::string GraphBuilder::input(const std::string& name, const TensorSpec& spec) {
-  const auto value = next_value();
-  auto description = json_spec(spec);
+  const std::string value = next_value();
+  Json::Object description = json_spec(spec);
   description.emplace("value", value);
   if (!inputs_.emplace(name, std::move(description)).second)
     throw std::invalid_argument("Duplicate graph input port " + name);
@@ -26,21 +26,21 @@ std::string GraphBuilder::input(const std::string& name, const TensorSpec& spec)
 }
 
 std::string GraphBuilder::constant(Tensor tensor) {
-  const auto name = next_value();
+  const std::string name = next_value();
   weights_.emplace(name, std::move(tensor));
   return name;
 }
 
 std::string GraphBuilder::operation(std::string op, const std::vector<std::string>& inputs, Json::Object attributes) {
-  const auto value = next_value();
-  const auto name = op + " " + value;
+  const std::string value = next_value();
+  const std::string name = op + " " + value;
   nodes_.emplace_back(Json::Object{{"name", name}, {"op", std::move(op)}, {"output", value},
      {"inputs", Json::Array(inputs.begin(), inputs.end())}, {"attributes", std::move(attributes)}});
   return value;
 }
 
 void GraphBuilder::output(const std::string& name, const std::string& value, const TensorSpec& spec) {
-  auto description = json_spec(spec);
+  Json::Object description = json_spec(spec);
   description.emplace("value", value);
   if (!outputs_.emplace(name, std::move(description)).second)
     throw std::invalid_argument("Duplicate graph output port " + name);

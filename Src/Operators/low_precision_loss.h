@@ -16,7 +16,7 @@ inline int low_loss_count(const KernelParams& p) {
     return count;
 }
 inline KernelParams low_loss_softmax_params(const KernelParams& p) {
-    auto result = p;
+    KernelParams result = p;
     result.v[KernelParams::kOutputCountSlot] = low_loss_count(p);
     result.v[KernelParams::kOutputRankSlot] = 2;
     result.v[KernelParams::kOutputShapeSlot] = p.input_shape(KernelInput::A, 0);

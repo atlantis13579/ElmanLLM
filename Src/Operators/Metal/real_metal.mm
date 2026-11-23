@@ -3,7 +3,7 @@
 
 namespace elman::metal {
 Tensor lower_real(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto a = inputs[0];
+  Tensor a = inputs[0];
   if (wide_words(DType(p.output_dtype()))) {
     return m.slice(a, 1, 0, 2);
   }

@@ -5,9 +5,9 @@
 namespace elman {
 void launch_low_precision_categorical_cpu(uint32_t* output, const uint32_t* weights, const uint32_t* cumulative, const uint32_t* uniforms, const KernelParams& p) {
     const int width = p.input_shape(KernelInput::A, 1);
-    const auto weight_dtype = DType(p.input_dtype(KernelInput::A));
-    const auto cumulative_dtype = DType(p.input_dtype(KernelInput::B));
-    const auto uniform_dtype = DType(p.input_dtype(KernelInput::C));
+    const DType weight_dtype = DType(p.input_dtype(KernelInput::A));
+    const DType cumulative_dtype = DType(p.input_dtype(KernelInput::B));
+    const DType uniform_dtype = DType(p.input_dtype(KernelInput::C));
     for (int row = 0; row < p.output_count(); ++row) {
         const float uniform = low_precision_value(uniforms, row, uniform_dtype);
         const float total = low_precision_value(cumulative, row * width + width - 1, cumulative_dtype);

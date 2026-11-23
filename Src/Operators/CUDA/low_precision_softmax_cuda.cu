@@ -111,8 +111,8 @@ void launch_low_precision_softmax_cuda(LowPrecisionSoftmax op, uint32_t* output,
                                       const uint32_t* upstream, const KernelParams& p) {
     if (!p.output_count()) return;
     const size_t bytes = checked_memory_mul(size_t(p.output_count()), sizeof(float));
-    auto storage = p.output_dtype() == int(DType::Float32) ? BufferPtr{} : backend_workspace(Backend::CUDA, bytes);
-    auto* result = storage ? static_cast<uint32_t*>(storage->raw_pointer()) : output;
+    BufferPtr storage = p.output_dtype() == int(DType::Float32) ? BufferPtr{} : backend_workspace(Backend::CUDA, bytes);
+    uint32_t* result = storage ? static_cast<uint32_t*>(storage->raw_pointer()) : output;
     const int axis = p.attribute(0), mode = p.attribute(1);
     const int inner = p.input_rank(KernelInput::A) ? p.input_stride(KernelInput::A, axis) : 1;
     const int length = p.input_rank(KernelInput::A) ? p.input_shape(KernelInput::A, axis) : 1;
@@ -132,12 +132,12 @@ void launch_low_precision_softmax_cuda(LowPrecisionSoftmax op, uint32_t* output,
         const int path = inner != 1 ? 1 : length <= 1024 ? 0 : 2;
         low_softmax_backward_rows<<<rows, width, 0, current_cuda_stream()>>>(reinterpret_cast<float*>(result), input, upstream, p, length, inner, logarithmic, path);
     } else if (inner == 1 && length > 2048 && !logarithmic) {
-        auto params = p; params.v[KernelParams::kOutputDTypeSlot] = int(DType::Float32);
+        KernelParams params = p; params.v[KernelParams::kOutputDTypeSlot] = int(DType::Float32);
         const bool wide = p.input_dtype(KernelInput::A) == int(DType::Float32);
-        auto decoded_storage = wide ? BufferPtr{} : backend_workspace(Backend::CUDA, bytes);
+        BufferPtr decoded_storage = wide ? BufferPtr{} : backend_workspace(Backend::CUDA, bytes);
         const uint32_t* decoded = input;
         if (!wide) {
-            auto* destination = static_cast<uint32_t*>(decoded_storage->raw_pointer());
+            uint32_t* destination = static_cast<uint32_t*>(decoded_storage->raw_pointer());
             launch_low_precision_cast_cuda(destination, input, params); decoded = destination;
         }
         params.v[KernelParams::input_dtype_slot(KernelInput::A)] = int(DType::Float32);
@@ -148,7 +148,7 @@ void launch_low_precision_softmax_cuda(LowPrecisionSoftmax op, uint32_t* output,
         low_softmax_forward_rows<<<rows, width, 0, current_cuda_stream()>>>(reinterpret_cast<float*>(result), input, p, length, inner, logarithmic, persistent);
     }
     if (storage) {
-        auto params = p;
+        KernelParams params = p;
         params.v[KernelParams::input_dtype_slot(KernelInput::A)] = int(DType::Float32);
         launch_low_precision_cast_cuda(output, result, params);
     }

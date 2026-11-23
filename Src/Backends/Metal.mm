@@ -30,7 +30,7 @@ public:
 };
 
 const MetalBuffer& storage_for(const BufferPtr& value) {
-    auto* storage = value ? dynamic_cast<const MetalBuffer*>(&value->allocation()) : nullptr;
+    const MetalBuffer* storage = value ? dynamic_cast<const MetalBuffer*>(&value->allocation()) : nullptr;
     if (!storage) throw std::invalid_argument("Expected Metal tensor storage");
     return *storage;
 }
@@ -43,7 +43,7 @@ bool random_operation(const std::string& op) {
 }
 
 MPSMatrixRandomDistributionDescriptor* distribution_for(const std::string& op, const KernelParams& p) {
-    const auto dtype = DType(p.output_dtype());
+    const DType dtype = DType(p.output_dtype());
     if (!is_compute_float(dtype) && !is_low_precision_float(dtype)) return nil;
     if (op == "dropout") return metal::dropout_distribution(p);
     if (op == "normal") return metal::normal_distribution(p);
@@ -71,31 +71,31 @@ struct Plan {
     size_t count = 0;
 
     Plan(MPSGraphDevice* device, const Key& key, bool has_samples) {
-        const auto& p = key.params;
+        const KernelParams& p = key.params;
         MPSGraph* graph = [MPSGraph new];
         metal::Operands inputs{};
         NSMutableDictionary<MPSGraphTensor*, MPSGraphShapedType*>* feeds = [NSMutableDictionary dictionary];
         for (int slot = 0; slot < 4; ++slot) {
-            const auto input = static_cast<KernelInput>(slot);
+            const KernelInput input = static_cast<KernelInput>(slot);
             if (p.input_rank(input) < 0) continue;
-            auto dims = metal::storage_shape(p, slot);
+            metal::Shape dims = metal::storage_shape(p, slot);
             if ([dims containsObject:@0]) continue;
-            const auto type = metal::storage_type(DType(p.input_dtype(input)));
+            const MPSDataType type = metal::storage_type(DType(p.input_dtype(input)));
             if (type == MPSDataTypeInvalid) throw std::invalid_argument("Metal dtype unavailable in " + key.op);
             inputs[slot] = [graph placeholderWithShape:dims dataType:type name:nil];
             feeds[inputs[slot]] = [[MPSGraphShapedType alloc] initWithShape:dims dataType:type];
         }
         MPSGraphTensor* samples = nil;
         if (has_samples) {
-            auto dims = metal::shape(p);
+            metal::Shape dims = metal::shape(p);
             samples = [graph placeholderWithShape:dims dataType:MPSDataTypeFloat32 name:nil];
             feeds[samples] = [[MPSGraphShapedType alloc] initWithShape:dims dataType:MPSDataTypeFloat32];
         }
-        auto* result = metal::lower(graph, key.op, inputs, p, samples);
+        metal::Tensor result = metal::lower(graph, key.op, inputs, p, samples);
         if (!result) {
             std::string types;
             for (int i = 0; i < 4; ++i) {
-                const auto input = static_cast<KernelInput>(i);
+                const KernelInput input = static_cast<KernelInput>(i);
                 if (p.input_rank(input) < 0) continue;
                 if (!types.empty()) types += ", ";
                 types += dtype_name(DType(p.input_dtype(input)));
@@ -103,7 +103,7 @@ struct Plan {
             throw std::invalid_argument("Metal does not implement " + key.op + "(" + types + ") -> " +
                                         dtype_name(DType(p.output_dtype())));
         }
-        const auto type = metal::storage_type(DType(p.output_dtype()));
+        const MPSDataType type = metal::storage_type(DType(p.output_dtype()));
         if (type == MPSDataTypeInvalid) throw std::invalid_argument("Metal output dtype unavailable in " + key.op);
         if (result.dataType != type) result = [graph castTensor:result toType:type name:nil];
         result = [graph reshapeTensor:result withShape:metal::storage_shape(p) name:nil];
@@ -117,7 +117,7 @@ struct Plan {
                 slots.at(count++) = -1;
                 continue;
             }
-            const auto position = std::find(inputs.begin(), inputs.end(), feed);
+            const metal::Operands::iterator position = std::find(inputs.begin(), inputs.end(), feed);
             if (position == inputs.end() || count >= slots.size())
                 throw std::runtime_error("Invalid Metal graph feed mapping");
             slots[count++] = int(position - inputs.begin());
@@ -192,7 +192,7 @@ public:
     void encoded() {
         // Bound the live command buffer and submit useful work during long
         // device-only graphs. Host access flushes any partially filled batch.
-        const auto& binding = detail::stream_binding(Backend::Metal);
+        const detail::StreamBinding& binding = detail::stream_binding(Backend::Metal);
         ++queued_;
         if (binding.stream && !binding.asynchronous) synchronize();
         else if (queued_ >= 32) submit();
@@ -227,7 +227,7 @@ public:
 MetalContext& context() { static MetalContext instance; return instance; }
 
 void validate_shape(const BufferPtr& buffer, int rank, const KernelParams& p, int slot) {
-    const auto id = static_cast<KernelInput>(slot);
+    const KernelInput id = static_cast<KernelInput>(slot);
     size_t count = 1;
     for (int dim = rank-1; dim >= 0; --dim) {
         const int extent = slot < 0 ? p.output_shape(dim) : p.input_shape(id,dim);
@@ -239,11 +239,11 @@ void validate_shape(const BufferPtr& buffer, int rank, const KernelParams& p, in
 }
 
 MPSGraphTensorData* tensor_data(const BufferPtr& buffer, MPSShape* dims) {
-    const auto& owner = storage_for(buffer);
-    const auto type = metal::storage_type(buffer->dtype);
-    const auto offset = offset_for(buffer, owner);
+    const MetalBuffer& owner = storage_for(buffer);
+    const MPSDataType type = metal::storage_type(buffer->dtype);
+    const size_t offset = offset_for(buffer, owner);
     if (!offset) return [[MPSGraphTensorData alloc] initWithMTLBuffer:owner.storage shape:dims dataType:type];
-    auto* descriptor = [MPSNDArrayDescriptor descriptorWithDataType:type shape:dims];
+    MPSNDArrayDescriptor* descriptor = [MPSNDArrayDescriptor descriptorWithDataType:type shape:dims];
     MPSNDArray* array = [[MPSNDArray alloc] initWithBuffer:owner.storage offset:offset descriptor:descriptor];
     return [[MPSGraphTensorData alloc] initWithMPSNDArray:array];
 }
@@ -258,7 +258,7 @@ struct MetalStream final : detail::StreamState {
     MetalStream() : StreamState(Backend::Metal, 0) {}
     std::shared_ptr<detail::EventState> record() override {
         @autoreleasepool {
-            auto& state = context();
+            MetalContext& state = context();
             std::lock_guard<std::mutex> lock(state.mutex);
             return std::make_shared<MetalEvent>(state.submit());
         }
@@ -267,13 +267,13 @@ struct MetalStream final : detail::StreamState {
         // All Metal submissions use the same ordered command queue.
     }
     bool ready() const override {
-        auto& state = context();
+        MetalContext& state = context();
         std::lock_guard<std::mutex> lock(state.mutex);
         return state.ready();
     }
     void synchronize() const override {
         @autoreleasepool {
-            auto& state = context();
+            MetalContext& state = context();
             std::lock_guard<std::mutex> lock(state.mutex);
             state.synchronize();
         }
@@ -282,7 +282,7 @@ struct MetalStream final : detail::StreamState {
 } // namespace
 
 bool available_metal() {
-    auto device = context().device;
+    id<MTLDevice> device = context().device;
     return device && device.hasUnifiedMemory && [device supportsFamily:MTLGPUFamilyApple7];
 }
 int allocation_device_metal() {
@@ -292,13 +292,13 @@ int allocation_device_metal() {
 std::vector<DeviceInfo> devices_metal() {
     @autoreleasepool {
         if (!available_metal()) return {};
-        const auto device = context().device;
+        const id<MTLDevice> device = context().device;
         return {{Backend::Metal, 0, device.name.UTF8String, device.recommendedMaxWorkingSetSize}};
     }
 }
 MemoryInfo memory_info_metal() {
     allocation_device_metal();
-    const auto device = context().device;
+    const id<MTLDevice> device = context().device;
     const size_t budget = device.recommendedMaxWorkingSetSize, used = device.currentAllocatedSize;
     return {budget, budget > used ? budget - used : 0};
 }
@@ -309,10 +309,10 @@ BufferPtr allocate_metal(size_t count, DType dtype) {
 void clear_metal(const BufferPtr& buffer) {
     if (!buffer->bytes) return;
     @autoreleasepool {
-        auto& state = context();
+        MetalContext& state = context();
         std::lock_guard<std::mutex> lock(state.mutex);
-        const auto& owner = storage_for(buffer);
-        auto encoder = [state.buffer() blitCommandEncoder];
+        const MetalBuffer& owner = storage_for(buffer);
+        id<MTLBlitCommandEncoder> encoder = [state.buffer() blitCommandEncoder];
         [encoder fillBuffer:owner.storage range:NSMakeRange(offset_for(buffer, owner), buffer->bytes) value:0];
         [encoder endEncoding];
         state.encoded();
@@ -322,7 +322,7 @@ void upload_raw_metal(const BufferPtr& buffer, const std::vector<uint8_t>& value
     storage_for(buffer);
     if (values.empty()) return;
     @autoreleasepool {
-        auto& state = context();
+        MetalContext& state = context();
         std::lock_guard<std::mutex> lock(state.mutex);
         state.synchronize();
         std::memcpy(buffer->raw_pointer(), values.data(), values.size());
@@ -333,7 +333,7 @@ std::vector<uint8_t> download_raw_metal(const BufferPtr& buffer) {
     std::vector<uint8_t> bytes(buffer->bytes);
     if (bytes.empty()) return bytes;
     @autoreleasepool {
-        auto& state = context();
+        MetalContext& state = context();
         std::lock_guard<std::mutex> lock(state.mutex);
         state.synchronize();
         std::memcpy(bytes.data(), buffer->raw_pointer(), bytes.size());
@@ -360,8 +360,8 @@ void dispatch_metal(const std::string& op, const BufferPtr& output,
         throw std::invalid_argument("Metal dispatch shape or input count mismatch");
     validate_shape(output,p.output_rank(),p,-1);
     for (size_t slot = 0; slot < 4; ++slot) {
-        const auto id = static_cast<KernelInput>(slot);
-        const auto present = slot < inputs.size() && bool(inputs[slot]);
+        const KernelInput id = static_cast<KernelInput>(slot);
+        const bool present = slot < inputs.size() && bool(inputs[slot]);
         if (present != (p.input_rank(id) >= 0) || p.input_rank(id) > 8)
             throw std::invalid_argument("Metal input descriptor does not match the operand");
         if (present) {
@@ -373,21 +373,21 @@ void dispatch_metal(const std::string& op, const BufferPtr& output,
     }
     if (!output->bytes) return;
     @autoreleasepool {
-        auto distribution = random_operation(op) ? distribution_for(op,p) : nil;
+        MPSMatrixRandomDistributionDescriptor* distribution = random_operation(op) ? distribution_for(op,p) : nil;
         const bool direct = distribution && output->dtype == DType::Float32 && op != "dropout";
         BufferPtr samples;
         if (distribution && !direct)
             samples = backend_workspace(Backend::Metal,checked_memory_mul(output->count,sizeof(float)));
-        auto& state = context();
+        MetalContext& state = context();
         std::lock_guard<std::mutex> lock(state.mutex);
         if (distribution) {
-            const auto& target = direct ? output : samples;
-            const auto& storage = storage_for(target);
-            auto vector = [MPSVectorDescriptor vectorDescriptorWithLength:output->count dataType:MPSDataTypeFloat32];
-            auto dest = [[MPSVector alloc] initWithBuffer:storage.storage offset:offset_for(target,storage) descriptor:vector];
+            const BufferPtr& target = direct ? output : samples;
+            const MetalBuffer& storage = storage_for(target);
+            MPSVectorDescriptor* vector = [MPSVectorDescriptor vectorDescriptorWithLength:output->count dataType:MPSDataTypeFloat32];
+            MPSVector* dest = [[MPSVector alloc] initWithBuffer:storage.storage offset:offset_for(target,storage) descriptor:vector];
             const uint64_t seed = uint32_t(p.attribute(operator_attr::random::kSeed)) |
                 (uint64_t(uint32_t(p.attribute(operator_attr::random::kStreamOffset))) << 32);
-            auto draw = [[MPSMatrixRandomPhilox alloc] initWithDevice:state.device destinationDataType:MPSDataTypeFloat32
+            MPSMatrixRandomPhilox* draw = [[MPSMatrixRandomPhilox alloc] initWithDevice:state.device destinationDataType:MPSDataTypeFloat32
                                                                seed:seed distributionDescriptor:distribution];
             if (!dest || !draw) throw AllocationFailure("Cannot create Metal random generator or destination");
             [draw encodeToCommandBuffer:state.buffer() destinationVector:dest];
@@ -398,16 +398,16 @@ void dispatch_metal(const std::string& op, const BufferPtr& output,
         }
         if ((op == "copy" || op == "reshape" || op == "squeeze" || op == "unsqueeze") &&
             !inputs.empty() && inputs[0]->dtype == output->dtype && inputs[0]->bytes == output->bytes) {
-            const auto& from = storage_for(inputs[0]);
-            const auto& to = storage_for(output);
+            const MetalBuffer& from = storage_for(inputs[0]);
+            const MetalBuffer& to = storage_for(output);
             const size_t source = offset_for(inputs[0], from), destination = offset_for(output, to);
             if (from.storage == to.storage && source == destination) return;
-            const auto separation = source < destination ? destination-source : source-destination;
+            const size_t separation = source < destination ? destination-source : source-destination;
             const bool overlap = from.storage == to.storage && separation < output->bytes;
             id<MTLBuffer> scratch = overlap
                 ? [state.device newBufferWithLength:output->bytes options:MTLResourceStorageModePrivate] : nil;
             if (overlap && !scratch) throw AllocationFailure("Cannot allocate an overlapping Metal copy");
-            auto encoder = [state.buffer() blitCommandEncoder];
+            id<MTLBlitCommandEncoder> encoder = [state.buffer() blitCommandEncoder];
             if (scratch) {
                 [encoder copyFromBuffer:from.storage sourceOffset:source toBuffer:scratch destinationOffset:0 size:output->bytes];
                 [encoder copyFromBuffer:scratch sourceOffset:0 toBuffer:to.storage destinationOffset:destination size:output->bytes];
@@ -417,7 +417,7 @@ void dispatch_metal(const std::string& op, const BufferPtr& output,
             }
             [encoder endEncoding];
         } else {
-            const auto& plan = state.plan(op, p, samples != nullptr);
+            const Plan& plan = state.plan(op, p, samples != nullptr);
             NSMutableArray<MPSGraphTensorData*>* feeds = [NSMutableArray arrayWithCapacity:plan.count];
             for (size_t i = 0; i < plan.count; ++i) {
                 const int slot = plan.slots[i];

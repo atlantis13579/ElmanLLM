@@ -46,7 +46,7 @@ void launch_low_attention_sum_cuda(uint32_t* output, const uint32_t* input, cons
         check_cuda_execution(cudaMemsetAsync(output, 0, size_t(rows) * sizeof(float), current_cuda_stream()), "attention empty reduction");
         return;
     }
-    auto power = [](int value) { int n = 1; while (n <= value / 2 && n < 512) n *= 2; return n; };
+    int (*const power)(int) = [](int value) { int n = 1; while (n <= value / 2 && n < 512) n *= 2; return n; };
     const bool vectorized = r.fastest && r.reduced_blocks == 1 && length > 128;
     const int output_vector = r.fastest ? 1 : r.inner % 4 == 0 ? 4 : r.inner % 2 == 0 ? 2 : 1;
     const int limit = 512 / output_vector;

@@ -11,7 +11,7 @@ namespace elman {
 enum class IntegerMatrix { None, Matmul, Bmm, Linear, PackedLinear, Addmm };
 
 inline IntegerMatrix integer_matrix_operation(const std::string& name, const KernelParams& p) {
-    const auto dtype = DType(p.output_dtype());
+    const DType dtype = DType(p.output_dtype());
     if (!is_standard_integer(dtype) || dtype == DType::Bool) return IntegerMatrix::None;
     IntegerMatrix operation = IntegerMatrix::None;
     if (name == "matmul") operation = IntegerMatrix::Matmul;
@@ -20,7 +20,7 @@ inline IntegerMatrix integer_matrix_operation(const std::string& name, const Ker
     else if (name == "packed_linear") operation = IntegerMatrix::PackedLinear;
     else if (name == "addmm") operation = IntegerMatrix::Addmm;
     // Keep the established mixed-dtype Int32 raw ABI on its original kernels.
-    if (dtype == DType::Int32) for (auto input : {KernelInput::A, KernelInput::B, KernelInput::C})
+    if (dtype == DType::Int32) for (KernelInput input : {KernelInput::A, KernelInput::B, KernelInput::C})
         if (p.input_rank(input) >= 0 && p.input_dtype(input) != int(dtype)) return IntegerMatrix::None;
     return operation;
 }

@@ -20,7 +20,7 @@ ELMAN_PACKED_HD inline int packed_integer_load(const void* input, uint64_t index
     const unsigned bits = packed_integer_bits(dtype);
     const uint64_t start = index * bits;
     const unsigned shift = unsigned(start % 8);
-    const auto* bytes = static_cast<const uint8_t*>(input);
+    const uint8_t* bytes = static_cast<const uint8_t*>(input);
     unsigned code = unsigned(bytes[start / 8]) >> shift;
     if (shift + bits > 8) code |= unsigned(bytes[start / 8 + 1]) << (8 - shift);
     code &= (1u << bits) - 1u;

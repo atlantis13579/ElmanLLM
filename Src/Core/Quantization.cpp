@@ -11,7 +11,7 @@ void require(bool valid, const char* message) {
     if (!valid) throw std::invalid_argument(message);
 }
 Tensor allocate(const Shape& shape, DType dtype, Backend backend) {
-    auto node = std::make_shared<TensorNode>();
+    std::shared_ptr<TensorNode> node = std::make_shared<TensorNode>();
     node->shape = shape;
     node->value = backend_allocate(backend, shape_element_count(shape), dtype);
     return Tensor(node);
@@ -19,7 +19,7 @@ Tensor allocate(const Shape& shape, DType dtype, Backend backend) {
 Shape metadata_shape(const Shape& shape, int group_size) {
     require(group_size > 0, "Quantization group size must be positive");
     const int columns = shape.empty() ? 1 : shape.back();
-    const auto rows = shape.empty() ? 1 : shape_element_count(Shape(shape.begin(), shape.end() - 1));
+    const size_t rows = shape.empty() ? 1 : shape_element_count(Shape(shape.begin(), shape.end() - 1));
     const int groups = int((int64_t(columns) + group_size - 1) / group_size);
     require(rows <= size_t(std::numeric_limits<int>::max()), "Quantization row count exceeds Int32 indexing");
     return {int(rows), groups};
@@ -33,7 +33,7 @@ void metadata_dimensions(const Tensor& value, const Shape& target) {
 }
 std::vector<int64_t> zero_values(const Tensor& tensor) {
     if (tensor.dtype() == DType::Int64) return tensor.int64_data();
-    const auto values = tensor.int_data();
+    const std::vector<int32_t> values = tensor.int_data();
     return std::vector<int64_t>(values.begin(), values.end());
 }
 }
@@ -52,7 +52,7 @@ void QuantizedTensor::validate() const {
             "Quantization metadata backend differs from its codes");
     require(!codes_.requires_grad() && !scales_.requires_grad() && !zero_points_.requires_grad(),
             "Quantized values and metadata do not carry differentiable state");
-    const auto target = metadata_shape(codes_.shape(), group_size_);
+    const Shape target = metadata_shape(codes_.shape(), group_size_);
     metadata_dimensions(scales_, target);
     metadata_dimensions(zero_points_, target);
     // Public mutations increment buffer versions. Revalidate changed metadata,
@@ -76,7 +76,7 @@ void QuantizedTensor::validate() const {
 QuantizedTensor QuantizedTensor::quantize(const Tensor& input, DType dtype, const Tensor& scales,
                                           const Tensor& zero_points, int group_size) {
     require(is_arithmetic_float(input.dtype()), "Quantization requires real floating input");
-    auto codes = allocate(input.shape(), dtype, input.backend());
+    Tensor codes = allocate(input.shape(), dtype, input.backend());
     QuantizedTensor result(codes, scales, zero_points, group_size);
     dispatch_tensor_into("affine_quantize", codes, {input, scales, zero_points}, {group_size});
     return result;
@@ -100,7 +100,7 @@ Tensor QuantizedTensor::embedding(const Tensor& indices, DType dtype) const {
     require(indices.dtype() == DType::Int32 || indices.dtype() == DType::Int64, "Quantized embedding indices require integers");
     validate();
     for (int64_t id : zero_values(indices)) require(id >= 0 && id < shape()[0], "Quantized embedding index out of range");
-    auto result_shape = indices.shape();
+    Shape result_shape = indices.shape();
     result_shape.push_back(shape()[1]);
     return dispatch_tensor("affine_embedding", result_shape, {codes_, scales_, zero_points_, indices}, {group_size_}, dtype);
 }
@@ -127,18 +127,18 @@ Tensor QuantizedTensor::packed_linear(const Tensor& input, const std::vector<int
 }
 QuantizedTensor QuantizedTensor::concat_rows(const std::vector<QuantizedTensor>& values) {
     require(!values.empty() && values[0].shape().size() == 2, "Quantized row concatenation requires matrices");
-    const auto& first = values[0];
+    const QuantizedTensor& first = values[0];
     std::vector<Tensor> codes, scales, zeros;
     bool constant_zero = first.zero_points_.numel() == 1;
     int64_t zero = constant_zero ? zero_values(first.zero_points_)[0] : 0;
-    for (const auto& value : values) {
+    for (const QuantizedTensor& value : values) {
         value.validate();
         require(value.shape().size() == 2 && value.shape()[1] == first.shape()[1] && value.backend() == first.backend() &&
                 value.storage_dtype() == first.storage_dtype() && value.group_size_ == first.group_size_ &&
                 value.scales_.dtype() == first.scales_.dtype() && value.zero_points_.dtype() == first.zero_points_.dtype(),
                 "Quantized row concatenation metadata mismatch");
         codes.push_back(value.codes_);
-        const auto target = metadata_shape(value.shape(), value.group_size_);
+        const Shape target = metadata_shape(value.shape(), value.group_size_);
         scales.push_back(expand(value.scales_, target));
         zeros.push_back(value.zero_points_);
         constant_zero = constant_zero && value.zero_points_.numel() == 1 && zero_values(value.zero_points_)[0] == zero;
@@ -160,7 +160,7 @@ QuantizedTensor quantized_mul(const QuantizedTensor& a, const QuantizedTensor& b
 }
 QuantizedTensor quantized_relu(const QuantizedTensor& input) {
     input.validate();
-    auto codes = dispatch_tensor("affine_relu", input.shape(), {input.codes(), input.scales(), input.zero_points()},
+    Tensor codes = dispatch_tensor("affine_relu", input.shape(), {input.codes(), input.scales(), input.zero_points()},
                                   {input.group_size()}, input.storage_dtype());
     return QuantizedTensor(codes, input.scales(), input.zero_points(), input.group_size());
 }

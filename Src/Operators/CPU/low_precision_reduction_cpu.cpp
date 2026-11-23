@@ -29,7 +29,7 @@ float low_cpu_reduction_value(LowPrecisionReduction op, int i, const uint32_t* a
 }
 void store_low_reduction(uint32_t* output, int index, float value, DType dtype) {
     if (dtype == DType::Float32) { reinterpret_cast<float*>(output)[index] = value; return; }
-    auto* bytes = reinterpret_cast<uint8_t*>(output);
+    uint8_t* bytes = reinterpret_cast<uint8_t*>(output);
     const uint8_t code = low_precision_encode(value, dtype);
     if (dtype != DType::Float4E2M1FN) bytes[index] = code;
     else {

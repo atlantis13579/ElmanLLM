@@ -18,6 +18,24 @@ constexpr uint64_t hash_offset = 14695981039346656037ull;
 constexpr uint64_t hash_prime = 1099511628211ull;
 constexpr char magic[8] = {'E', 'L', 'M', 'A', 'N', '0', '1', '\0'};
 
+bool matches_model_definition(const Model& model, const Json& definition, const std::string& stored) {
+    const std::string current = definition.dump(0);
+    if (stored == current) return true;
+    if (model.architecture() != "spatial_policy_value") return false;
+
+    // This fully convolutional model has no parameters or optimizer slots indexed by height or width.
+    Json::Object saved = Json::parse(stored).object();
+    const Json::Array& shape = saved.at("input_shape").array();
+    const Json::Array& expected = definition.at("input_shape").array();
+    if (shape.size() != 3 || expected.size() != 3 || shape[0].integer() != expected[0].integer()) return false;
+    const int height = shape[1].integer(), width = shape[2].integer();
+    if (height < 1 || width < 1 ||
+        int64_t(height) * width + definition.at("global_actions").integer() + 1 > std::numeric_limits<int>::max())
+        return false;
+    saved.at("input_shape") = definition.at("input_shape");
+    return Json(std::move(saved)).dump(0) == current;
+}
+
 class Writer {
 public:
     explicit Writer(const std::string& path) : out_(path, std::ios::binary) {
@@ -163,7 +181,7 @@ private:
 
 void finite_parameter(const Tensor& value) {
     if (is_complex(value.dtype())) {
-        for (const auto z : value.complex_data()) if (!std::isfinite(z.real()) || !std::isfinite(z.imag()))
+        for (const std::complex<double> z : value.complex_data()) if (!std::isfinite(z.real()) || !std::isfinite(z.imag()))
             throw std::runtime_error("Non-finite complex checkpoint parameter");
     } else if (value.dtype()==DType::Float64) {
         for (double x:value.double_data()) if (!std::isfinite(x)) throw std::runtime_error("Non-finite checkpoint parameter");
@@ -174,7 +192,7 @@ void tensor_moment(const Tensor& moment,const Tensor& value,DType dtype,bool sec
     if (!moment.defined() || moment.dtype()!=dtype || moment.shape()!=value.shape() ||
         moment.backend()!=value.backend() || moment.requires_grad()) throw std::runtime_error("Checkpoint optimizer moment descriptor mismatch");
     if (is_complex(dtype)) {
-        for (const auto z : moment.complex_data())
+        for (const std::complex<double> z : moment.complex_data())
             if (!std::isfinite(z.real()) || !std::isfinite(z.imag()) || (second && (z.real() < 0. || z.imag() < 0.)))
                 throw std::runtime_error("Invalid complex checkpoint optimizer moment");
     } else if (dtype==DType::Float64) {
@@ -199,10 +217,10 @@ void save_checkpoint(const std::string& path, const Model& model, const Json& de
     if (state.step > uint64_t(std::numeric_limits<int64_t>::max()) ||
         (state.optimizer != "sgd" && state.optimizer != "adam" && state.optimizer != "adamw"))
         throw std::runtime_error("Invalid checkpoint optimizer metadata");
-    const auto buffers = model.checkpoint_buffers();
+    const std::vector<Parameter> buffers = model.checkpoint_buffers();
     if (buffers.size() > std::numeric_limits<uint32_t>::max()) throw std::runtime_error("Too many checkpoint buffers");
     for (size_t i = 0; i < count; ++i) {
-        const auto& value = model.parameters()[i].value;
+        const Tensor& value = model.parameters()[i].value;
         const bool parameter_low=is_low_precision_float(value.dtype());
         const bool resident = state.uses_resident_float32(value);
         if (!is_arithmetic_float(value.dtype()) && !is_complex(value.dtype()) && !parameter_low) throw std::runtime_error("Checkpoint requires floating parameters");
@@ -271,7 +289,7 @@ void save_checkpoint(const std::string& path, const Model& model, const Json& de
         writer.string(state.optimizer);
         writer.u32(static_cast<uint32_t>(model.parameters().size()));
         for (size_t i = 0; i < model.parameters().size(); ++i) {
-            const auto& parameter = model.parameters()[i];
+            const Parameter& parameter = model.parameters()[i];
             writer.string(parameter.name);
             writer.u32(static_cast<uint32_t>(parameter.value.shape().size()));
             for (int dim : parameter.value.shape()) writer.u32(static_cast<uint32_t>(dim));
@@ -302,7 +320,7 @@ void save_checkpoint(const std::string& path, const Model& model, const Json& de
         }
         if (!buffers.empty()) {
             writer.u32(static_cast<uint32_t>(buffers.size()));
-            for (const auto& buffer : buffers) {
+            for (const Parameter& buffer : buffers) {
                 writer.string(buffer.name);
                 writer.u32(static_cast<uint32_t>(buffer.value.dtype()));
                 writer.u32(static_cast<uint32_t>(buffer.value.shape().size()));
@@ -311,7 +329,7 @@ void save_checkpoint(const std::string& path, const Model& model, const Json& de
             }
         }
         if (progress) {
-            const auto& sampler = progress->sampler;
+            const SamplerState& sampler = progress->sampler;
             if (progress->configuration.empty() || sampler.offset >= sampler.order.size() || !sampler.random_state)
                 throw std::invalid_argument("Invalid training progress");
             writer.string(progress->configuration);
@@ -336,15 +354,15 @@ void load_checkpoint(const std::string& path, Model& model, const Json& definiti
                      TrainingState* state, TrainingProgress* progress, size_t expected_samples) {
     Reader reader(path);
     for (uint8_t c : magic) if (reader.byte() != c) throw std::runtime_error("Invalid checkpoint signature");
-    const auto envelope = reader.u32();
+    const uint32_t envelope = reader.u32();
     const bool has_buffers = envelope == 7;
-    const auto version = envelope >= 5 && envelope <= 7 ? reader.u32() : envelope;
+    const uint32_t version = envelope >= 5 && envelope <= 7 ? reader.u32() : envelope;
     if (version < 1 || version > 4) throw std::runtime_error("Unsupported checkpoint version");
     const uint32_t progress_flag = has_buffers ? reader.u32() : uint32_t(envelope == 5 || envelope == 6);
     if (progress_flag > 1) throw std::runtime_error("Invalid checkpoint training progress flag");
     const bool has_progress = progress_flag != 0;
     if (reader.string() != model.name()) throw std::runtime_error("Checkpoint model name mismatch");
-    if (reader.string() != definition.dump(0)) throw std::runtime_error("Checkpoint model definition mismatch");
+    if (!matches_model_definition(model, definition, reader.string())) throw std::runtime_error("Checkpoint model definition mismatch");
     TrainingState loaded;
     loaded.resident_float32 = state && state->resident_float32;
     loaded.step = reader.u64();
@@ -353,11 +371,11 @@ void load_checkpoint(const std::string& path, Model& model, const Json& definiti
     if (loaded.optimizer != "adam" && loaded.optimizer != "adamw" && loaded.optimizer != "sgd") throw std::runtime_error("Invalid checkpoint optimizer");
     if (reader.u32() != model.parameters().size()) throw std::runtime_error("Checkpoint parameter count mismatch");
     std::vector<std::vector<uint8_t>> parameters;
-    for (const auto& parameter : model.parameters()) {
+    for (const Parameter& parameter : model.parameters()) {
         if (reader.string() != parameter.name) throw std::runtime_error("Checkpoint parameter name mismatch: " + parameter.name);
         if (reader.u32() != parameter.value.shape().size()) throw std::runtime_error("Checkpoint parameter rank mismatch: " + parameter.name);
         for (int dim : parameter.value.shape()) if (reader.u32() != static_cast<uint32_t>(dim)) throw std::runtime_error("Checkpoint parameter shape mismatch: " + parameter.name);
-        const auto dtype = parameter.value.dtype();
+        const DType dtype = parameter.value.dtype();
         const bool low=is_low_precision_float(dtype);
         if ((!is_arithmetic_float(dtype)&&!is_complex(dtype)&&!low) || (version >= 2 && reader.u32() != uint32_t(dtype)) ||
             (version == 1 && dtype == DType::Float64) || (version<3&&low) || (version<4&&is_complex(dtype)))
@@ -376,13 +394,13 @@ void load_checkpoint(const std::string& path, Model& model, const Json& definiti
         finite_parameter(proposed);
         loaded.first_moment_float.emplace_back();loaded.second_moment_float.emplace_back();loaded.sgd_buffer_initialized.push_back(0);
         if (is_complex(dtype)) {
-            const auto initialized = reader.u32();
+            const uint32_t initialized = reader.u32();
             if (initialized > 1 || (loaded.optimizer != "sgd" && initialized))
                 throw std::runtime_error("Invalid complex checkpoint SGD history");
             loaded.sgd_buffer_initialized.back() = uint8_t(initialized);
-            const auto bytes = dtype_storage_bytes(dtype, parameter.value.numel());
-            auto first = Tensor::from_raw(parameter.value.shape(), dtype, reader.raw_values(bytes), parameter.value.backend());
-            auto second = Tensor::from_raw(parameter.value.shape(), dtype, reader.raw_values(bytes), parameter.value.backend());
+            const size_t bytes = dtype_storage_bytes(dtype, parameter.value.numel());
+            Tensor first = Tensor::from_raw(parameter.value.shape(), dtype, reader.raw_values(bytes), parameter.value.backend());
+            Tensor second = Tensor::from_raw(parameter.value.shape(), dtype, reader.raw_values(bytes), parameter.value.backend());
             tensor_moment(first, parameter.value, dtype, false);
             tensor_moment(second, parameter.value, dtype, true);
             loaded.first_moment_double.push_back(std::move(first));
@@ -392,23 +410,23 @@ void load_checkpoint(const std::string& path, Model& model, const Json& definiti
         } else if (dtype == DType::Float64) {
             loaded.first_moment.emplace_back();
             loaded.second_moment.emplace_back();
-            const auto first = reader.double_values(parameter.value.numel()), second = reader.double_values(parameter.value.numel());
+            const std::vector<double> first = reader.double_values(parameter.value.numel()), second = reader.double_values(parameter.value.numel());
             for (double x : second) if (!(x >= 0.)) throw std::runtime_error("Invalid checkpoint second moment");
             loaded.first_moment_double.push_back(Tensor::from_double_data(parameter.value.shape(), first, parameter.value.backend()));
             loaded.second_moment_double.push_back(Tensor::from_double_data(parameter.value.shape(), second, parameter.value.backend()));
         } else if (low) {
-            const auto initialized=reader.u32();
+            const uint32_t initialized=reader.u32();
             if (initialized>1 || (loaded.optimizer!="sgd"&&initialized)) throw std::runtime_error("Invalid checkpoint SGD history flag");
             loaded.sgd_buffer_initialized.back()=uint8_t(initialized);
-            auto first=reader.values(parameter.value.numel()),second=reader.values(parameter.value.numel());
+            std::vector<float> first=reader.values(parameter.value.numel()),second=reader.values(parameter.value.numel());
             for(float x:second)if(x<0.f)throw std::runtime_error("Invalid checkpoint second moment");
             loaded.first_moment_float.back()=Tensor::from_data(parameter.value.shape(),first,parameter.value.backend());
             loaded.second_moment_float.back()=Tensor::from_data(parameter.value.shape(),second,parameter.value.backend());
             loaded.first_moment.emplace_back();loaded.second_moment.emplace_back();
             loaded.first_moment_double.emplace_back();loaded.second_moment_double.emplace_back();
         } else if (loaded.uses_resident_float32(parameter.value)) {
-            const auto first = reader.values(parameter.value.numel());
-            const auto second = reader.values(parameter.value.numel());
+            const std::vector<float> first = reader.values(parameter.value.numel());
+            const std::vector<float> second = reader.values(parameter.value.numel());
             for (float x : second) if (x < 0.f) throw std::runtime_error("Invalid checkpoint second moment");
             DeviceScope owner(parameter.value.backend(), parameter.value.device());
             loaded.first_moment_float.back() = Tensor::from_data(parameter.value.shape(), first, parameter.value.backend());
@@ -424,12 +442,12 @@ void load_checkpoint(const std::string& path, Model& model, const Json& definiti
             loaded.second_moment_double.emplace_back();
         }
     }
-    auto buffers = model.checkpoint_buffers();
+    std::vector<Parameter> buffers = model.checkpoint_buffers();
     std::vector<std::vector<uint8_t>> buffer_values;
     if (has_buffers) {
         if (reader.u32() != buffers.size()) throw std::runtime_error("Checkpoint buffer count mismatch");
-        for (const auto& buffer : buffers) {
-            const auto& tensor = buffer.value;
+        for (const Parameter& buffer : buffers) {
+            const Tensor& tensor = buffer.value;
             if (reader.string() != buffer.name || reader.u32() != uint32_t(tensor.dtype()) || reader.u32() != tensor.shape().size())
                 throw std::runtime_error("Checkpoint buffer descriptor mismatch: " + buffer.name);
             for (int dim : tensor.shape()) if (reader.u32() != uint32_t(dim))
@@ -442,7 +460,7 @@ void load_checkpoint(const std::string& path, Model& model, const Json& definiti
     TrainingProgress loaded_progress;
     loaded_progress.attempted_steps = loaded.step;
     if (has_progress) {
-        auto& sampler = loaded_progress.sampler;
+        SamplerState& sampler = loaded_progress.sampler;
         loaded_progress.configuration = reader.string();
         const uint64_t count = reader.u64();
         const uint64_t offset = reader.u64();
@@ -471,7 +489,7 @@ void load_checkpoint(const std::string& path, Model& model, const Json& definiti
     }
     loaded_progress.checksum = reader.finish();
     for (size_t i = 0; i < parameters.size(); ++i) {
-        auto& value = model.parameters()[i].value;
+        Tensor& value = model.parameters()[i].value;
         value.assign_raw(parameters[i]);
     }
     for (size_t i = 0; i < buffer_values.size(); ++i) buffers[i].value.assign_raw(buffer_values[i]);

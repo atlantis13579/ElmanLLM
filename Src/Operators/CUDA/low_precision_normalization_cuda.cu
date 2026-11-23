@@ -52,7 +52,7 @@ __global__ void low_batch_vertical_finish_kernel(float* stats, float* coefficien
     const int row = int(blockIdx.x), thread = int(threadIdx.x);
     LowBatchPartial value{};
     for (int part = thread; part < parts; part += int(blockDim.x)) {
-        const auto other = partials[row * parts + part];
+        const LowBatchPartial other = partials[row * parts + part];
         if (!backward) value.moments = low_batch_vertical_merge(value.moments, other.moments);
         value.dot += other.dot; value.total += other.total;
     }
@@ -229,6 +229,23 @@ __device__ float low_rms_reduce(float value, float* shared, int width) {
     for (int offset = 1; offset < warp_width; offset *= 2) value += __shfl_down_sync(__activemask(), value, offset, warp_width);
     return value;
 }
+struct LowRmsInput {
+    const uint32_t* input;
+    const uint32_t* weight;
+    const uint32_t* gradient;
+    const LowNormLayout& layout;
+    int base;
+    bool product;
+
+    __device__ float operator()(int column) const {
+        const float x = low_norm_value(input, base + column, layout);
+        if (!product) return __fmul_rn(x, x);
+        const float g = low_norm_value(gradient, base + column, layout);
+        const float w = low_norm_value(weight, column, layout);
+        return __fmul_rn(low_norm_round(__fmul_rn(g, w), layout), x);
+    }
+};
+
 __global__ void low_rms_statistics_kernel(float* stats, float* coefficients, const uint32_t* a, const uint32_t* w,
                                           const uint32_t* g, KernelParams p, int width) {
     __shared__ float partial[512];
@@ -240,10 +257,7 @@ __global__ void low_rms_statistics_kernel(float* stats, float* coefficients, con
     for (int pass = 0; pass < 2; ++pass) {
         if (pass && l.mode != 1) break;
         float* values = pass ? products : squares;
-        auto read = [&](int j) {
-            const float x = low_norm_value(a, base + j, l);
-            return pass ? __fmul_rn(low_norm_round(__fmul_rn(low_norm_value(g, base + j, l), low_norm_value(w, j, l)), l), x) : __fmul_rn(x, x);
-        };
+        const LowRmsInput read{a, w, g, l, base, pass != 0};
         if (vectorized) {
             if (shift && thread < 4 && thread >= shift) values[0] += read(thread - shift);
             for (int index = thread * 4 + head; index + 3 < l.width; index += step * 4)
@@ -283,7 +297,7 @@ __global__ void low_norm_result_kernel(uint32_t* output, const uint32_t* a, cons
 }
 void launch_low_precision_normalization_cuda(LowPrecisionNormalization op, uint32_t* output, const uint32_t* a,
                                              const uint32_t* b, const uint32_t* c, const KernelParams& params) {
-    auto p = params;
+    KernelParams p = params;
     p.v[KernelParams::kAttributeSlot + 8] = low_precision_normalization_mode(op, params);
     op = low_precision_normalization_base(op);
     if (!p.output_count()) return;
@@ -294,7 +308,7 @@ void launch_low_precision_normalization_cuda(LowPrecisionNormalization op, uint3
     int batch_height = 1, batch_parts = 1;
     const bool vertical_batch = op == LowPrecisionNormalization::Batch && p.attribute(9) && p.input_stride(KernelInput::A, 1) == 1;
     if (vertical_batch) {
-        auto power = [](int value) { int result = 1; while (result <= value / 2) result *= 2; return result; };
+        int (*const power)(int) = [](int value) { int result = 1; while (result <= value / 2) result *= 2; return result; };
         const int width = std::min(power(rows), 32), count = p.input_shape(KernelInput::A, 0);
         batch_height = std::min(power(count / 16 + int(count % 16 != 0)), 512 / width);
         batch_parts = count ? std::min(1 + (count - 1) / (batch_height * 16), 128) : 1;
@@ -302,9 +316,9 @@ void launch_low_precision_normalization_cuda(LowPrecisionNormalization op, uint3
     }
     const size_t statistics_bytes = checked_memory_mul(size_t(std::max(rows, 1)), 4 * sizeof(float));
     const size_t partial_bytes = vertical_batch ? checked_memory_mul(checked_memory_mul(size_t(rows), size_t(batch_parts)), sizeof(LowBatchPartial)) : 0;
-    auto storage = backend_workspace(Backend::CUDA, checked_memory_add(statistics_bytes, partial_bytes));
-    auto* stats = static_cast<float*>(storage->raw_pointer()); auto* coefficients = stats + size_t(rows) * 2;
-    auto* partials = reinterpret_cast<LowBatchPartial*>(static_cast<uint8_t*>(storage->raw_pointer()) + statistics_bytes);
+    BufferPtr storage = backend_workspace(Backend::CUDA, checked_memory_add(statistics_bytes, partial_bytes));
+    float* stats = static_cast<float*>(storage->raw_pointer()); float* coefficients = stats + size_t(rows) * 2;
+    LowBatchPartial* partials = reinterpret_cast<LowBatchPartial*>(static_cast<uint8_t*>(storage->raw_pointer()) + statistics_bytes);
     if (rows && (op != LowPrecisionNormalization::Batch || p.attribute(9))) {
         int length = 1;
         if (op == LowPrecisionNormalization::Layer || op == LowPrecisionNormalization::Rms)
@@ -320,7 +334,7 @@ void launch_low_precision_normalization_cuda(LowPrecisionNormalization op, uint3
             else if (p.attribute(8) == 1)
                 low_norm_stats_kernel<<<(unsigned(rows) + 127u) / 128u, 128, 0, current_cuda_stream()>>>(stats, coefficients, a, b, c, p, op);
         } else if (op == LowPrecisionNormalization::Rms) {
-            auto power = [](int value) { int n = 1; while (n <= value / 2 && n < 512) n *= 2; return n; };
+            int (*const power)(int) = [](int value) { int n = 1; while (n <= value / 2 && n < 512) n *= 2; return n; };
             const int first = power(length / (length > 128 ? 4 : 1)), second = power(rows);
             int width = std::min(first, 32), height = std::min(second, 512 / width);
             width = std::min(first, 512 / height);

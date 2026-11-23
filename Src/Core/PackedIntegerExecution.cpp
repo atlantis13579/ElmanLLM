@@ -1,4 +1,5 @@
 #include "Operators/packed_integer_cast.h"
+#include "Core/LocalFunction.h"
 #include "Operators/storage_layout.h"
 #include <limits>
 #include <stdexcept>
@@ -28,7 +29,7 @@ BufferPtr convert(const BufferPtr& input, DType dtype, BufferPtr output = {}) {
 }
 void validate_descriptors(const BufferPtr& output, const std::vector<BufferPtr>& inputs, const KernelParams& p) {
     require(inputs.size() <= 4 && p.output_dtype() == int(output->dtype), "Packed operation output descriptor mismatch");
-    auto shape = [&](int rank, const BufferPtr& buffer, int slot, bool is_output) {
+    LocalFunction shape{[&](int rank, const BufferPtr& buffer, int slot, bool is_output) {
         require(rank >= 0 && rank <= 8, "Invalid packed operation rank");
         size_t count = 1, prefix = 1;
         const size_t limit = size_t(std::numeric_limits<int>::max());
@@ -42,11 +43,11 @@ void validate_descriptors(const BufferPtr& output, const std::vector<BufferPtr>&
             prefix *= size_t(front);
         }
         require(count <= limit && count == buffer->count, "Packed operation shape differs from storage");
-    };
+    }};
     shape(p.output_rank(), output, KernelParams::kOutputShapeSlot, true);
     require(p.output_count() == int(output->count), "Packed operation output count mismatch");
     for (int i = 0; i < 4; ++i) {
-        const auto input = KernelInput(i);
+        const KernelInput input = KernelInput(i);
         if (size_t(i) >= inputs.size() || !inputs[i]) {
             require(p.input_rank(input) == -1, "Missing packed operation operand");
             continue;
@@ -60,19 +61,19 @@ void validate_descriptors(const BufferPtr& output, const std::vector<BufferPtr>&
 
 bool execute_packed_integer(const std::string& name, const BufferPtr& output, const std::vector<BufferPtr>& inputs, const KernelParams& p) {
     bool packed = is_packed_integer(output->dtype);
-    for (const auto& input : inputs) packed = packed || (input && is_packed_integer(input->dtype));
+    for (const BufferPtr& input : inputs) packed = packed || (input && is_packed_integer(input->dtype));
     if (!packed) return false;
     if (storage_layout_operation(name, output->dtype) != StorageLayout::None) return false;
     validate_descriptors(output, inputs, p);
     if (name == "cast") {
         validate_packed_integer_cast(output, inputs, p);
-        const auto input = inputs[0];
+        const BufferPtr input = inputs[0];
         if (is_arithmetic_integer(input->dtype) && is_arithmetic_integer(output->dtype)) return false;
         if (is_packed_integer(output->dtype)) {
-            const auto decoded = is_low_precision_float(input->dtype) ? convert(input, DType::Float32) : input;
+            const BufferPtr decoded = is_low_precision_float(input->dtype) ? convert(input, DType::Float32) : input;
             convert(convert(decoded, packed_integer_opmath(output->dtype)), output->dtype, output);
         } else {
-            auto decoded = convert(input, packed_integer_opmath(input->dtype));
+            BufferPtr decoded = convert(input, packed_integer_opmath(input->dtype));
             if (is_low_precision_float(output->dtype)) decoded = convert(decoded, DType::Float32);
             convert(decoded, output->dtype, output);
         }
@@ -93,7 +94,7 @@ bool execute_packed_integer(const std::string& name, const BufferPtr& output, co
     bool found = is_packed_integer(common);
     for (size_t i = 0; i < inputs.size(); ++i) {
         if (!inputs[i]) continue;
-        const auto dtype = inputs[i]->dtype;
+        const DType dtype = inputs[i]->dtype;
         if ((name == "where" && i == 0) || (scatter && i == 1)) {
             require(dtype == (scatter ? DType::Int32 : DType::Bool), "Invalid packed indexing or condition dtype");
             continue;
@@ -123,13 +124,13 @@ bool execute_packed_integer(const std::string& name, const BufferPtr& output, co
     }
     // Int32 opmath preserves exact low-bit arithmetic without floating conversion.
     // Wrap at the final encoding boundary; every temporary remains on its backend.
-    auto native_inputs = inputs;
+    std::vector<BufferPtr> native_inputs = inputs;
     KernelParams native = p;
     for (size_t i = 0; i < inputs.size(); ++i) if (inputs[i] && is_packed_integer(inputs[i]->dtype)) {
         native_inputs[i] = convert(inputs[i], DType::Int32);
         native.v[KernelParams::input_dtype_slot(KernelInput(i))] = int(DType::Int32);
     }
-    const auto destination = is_packed_integer(output->dtype) ? backend_allocate(output->backend, output->count, DType::Int32) : output;
+    const BufferPtr destination = is_packed_integer(output->dtype) ? backend_allocate(output->backend, output->count, DType::Int32) : output;
     native.v[KernelParams::kOutputDTypeSlot] = int(destination->dtype);
     backend_dispatch(name, destination, native_inputs, native);
     if (destination != output) convert(destination, output->dtype, output);

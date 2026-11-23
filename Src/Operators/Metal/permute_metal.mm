@@ -2,9 +2,9 @@
 
 namespace elman::metal {
 Tensor lower_permute(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto a = inputs[0];
+  Tensor a = inputs[0];
   const int rank = p.output_rank();
-  auto* order = [NSMutableArray<NSNumber*> arrayWithCapacity:rank];
+  NSMutableArray<NSNumber*>* order = [NSMutableArray<NSNumber*> arrayWithCapacity:rank];
   for (int i = 0; i < rank; ++i) {
     [order addObject:@(p.attribute(i))];
   }

@@ -6,6 +6,14 @@ namespace elman {
 enum class RowReduction { Sum, Product, Minimum, Maximum };
 
 template <RowReduction operation>
+__device__ inline bool choose_row_extremum(float current, int current_index, float candidate, int candidate_index) {
+  if (isnan(current) || isnan(candidate))
+    return isnan(candidate) && (!isnan(current) || candidate_index < current_index);
+  return (operation == RowReduction::Minimum ? candidate < current : candidate > current) ||
+         (candidate == current && candidate_index > current_index);
+}
+
+template <RowReduction operation>
 __global__ void reduce_contiguous_rows(uint32_t* out, const uint32_t* a, int length, KernelParams p) {
   constexpr int threads = 128;
   constexpr bool sum = operation == RowReduction::Sum;
@@ -15,19 +23,13 @@ __global__ void reduce_contiguous_rows(uint32_t* out, const uint32_t* a, int len
   __shared__ float values[threads];
   [[maybe_unused]] __shared__ int positions[threads];
 
-  [[maybe_unused]] auto choose = [](float current, int current_index, float candidate, int candidate_index) {
-    if (isnan(current) || isnan(candidate))
-      return isnan(candidate) && (!isnan(current) || candidate_index < current_index);
-    return (minimum ? candidate < current : candidate > current) ||
-           (candidate == current && candidate_index > current_index);
-  };
   float value = sum ? 0.f : product ? 1.f : minimum ? EL_INF : -EL_INF;
   [[maybe_unused]] int position = -1;
   for (int i = threadIdx.x; i < length; i += threads) {
     const float x = READ_A(base + i);
     if constexpr (sum) value += x;
     else if constexpr (product) value *= x;
-    else if (choose(value, position, x, i)) { value = x; position = i; }
+    else if (choose_row_extremum<operation>(value, position, x, i)) { value = x; position = i; }
   }
   values[threadIdx.x] = value;
   if constexpr (!sum && !product) positions[threadIdx.x] = position;
@@ -39,7 +41,7 @@ __global__ void reduce_contiguous_rows(uint32_t* out, const uint32_t* a, int len
       else if constexpr (product) value *= other;
       else {
         const int other_position = positions[threadIdx.x + step];
-        if (choose(value, position, other, other_position)) { value = other; position = other_position; }
+        if (choose_row_extremum<operation>(value, position, other, other_position)) { value = other; position = other_position; }
         positions[threadIdx.x] = position;
       }
       values[threadIdx.x] = value;
@@ -51,7 +53,7 @@ __global__ void reduce_contiguous_rows(uint32_t* out, const uint32_t* a, int len
 
 template <RowReduction operation>
 bool try_reduce_contiguous_rows(uint32_t* out, const uint32_t* a, const KernelParams& p) {
-  const auto dtype = DType(p.output_dtype());
+  const DType dtype = DType(p.output_dtype());
   if (!is_compute_float(dtype) || p.input_dtype(KernelInput::A) != p.output_dtype()) return false;
   if constexpr (operation == RowReduction::Sum || operation == RowReduction::Product) {
     if (dtype != DType::Float32) return false;

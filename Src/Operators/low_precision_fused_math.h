@@ -16,7 +16,7 @@ ELMAN_LOW_FUSED_HD inline float low_fused_multiply(float a, float b) {
 }
 ELMAN_LOW_FUSED_HD inline float low_precision_fused_value(LowPrecisionFused op, int i, const uint32_t* a,
                                                           const uint32_t* b, const uint32_t* c, const KernelParams& p) {
-    const auto dtype = DType(p.output_dtype());
+    const DType dtype = DType(p.output_dtype());
     const float x = low_precision_value(a, broadcast_index(i, KernelInput::A, p), dtype);
     const float y = low_precision_value(b, broadcast_index(i, KernelInput::B, p), dtype);
     if (op == LowPrecisionFused::SiluMul) return low_fused_multiply(low_precision_pointwise_value(LowPrecisionPointwise::Silu, x, 0.f, 0.f), y);

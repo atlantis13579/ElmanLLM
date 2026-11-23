@@ -4,8 +4,13 @@
     "path": "../../Models/DeepSeek-R1-Distill-Qwen-1.5B",
     "backend": "cuda"
   },
+  "chat": {
+    "max_new_tokens": 512
+  },
   "http": {
     "host": "127.0.0.1",
-    "port": 8080
+    "port": 8080,
+    "web_root": "../../Web",
+    "cors_origins": ["http://127.0.0.1:8000"]
   }
 }

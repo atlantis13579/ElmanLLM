@@ -28,8 +28,8 @@ inline DType dtype(uint64_t id) {
 
 inline Shape dimensions(const protobuf::Message& descriptor, bool signature = false) {
     Shape shape;
-    for (auto bytes : descriptor.messages(2)) {
-        const auto dimension = protobuf::Message(bytes).integer(1);
+    for (io::Bytes bytes : descriptor.messages(2)) {
+        const uint64_t dimension = protobuf::Message(bytes).integer(1);
         require(dimension <= uint64_t(std::numeric_limits<int>::max()) || (signature && dimension == UINT64_MAX),
                 "Invalid TensorFlow tensor dimension");
         shape.push_back(dimension == UINT64_MAX ? -1 : int(dimension));

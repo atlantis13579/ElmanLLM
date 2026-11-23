@@ -1,4 +1,5 @@
 #include "Serving/GenerationScheduler.h"
+#include "Core/LocalFunction.h"
 #include "Inference/LLM/PagedKVCache.h"
 #include "Inference/LLM/Qwen2PagedGraph.h"
 #include "Core/Execution.h"
@@ -122,14 +123,14 @@ struct GenerationScheduler::Impl {
         require(options.prefix_cache_blocks >= 0 && options.prefix_cache_blocks <= options.cache_blocks &&
                 options.prefix_cache_entries >= 0 && (!options.prefix_cache_blocks || options.prefix_cache_entries > 0),
                 "invalid prefix cache bounds");
-        const auto& c = model.config();
+        const DecoderConfig& c = model.config();
         PagedKVShape shape{c.layers, c.kv_heads, c.head_dim(), 16, options.cache_blocks};
-        auto minimum = plan_qwen_batch(c, model.backend(), model.dtype(), 1, 1, size_t(options.max_context),
+        QwenBatchMemoryPlan minimum = plan_qwen_batch(c, model.backend(), model.dtype(), 1, 1, size_t(options.max_context),
             Qwen2Logits::Last, true, model.tiled_attention_enabled(), 16, model.quantization_workspace_bytes());
         size_t host = checked_memory_add(descriptors, PagedKVPool::metadata_bytes(shape));
         if (options.prefix_cache_blocks) {
             host = checked_memory_add(host, PrefixCache::metadata_bytes(shape,size_t(options.prefix_cache_blocks),size_t(options.prefix_cache_entries)));
-            auto publication = checked_memory_mul(size_t(options.prefix_cache_blocks),2*sizeof(CacheBlock));
+            size_t publication = checked_memory_mul(size_t(options.prefix_cache_blocks),2*sizeof(CacheBlock));
             minimum.host_additional_bytes = checked_memory_add(minimum.host_additional_bytes,publication);
             if (model.backend()==Backend::CPU) minimum.additional_bytes=checked_memory_add(minimum.additional_bytes,publication);
         }
@@ -162,8 +163,8 @@ struct GenerationScheduler::Impl {
     }
     void refresh_locked() {
         if (!pool) return;
-        auto pages=pool->stats();size_t reserved=pages.live;
-        for (auto& row:active) if (!row.session->finished()) {
+        CacheBlockStats pages=pool->stats();size_t reserved=pages.live;
+        for (GenerationScheduler::Impl::Active& row:active) if (!row.session->finished()) {
             size_t allocated=(size_t(row.session->cache_length())+15)/16;
             if (allocated>row.blocks) throw std::logic_error("Scheduler: request exceeded its future quota");
             reserved=checked_memory_add(reserved,row.blocks-allocated);
@@ -175,8 +176,8 @@ struct GenerationScheduler::Impl {
         if (prefixes) counters.prefix=prefixes->stats();
     }
     void complete_active(size_t index, std::exception_ptr failure = {}) {
-        auto& row = active[index];
-        auto output = row.session->result();
+        GenerationScheduler::Impl::Active& row = active[index];
+        GenerationResult output = row.session->result();
         if (failure && !row.session->finished()) output.finish_reason = "error";
         row.state->publish(output, failure ? failure : row.error);
         // publish() detaches the cancellation bridge before releasing the session.
@@ -191,7 +192,7 @@ struct GenerationScheduler::Impl {
     }
     void reap() {
         for (size_t index = 0; index < active.size();) {
-            auto& row = active[index];
+            GenerationScheduler::Impl::Active& row = active[index];
             if (!row.session->finished() && row.state->cancelled.load()) row.session->cancel();
             if (row.session->finished()) complete_active(index);
             else ++index;
@@ -199,7 +200,7 @@ struct GenerationScheduler::Impl {
         // Queued cancellations cannot be held behind a head waiting for quota.
         std::lock_guard<std::mutex> lock(mutex);
         for (size_t index = 0; index < waiting.size();) {
-            auto& row = waiting[index];
+            GenerationScheduler::Impl::Waiting& row = waiting[index];
             if (!row.state->cancelled.load()) { ++index; continue; }
             GenerationResult output; output.finish_reason = "cancelled";
             row.state->publish(output);
@@ -217,8 +218,8 @@ struct GenerationScheduler::Impl {
         // Contiguous cache sessions use the model's single-request memory plan.
         const size_t active_limit = pool ? size_t(options.max_active_requests) : 1;
         while (!counters.closed && !waiting.empty() && active.size() < active_limit) {
-            auto& row = waiting.front();
-            auto fits=[&](int cached) { return row.blocks-size_t(cached/16)<=counters.capacity_blocks-counters.reserved_blocks; };
+            GenerationScheduler::Impl::Waiting& row = waiting.front();
+            LocalFunction fits{[&](int cached) { return row.blocks-size_t(cached/16)<=counters.capacity_blocks-counters.reserved_blocks; }};
             int matched=prefixes ? prefixes->matched_tokens(row.input) : 0;
             while (!fits(matched) && prefixes && prefixes->reclaim_one()) {
                 refresh_locked();matched=prefixes->matched_tokens(row.input);
@@ -228,7 +229,7 @@ struct GenerationScheduler::Impl {
             uint64_t entry = 0;
             int reused = 0;
             try {
-                auto prefix=prefixes ? prefixes->lookup_if_possible(row.input,int(row.input.size())+row.count) : PrefixMatch{};
+                PrefixMatch prefix=prefixes ? prefixes->lookup_if_possible(row.input,int(row.input.size())+row.count) : PrefixMatch{};
                 while (!fits(prefix.tokens) && prefixes && prefixes->reclaim_one()) refresh_locked();
                 if (!fits(prefix.tokens)) break;
                 entry = prefix.entry; reused = prefix.tokens;
@@ -257,7 +258,7 @@ struct GenerationScheduler::Impl {
     }
     std::vector<Active*> select(bool& prefill) {
         bool has_prefill = false, has_decode = false;
-        for (auto& row : active) {
+        for (GenerationScheduler::Impl::Active& row : active) {
             if (row.session->finished() || row.state->cancelled.load()) continue;
             if (row.session->state() == GenerationState::Prefill) has_prefill = true;
             else has_decode = true;
@@ -265,7 +266,7 @@ struct GenerationScheduler::Impl {
         prefill = has_prefill && (!has_decode || next_prefill);
         if (has_prefill && has_decode) next_prefill = !prefill;
         std::vector<Active*> rows;
-        for (auto& row : active) if (!row.session->finished() && !row.state->cancelled.load() &&
+        for (GenerationScheduler::Impl::Active& row : active) if (!row.session->finished() && !row.state->cancelled.load() &&
             (row.session->state() == GenerationState::Prefill) == prefill) rows.push_back(&row);
         uint64_t cursor = prefill ? prefill_cursor : decode_cursor;
         auto start = std::find_if(rows.begin(), rows.end(), [&](Active* row) { return row->state->id > cursor; });
@@ -294,7 +295,7 @@ GenerationScheduler::~GenerationScheduler() {
 }
 GenerationRequest GenerationScheduler::submit(const std::vector<int32_t>& input, const GenerationOptions& options,
                                               const std::function<bool(int32_t)>& on_token) {
-    auto& s = *impl_;
+    GenerationScheduler::Impl& s = *impl_;
     int count = validate_generation_request(s.model.config(), input, options);
     require(options.max_context <= s.options.max_context, "request exceeds worker context limit");
     size_t blocks = s.pool ? (input.size() + size_t(count) + 15) / 16 : 0;
@@ -303,9 +304,9 @@ GenerationRequest GenerationScheduler::submit(const std::vector<int32_t>& input,
     if (s.counters.closed) throw SchedulerClosed();
     if (count && s.waiting.size() == size_t(s.options.max_queued_requests)) throw RequestQueueFull();
     require(s.next_id != std::numeric_limits<uint64_t>::max(), "request ID space exhausted");
-    auto state = std::make_shared<GenerationRequestState>(s.next_id, input.size(), count, options.eos_ids.size());
+    std::shared_ptr<GenerationRequestState> state = std::make_shared<GenerationRequestState>(s.next_id, input.size(), count, options.eos_ids.size());
     if (count) {
-        auto request_options = options;
+        GenerationOptions request_options = options;
         request_options.paged_cache = bool(s.pool);
         if (!s.pool) {
             request_options.memory = s.options.memory;
@@ -330,17 +331,17 @@ GenerationRequest GenerationScheduler::submit(const std::vector<int32_t>& input,
 }
 
 SchedulerStep GenerationScheduler::step() {
-    auto& s = *impl_; s.check_owner();
+    GenerationScheduler::Impl& s = *impl_; s.check_owner();
     require(!s.stepping, "cannot reenter the worker");
     s.stepping = true;
     struct Reset { bool& flag; ~Reset() { flag = false; } } reset{s.stepping};
-    auto before = stats();
+    SchedulerStats before = stats();
     SchedulerStep result;
     result.prefixes.reserve(size_t(s.options.max_active_requests)*2);
     s.reap(); s.admit(result.prefixes); s.reap();
-    auto selected = s.select(result.prefill);
+    std::vector<Impl::Active*> selected = s.select(result.prefill);
     if (!selected.empty() && !s.pool) {
-        auto& row = *selected.front();
+        GenerationScheduler::Impl::Active& row = *selected.front();
         result.requests.push_back(row.state->id);
         result.attempts = 1;
         result.batch.consumed.resize(1);
@@ -368,13 +369,13 @@ SchedulerStep GenerationScheduler::step() {
         for (;;) {
             std::vector<GenerationSession*> sessions;
             result.requests.clear();
-            for (auto* row : selected) { sessions.push_back(row->session.get()); result.requests.push_back(row->state->id); }
+            for (GenerationScheduler::Impl::Active* row : selected) { sessions.push_back(row->session.get()); result.requests.push_back(row->state->id); }
             ++result.attempts;
             try {
                 result.batch = step_generation_batch(sessions, batch_options);
                 for (size_t i = 0; i < selected.size(); ++i) selected[i]->error = result.batch.errors[i];
                 for (size_t i = 0; i < selected.size(); ++i) {
-                    const auto& publication=result.batch.publications[i];
+                    const PrefixPublication& publication=result.batch.publications[i];
                     if (publication.inserted) result.prefixes.push_back({selected[i]->state->id,publication.entry,publication.tokens,true});
                 }
                 s.record_model_step(result.batch.input_tokens);
@@ -385,17 +386,17 @@ SchedulerStep GenerationScheduler::step() {
                 }
                 break;
             } catch (const MemoryLimitExceeded&) {
-                auto error = std::current_exception();
+                std::exception_ptr error = std::current_exception();
                 // A post-commit failure is terminal in the batch executor. Never
                 // replay it, and never retry a shape changed by cancellation.
                 bool terminal = false;
-                for (auto* row : selected) if (row->session->finished()) {
+                for (GenerationScheduler::Impl::Active* row : selected) if (row->session->finished()) {
                     terminal = true;
                     if (row->session->state() == GenerationState::Failed) row->error = error;
                 }
                 if (terminal || std::any_of(selected.begin(), selected.end(), [](Impl::Active* row) { return row->state->cancelled.load(); })) break;
                 int query = batch_options.token_budget / int(selected.size());
-                for (auto* row : selected) query = std::min(query, row->session->pending_input_tokens());
+                for (GenerationScheduler::Impl::Active* row : selected) query = std::min(query, row->session->pending_input_tokens());
                 if (query > 1) batch_options.token_budget = int(selected.size()) * std::max(1, query / 2);
                 else if (selected.size() > 1) { selected.resize(std::max(size_t(1), selected.size() / 2)); batch_options.token_budget = int(selected.size()); }
                 else {
@@ -407,10 +408,10 @@ SchedulerStep GenerationScheduler::step() {
                 }
                 std::lock_guard<std::mutex> lock(s.mutex); ++s.counters.memory_retries;
             } catch (...) {
-                auto error = std::current_exception();
+                std::exception_ptr error = std::current_exception();
                 // Preserve row completion reasons if the executor already
                 // published them; only unfinished rows become worker failures.
-                for (auto* row : selected) row->error = error;
+                for (GenerationScheduler::Impl::Active* row : selected) row->error = error;
                 std::vector<uint64_t> failed = result.requests;
                 for (uint64_t id : failed) {
                     auto found = std::find_if(s.active.begin(), s.active.end(), [&](const Impl::Active& row) { return row.state->id == id; });
@@ -423,24 +424,24 @@ SchedulerStep GenerationScheduler::step() {
         if (!selected.empty()) (result.prefill ? s.prefill_cursor : s.decode_cursor) = selected.back()->state->id;
     }
     s.reap(); s.update_pages();
-    auto after = stats();
+    SchedulerStats after = stats();
     result.admitted = size_t(after.admitted - before.admitted);
     result.completed = size_t(after.completed - before.completed);
     return result;
 }
 
 bool GenerationScheduler::wait_for_work(std::chrono::milliseconds timeout) {
-    auto& s = *impl_; s.check_owner();
+    GenerationScheduler::Impl& s = *impl_; s.check_owner();
     require(!s.stepping, "cannot wait inside a worker callback");
     std::unique_lock<std::mutex> lock(s.mutex);
     return s.work.wait_for(lock, timeout, [&] { return s.counters.closed || s.counters.queued || s.counters.active; });
 }
 void GenerationScheduler::request_shutdown() {
-    auto& s = *impl_;
+    GenerationScheduler::Impl& s = *impl_;
     {
         std::lock_guard<std::mutex> lock(s.mutex);
         s.counters.closed = true;
-        for (auto& state : s.live) state->cancel();
+        for (std::shared_ptr<GenerationRequestState>& state : s.live) state->cancel();
     }
     s.work.notify_all();
 }

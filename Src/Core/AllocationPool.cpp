@@ -1,4 +1,5 @@
 #include "Core/AllocationPool.h"
+#include "Core/LocalFunction.h"
 #include <algorithm>
 #include <map>
 #include <mutex>
@@ -45,7 +46,7 @@ struct AllocationPoolState {
         auto found = idle.find(Key{kind, dtype, count});
         if (found == idle.end()) return {};
         if (found->second.empty()) { idle.erase(found); return {}; }
-        auto allocation = std::move(found->second.back());
+        std::shared_ptr<Allocation> allocation = std::move(found->second.back());
         found->second.pop_back();
         if (found->second.empty()) idle.erase(found);
         counters.cached_bytes -= allocation->bytes;
@@ -63,7 +64,7 @@ struct AllocationPoolState {
     void release(std::shared_ptr<Allocation> allocation, bool recyclable) noexcept {
         std::lock_guard<std::mutex> lock(mutex);
         if (!closed && reuse && recyclable && (!target || memory_stats(backend, device).live_bytes() <= target)) {
-            auto key = Key{allocation->kind, allocation->buffer->dtype, allocation->buffer->count};
+            Key key = Key{allocation->kind, allocation->buffer->dtype, allocation->buffer->count};
             bool retained = false;
             try {
                 idle[key].push_back(allocation);
@@ -85,8 +86,8 @@ struct AllocationPoolState {
     size_t clear(bool closing = false) {
         std::lock_guard<std::mutex> lock(mutex);
         if (closing) closed = true;
-        auto released = counters.cached_bytes;
-        for (const auto& item : idle) counters.evictions += item.second.size();
+        size_t released = counters.cached_bytes;
+        for (const std::pair<const Key, std::vector<std::shared_ptr<Allocation>>>& item : idle) counters.evictions += item.second.size();
         counters.reserved_bytes -= released;
         counters.cached_bytes = 0;
         idle.clear();
@@ -105,7 +106,7 @@ struct Lease {
 };
 std::shared_ptr<AllocationPoolState> current(Backend backend, int device) {
     for (auto it = pools.rbegin(); it != pools.rend(); ++it) {
-        auto pool = it->lock();
+        std::shared_ptr<AllocationPoolState> pool = it->lock();
         if (pool && pool->backend == backend && pool->device == device && pool->active()) return pool;
     }
     return {};
@@ -114,13 +115,13 @@ std::shared_ptr<AllocationPoolState> current(Backend backend, int device) {
 
 AllocationPool::AllocationPool(Backend backend, size_t target_bytes, bool reuse)
     : state_(std::make_shared<AllocationPoolState>(backend, target_bytes, reuse)) {
-    pools.erase(std::remove_if(pools.begin(), pools.end(), [](const auto& pool) { return pool.expired(); }), pools.end());
+    pools.erase(std::remove_if(pools.begin(), pools.end(), [](const std::weak_ptr<AllocationPoolState>& pool) { return pool.expired(); }), pools.end());
     pools.push_back(state_);
 }
 AllocationPool::~AllocationPool() {
     state_->clear(true);
-    pools.erase(std::remove_if(pools.begin(), pools.end(), [&](const auto& pool) {
-        auto value = pool.lock(); return !value || value == state_;
+    pools.erase(std::remove_if(pools.begin(), pools.end(), [&](const std::weak_ptr<AllocationPoolState>& pool) {
+        std::shared_ptr<AllocationPoolState> value = pool.lock(); return !value || value == state_;
     }), pools.end());
 }
 AllocationPoolStats AllocationPool::stats() const { return state_->stats(); }
@@ -129,8 +130,8 @@ void AllocationPool::clear() { state_->clear(); }
 size_t reclaim_cached_allocations(Backend backend) {
     size_t released = 0;
     const int device = detail::allocation_device(backend);
-    for (auto& weak : pools) {
-        auto pool = weak.lock();
+    for (std::weak_ptr<AllocationPoolState>& weak : pools) {
+        std::shared_ptr<AllocationPoolState> pool = weak.lock();
         if (pool && pool->backend == backend && pool->device == device) released += pool->clear();
     }
     return released;
@@ -139,25 +140,25 @@ void prepare_cached_allocation(Backend backend, size_t bytes) {
     const int device = detail::allocation_device(backend);
     size_t target = std::numeric_limits<size_t>::max();
     bool limited = false;
-    for (auto& weak : pools) {
-        auto pool = weak.lock();
+    for (std::weak_ptr<AllocationPoolState>& weak : pools) {
+        std::shared_ptr<AllocationPoolState> pool = weak.lock();
         if (pool && pool->backend == backend && pool->device == device && pool->target && pool->active()) {
             target = std::min(target, pool->target);
             limited = true;
         }
     }
     if (!limited) return;
-    auto current = memory_stats(backend).live_bytes();
+    size_t current = memory_stats(backend).live_bytes();
     if (current > target || bytes > target - current) reclaim_cached_allocations(backend);
 }
 
 BufferPtr detail::pooled_allocate(Backend backend, size_t count, DType dtype, MemoryKind kind,
                                   AllocateBuffer allocate, ClearBuffer clear) {
-    auto pool = pools.empty() ? std::shared_ptr<AllocationPoolState>{} : current(backend, allocation_device(backend));
-    auto allocation = pool ? pool->take(kind, dtype, count) : std::shared_ptr<Allocation>{};
+    std::shared_ptr<AllocationPoolState> pool = pools.empty() ? std::shared_ptr<AllocationPoolState>{} : current(backend, allocation_device(backend));
+    std::shared_ptr<Allocation> allocation = pool ? pool->take(kind, dtype, count) : std::shared_ptr<Allocation>{};
     bool reused = bool(allocation);
     if (!allocation) {
-        auto create = [&] { return std::make_shared<Allocation>(backend, count, dtype, kind, allocate); };
+        LocalFunction create{[&] { return std::make_shared<Allocation>(backend, count, dtype, kind, allocate); }};
         try { allocation = create(); }
         catch (const std::bad_alloc&) {
             if (!reclaim_cached_allocations(backend)) throw;

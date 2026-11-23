@@ -1,4 +1,5 @@
 #include "Training/Trainer.h"
+#include "Core/LocalFunction.h"
 
 #include <algorithm>
 #include <chrono>
@@ -37,8 +38,8 @@ float evaluate(Model& model, const BatchDataset& data, const DataLoader& loader,
   for (size_t offset = begin; offset < end; offset += batch_size) {
     size_t count =
         std::min(static_cast<size_t>(batch_size), end - offset);
-    auto batch = loader.batch(order, offset, count);
-    auto output = model.forward(batch.first, false, seed);
+    TensorBatch batch = loader.batch(order, offset, count);
+    Tensor output = model.forward(batch.first, false, seed);
     float loss =
         data.loss(output, batch.second).data().at(0);
     require(std::isfinite(loss), "Non-finite evaluation loss");
@@ -50,23 +51,23 @@ float evaluate(Model& model, const BatchDataset& data, const DataLoader& loader,
 
 void synchronize_parameters(Model& model, ProcessGroup& group) {
   if (group.size() == 1) return;
-  auto broadcast = [&](Tensor& value) {
-    auto bytes = group.rank() == 0 ? value.raw_data() : std::vector<uint8_t>(value.nbytes());
+  LocalFunction broadcast{[&](Tensor& value) {
+    std::vector<uint8_t> bytes = group.rank() == 0 ? value.raw_data() : std::vector<uint8_t>(value.nbytes());
     group.broadcast(bytes.data(), bytes.size());
     if (group.rank() != 0) value.assign_raw(bytes);
-  };
-  for (auto& parameter : model.parameters()) broadcast(parameter.value);
-  for (auto& buffer : model.checkpoint_buffers()) broadcast(buffer.value);
+  }};
+  for (Parameter& parameter : model.parameters()) broadcast(parameter.value);
+  for (Parameter& buffer : model.checkpoint_buffers()) broadcast(buffer.value);
 }
 
 void synchronize_gradients(Model& model, ProcessGroup& group) {
   if (group.size() == 1) return;
-  for (auto& parameter : model.parameters()) {
-    auto& value = parameter.value;
+  for (Parameter& parameter : model.parameters()) {
+    Tensor& value = parameter.value;
     require(value.dtype() == DType::Float32 && value.node()->gradient,
             "Data parallel training requires a Float32 gradient for " + parameter.name);
-    auto gradient = Tensor(value.node()->gradient).detach();
-    auto local = gradient.data();
+    Tensor gradient = Tensor(value.node()->gradient).detach();
+    std::vector<float> local = gradient.data();
     group.all_reduce_sum(local.data(), local.size());
     gradient.assign(local);
   }
@@ -83,7 +84,7 @@ Json array(const std::vector<int>& numbers) {
 }  // namespace
 
 int train(const std::string& configuration, const RunOptions& options) {
-  const auto distributed = process_group_environment();
+  const ProcessGroupOptions distributed = process_group_environment();
   ProcessGroup group(distributed);
   const int cuda_device = group.size() > 1 ? distributed.local_rank : -1;
   Configuration config(configuration, options, cuda_device);
@@ -108,8 +109,8 @@ int train(const std::string& configuration, const RunOptions& options) {
 
 int train_model(Model& model, const BatchDataset& data, const TrainingRun& run, ProcessGroup& group) {
   const bool primary = group.rank() == 0;
-  const auto& settings = run.settings;
-  const auto& checkpoint_path = run.checkpoint;
+  const Json& settings = run.settings;
+  const std::string& checkpoint_path = run.checkpoint;
   require(!checkpoint_path.empty() && !run.metrics.empty(), "Training requires checkpoint and metrics destinations");
   DataLoader loader(data, run.backend);
   const int planned_steps = settings.at("steps").integer();
@@ -122,7 +123,7 @@ int train_model(Model& model, const BatchDataset& data, const TrainingRun& run, 
   std::string schedule = settings.string_or("lr_schedule", "constant");
   double min_ratio = settings.number_or("min_lr_ratio", 0.1);
   bool shuffled = settings.bool_or("shuffle", true);
-  const auto precision = parse_dtype(settings.string_or("precision", "float32"));
+  const DType precision = parse_dtype(settings.string_or("precision", "float32"));
   require(is_compute_float(precision), "Training precision must be float32, float16 or bfloat16");
   const bool scaled = precision == DType::Float16;
   const float initial_scale = static_cast<float>(settings.number_or("initial_loss_scale", 65536));
@@ -155,7 +156,7 @@ int train_model(Model& model, const BatchDataset& data, const TrainingRun& run, 
     const std::string contract = resume_configuration + '\n' + optimizer.name() + '\n' +
                                  run.definition.dump(0) + '\n' + std::to_string(steps) + '\n' +
                                  backend_name(run.backend) + '\n' + (run.resume.empty() ? "fresh" : "resume");
-    auto primary_contract = contract;
+    std::string primary_contract = contract;
     group.broadcast(primary_contract.data(), primary_contract.size());
     require(primary_contract == contract, "Training configuration differs across ranks");
   }
@@ -179,19 +180,19 @@ int train_model(Model& model, const BatchDataset& data, const TrainingRun& run, 
     }
   }
   if (group.size() > 1) {
-    auto primary_checksum = checkpoint_checksum;
+    uint64_t primary_checksum = checkpoint_checksum;
     group.broadcast(&primary_checksum, sizeof(primary_checksum));
     require(primary_checksum == checkpoint_checksum, "Training checkpoint differs across ranks");
   }
   synchronize_parameters(model, group);
   require(attempted_steps <= uint64_t(std::numeric_limits<int64_t>::max()) - uint64_t(steps),
           "Training step exceeds the checkpoint range");
-  auto save = [&] {
+  LocalFunction save{[&] {
     TrainingProgress progress{sampler.state(), resume_configuration};
     progress.attempted_steps = attempted_steps;
     progress.loss_scale = scaler.state();
     save_checkpoint(checkpoint_path, model, run.definition, optimizer.state(), &progress);
-  };
+  }};
   std::vector<size_t> order(data.size());
   std::iota(order.begin(), order.end(), 0);
   uint64_t dispatches_before = backend_dispatch_count(run.backend);
@@ -202,28 +203,28 @@ int train_model(Model& model, const BatchDataset& data, const TrainingRun& run, 
             << " samples=" << data.size()
             << " initial_eval_loss=" << std::setprecision(8) << initial_loss
             << std::endl;
-  auto start = Clock::now();
+  std::chrono::steady_clock::time_point start = Clock::now();
   Json::Array history;
   const size_t local_begin = size_t(batch_size) * group.rank() / group.size();
   const size_t local_end = size_t(batch_size) * (group.rank() + 1) / group.size();
   const double local_weight = double(local_end - local_begin) / batch_size / accumulation;
   size_t skipped_steps = 0;
   for (int step = 0; step < steps; ++step) {
-    for (auto& parameter : model.parameters()) {
+    for (Parameter& parameter : model.parameters()) {
       parameter.value.zero_grad();
     }
     const uint64_t global_step = optimizer.state().step;
     const float loss_scale = scaler.state().scale;
     double loss_value = 0;
     for (int micro = 0; micro < accumulation; ++micro) {
-      auto batch = loader.next(sampler, static_cast<size_t>(batch_size), local_begin, local_end - local_begin);
+      TensorBatch batch = loader.next(sampler, static_cast<size_t>(batch_size), local_begin, local_end - local_begin);
       const uint32_t seed = run.seed + static_cast<uint32_t>(attempted_steps) * 31u +
                             static_cast<uint32_t>(micro) * 0x9e3779b9u +
                             static_cast<uint32_t>(group.rank()) * 0x85ebca6bu;
       Tensor loss;
       {
         AutocastScope autocast(precision);
-        auto logits = model.forward(batch.first, true, seed);
+        Tensor logits = model.forward(batch.first, true, seed);
         if (precision != DType::Float32 && is_narrow_float(logits.dtype())) logits = cast(logits, DType::Float32);
         loss = data.loss(logits, batch.second);
       }

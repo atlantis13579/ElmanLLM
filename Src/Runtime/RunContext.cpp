@@ -19,7 +19,7 @@ void require(bool condition, const std::string& message) {
 
 std::string resolve(const std::filesystem::path& base,
                     const std::string& path) {
-  auto result = std::filesystem::path(path);
+  std::filesystem::path result = std::filesystem::path(path);
   if (result.is_relative()) {
     result = base / result;
   }
@@ -59,7 +59,7 @@ std::string Configuration::output(const std::string& key,
 }
 
 Dataset::Dataset(const Configuration& config) {
-  const auto& settings = config.json.at("data");
+  const Json& settings = config.json.at("data");
   sample_shape = config.model->sample_shape();
   language = config.model->architecture() == "gpt2";
   regression = config.model->regression();
@@ -91,7 +91,7 @@ Dataset::Dataset(const Configuration& config) {
   size_t line_number = 0;
   while (std::getline(input, line)) {
     ++line_number;
-    auto first = line.find_first_not_of(" \t\r");
+    size_t first = line.find_first_not_of(" \t\r");
     if (first == std::string::npos || line[first] == '#') {
       continue;
     }
@@ -150,8 +150,8 @@ Dataset::Dataset(const Configuration& config) {
 
 std::string Dataset::fingerprint() const {
   uint64_t hash = 14695981039346656037ull;
-  for (const auto* rows : {&inputs, &targets}) {
-    for (const auto& row : *rows) {
+  for (const std::vector<std::vector<float>>* rows : {&inputs, &targets}) {
+    for (const std::vector<float>& row : *rows) {
       for (float value : row) {
         uint32_t bits;
         std::memcpy(&bits, &value, sizeof(bits));

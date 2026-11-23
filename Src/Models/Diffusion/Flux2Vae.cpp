@@ -32,13 +32,13 @@ struct Middle {
 
   static Linear projection(const ComponentWeights& w, const std::string& p, bool diffusers,
                            const char* diffusers_name, const char* original_name) {
-    const auto prefix = diffusers ? p + ".mid_block.attentions.0" + diffusers_name : p + ".mid.attn_1" + original_name;
+    const std::string prefix = diffusers ? p + ".mid_block.attentions.0" + diffusers_name : p + ".mid.attn_1" + original_name;
     return model_weights::linear(w, prefix, 512, 512, true, true);
   }
 
   Tensor operator()(const Tensor& input) const {
-    auto x = first(input), h = image_tokens(norm(x));
-    auto a = scaled_dot_product_attention(unsqueeze(query(h), 1), unsqueeze(key(h), 1), unsqueeze(value(h), 1), false);
+    Tensor x = first(input), h = image_tokens(norm(x));
+    Tensor a = scaled_dot_product_attention(unsqueeze(query(h), 1), unsqueeze(key(h), 1), unsqueeze(value(h), 1), false);
     return second(add(x, token_image(output(squeeze(a, 1)), x.shape()[2], x.shape()[3])));
   }
 };
@@ -49,9 +49,9 @@ struct Stage {
 };
 
 Tensor pad_right_bottom(const Tensor& x) {
-  const auto& s = x.shape();
-  auto column = Tensor::zeros({s[0], s[1], s[2], 1}, x.backend(), false, x.dtype());
-  auto row = Tensor::zeros({s[0], s[1], 1, s[3] + 1}, x.backend(), false, x.dtype());
+  const Shape& s = x.shape();
+  Tensor column = Tensor::zeros({s[0], s[1], s[2], 1}, x.backend(), false, x.dtype());
+  Tensor row = Tensor::zeros({s[0], s[1], 1, s[3] + 1}, x.backend(), false, x.dtype());
   return concat({concat({x, column}, 3), row}, 2);
 }
 
@@ -78,16 +78,16 @@ struct Vae {
     int width = encode ? 128 : 512;
     for (int step = 0; step < 4; ++step) {
       const int level = encode ? step : 3 - step, next = channels[level];
-      auto prefix = diffusers ? p + (encode ? ".down_blocks." : ".up_blocks.") + std::to_string(step)
+      std::string prefix = diffusers ? p + (encode ? ".down_blocks." : ".up_blocks.") + std::to_string(step)
                               : p + (encode ? ".down." : ".up.") + std::to_string(level);
-      auto& stage = stages.emplace_back();
+      flux2::Stage& stage = stages.emplace_back();
       for (int j = 0; j < (encode ? 2 : 3); ++j) {
         stage.blocks.emplace_back(w, prefix + (diffusers ? ".resnets." : ".block.") + std::to_string(j),
                                   width, next, 32, 1e-6, 0, diffusers ? ".conv_shortcut" : ".nin_shortcut");
         width = next;
       }
       if (step < 3) {
-        const auto resize_name = diffusers ? (encode ? ".downsamplers.0.conv" : ".upsamplers.0.conv")
+        const char* const resize_name = diffusers ? (encode ? ".downsamplers.0.conv" : ".upsamplers.0.conv")
                                            : (encode ? ".downsample.conv" : ".upsample.conv");
         stage.resize = model_weights::conv2d(w, prefix + resize_name, width, width, 3, encode ? 2 : 1, encode ? 0 : 1);
       }
@@ -95,13 +95,13 @@ struct Vae {
   }
 
   Tensor forward(const Tensor& data) const {
-    const auto& s = data.shape();
+    const Shape& s = data.shape();
     if (s[0] < 1 || s[2] < 1 || s[3] < 1 || (encode && (s[2] % 16 || s[3] % 16))) {
       throw std::invalid_argument("FLUX.2 reference image sides must be multiples of 16 and latents must be nonempty");
     }
-    auto x = encode ? input(data) : mid(input(quant(unpack_latents(data, mean, variance))));
-    for (const auto& stage : stages) {
-      for (const auto& block : stage.blocks) {
+    Tensor x = encode ? input(data) : mid(input(quant(unpack_latents(data, mean, variance))));
+    for (const flux2::Stage& stage : stages) {
+      for (const diffusion::ResnetBlock& block : stage.blocks) {
         x = block(x);
       }
       if (stage.resize) {
@@ -118,8 +118,8 @@ struct Vae {
 
 InferenceSession session(const ComponentWeights& w, bool encode) {
   const bool diffusers = w.contains("decoder.conv_norm_out.weight");
-  auto model = std::make_shared<Vae>(w, encode ? "encoder" : "decoder", encode, diffusers);
-  const auto& weight = model->input.weight;
+  std::shared_ptr<flux2::Vae> model = std::make_shared<Vae>(w, encode ? "encoder" : "decoder", encode, diffusers);
+  const Tensor& weight = model->input.weight;
   const std::string input = encode ? "image" : "latent", output = encode ? "latent" : "image";
   return InferenceSession(
       weight.backend(), weight.device(), {{input, {weight.dtype(), {-1, encode ? 3 : 128, -1, -1}}}},

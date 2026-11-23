@@ -82,7 +82,7 @@ struct CudaBuffer final : Buffer {
   int device_ordinal() const override { return device; }
 };
 CudaBuffer& checked_cuda(const BufferPtr& buffer, int device) {
-  auto* value = buffer ? dynamic_cast<CudaBuffer*>(&buffer->allocation()) : nullptr;
+  CudaBuffer* value = buffer ? dynamic_cast<CudaBuffer*>(&buffer->allocation()) : nullptr;
   if (!value) throw std::runtime_error("Expected a CUDA buffer");
   if (device != value->device) throw std::invalid_argument("CUDA buffer belongs to another device");
   return *value;
@@ -123,7 +123,7 @@ MemoryInfo memory_info_cuda() {
 }
 std::vector<DeviceInfo> devices_cuda() {
   int count = 0;
-  auto status = cudaGetDeviceCount(&count);
+  cudaError_t status = cudaGetDeviceCount(&count);
   if (status == cudaErrorNoDevice || status == cudaErrorInsufficientDriver) { cudaGetLastError(); return {}; }
   cuda_check(status, "cudaGetDeviceCount");
   std::vector<DeviceInfo> result;
@@ -140,14 +140,14 @@ void select_cuda_device(int ordinal) {
 }
 void copy_cuda_storage(const BufferPtr& destination, const BufferPtr& source) {
   std::lock_guard<std::recursive_mutex> lock(cuda_submission_mutex());
-  auto& target = checked_cuda(destination);
-  auto* origin = dynamic_cast<CudaBuffer*>(&source->allocation());
+  CudaBuffer& target = checked_cuda(destination);
+  CudaBuffer* origin = dynamic_cast<CudaBuffer*>(&source->allocation());
   if (!origin) throw std::invalid_argument("CUDA transfer source is not device storage");
   if (!destination->bytes) return;
   if (destination->raw_pointer() == source->raw_pointer() && target.device == origin->device) return;
   if (&destination->allocation() == &source->allocation()) {
-    const auto left = reinterpret_cast<uintptr_t>(destination->raw_pointer());
-    const auto right = reinterpret_cast<uintptr_t>(source->raw_pointer());
+    const uintptr_t left = reinterpret_cast<uintptr_t>(destination->raw_pointer());
+    const uintptr_t right = reinterpret_cast<uintptr_t>(source->raw_pointer());
     if (left <= right ? right - left < destination->bytes : left - right < source->bytes)
       throw std::invalid_argument("CUDA transfer storage overlaps");
   }
@@ -161,14 +161,14 @@ void copy_cuda_storage(const BufferPtr& destination, const BufferPtr& source) {
         cuda_check(cudaMemcpyAsync(destination->raw_pointer(), source->raw_pointer(), destination->bytes,
                                    cudaMemcpyDeviceToDevice, current_cuda_stream()), "CUDA device copy");
       else {
-        auto status = cudaDeviceEnablePeerAccess(origin->device, 0);
+        cudaError_t status = cudaDeviceEnablePeerAccess(origin->device, 0);
         if (status == cudaErrorPeerAccessAlreadyEnabled) cudaGetLastError();
         else cuda_check(status, "cudaDeviceEnablePeerAccess");
         cuda_check(cudaMemcpyPeerAsync(destination->raw_pointer(), target.device, source->raw_pointer(),
                                        origin->device, destination->bytes, current_cuda_stream()), "CUDA peer copy");
       }
       if (!asynchronous_execution(Backend::CUDA)) synchronize_cuda_stream();
-      auto event = record_cuda_completion();
+      std::shared_ptr<CudaEventState> event = record_cuda_completion();
       finish_cuda_read(origin->access, event);
       finish_cuda_write(target.access, event);
     } else {
@@ -201,7 +201,7 @@ int allocation_device_cuda() {
 }
 void clear_cuda(const BufferPtr& buffer) {
   std::lock_guard<std::recursive_mutex> lock(cuda_submission_mutex());
-  auto& destination = checked_cuda(buffer);
+  CudaBuffer& destination = checked_cuda(buffer);
   prepare_cuda_write(destination.access);
   try {
     if (buffer->bytes) cuda_check(cudaMemsetAsync(buffer->raw_pointer(), 0, buffer->bytes, current_cuda_stream()), "CUDA clear reused buffer");
@@ -216,11 +216,11 @@ void retain_cuda_workspace(const BufferPtr& buffer) {
 }
 void upload_raw_cuda(const BufferPtr& buffer, const std::vector<uint8_t>& bytes) {
   std::lock_guard<std::recursive_mutex> lock(cuda_submission_mutex());
-  auto& destination = checked_cuda(buffer);
+  CudaBuffer& destination = checked_cuda(buffer);
   if (bytes.size() != buffer->bytes) throw std::invalid_argument("CUDA raw upload size mismatch");
   prepare_cuda_write(destination.access);
   try {
-    if (!bytes.empty()) if (auto completion = stage_cuda_upload(buffer->raw_pointer(), bytes.data(), bytes.size())) {
+    if (!bytes.empty()) if (std::shared_ptr<CudaEventState> completion = stage_cuda_upload(buffer->raw_pointer(), bytes.data(), bytes.size())) {
       finish_cuda_write(destination.access, completion);
       return;
     }
@@ -232,7 +232,7 @@ void upload_raw_cuda(const BufferPtr& buffer, const std::vector<uint8_t>& bytes)
 }
 std::vector<uint8_t> download_raw_cuda(const BufferPtr& buffer) {
   std::lock_guard<std::recursive_mutex> lock(cuda_submission_mutex());
-  const auto& source = checked_cuda(buffer);
+  const CudaBuffer& source = checked_cuda(buffer);
   std::vector<uint8_t> bytes(buffer->bytes);
   prepare_cuda_read(source.access);
   try {
@@ -293,11 +293,11 @@ int32_t greedy_id_cuda(const BufferPtr& logits) {
     throw std::invalid_argument("CUDA greedy selection requires a nonempty Float32 vocabulary");
   const int blocks = int(std::min<size_t>(greedy_threads, (logits->count + greedy_threads - 1) / greedy_threads));
   DeviceScope owner(Backend::CUDA, logits->device_ordinal());
-  auto workspace = backend_workspace(Backend::CUDA, blocks * sizeof(Candidate) + sizeof(int));
+  BufferPtr workspace = backend_workspace(Backend::CUDA, blocks * sizeof(Candidate) + sizeof(int));
   std::lock_guard<std::recursive_mutex> lock(cuda_submission_mutex());
   prepare_cuda_read(checked_cuda(logits).access);
-  auto partials = static_cast<Candidate*>(workspace->raw_pointer());
-  auto result = reinterpret_cast<int*>(partials + blocks);
+  Candidate* partials = static_cast<Candidate*>(workspace->raw_pointer());
+  int* result = reinterpret_cast<int*>(partials + blocks);
   int id;
   try {
     greedy_blocks<<<blocks, greedy_threads, 0, current_cuda_stream()>>>(
@@ -326,18 +326,18 @@ void dispatch_cuda(const std::string& op, const BufferPtr& output,
 #undef ELMAN_CUDA_KERNEL
 #undef ELMAN_CUDA_KERNEL4
   };
-  const auto complex_operation = complex_pointwise_operation(op, params);
-  const auto low_operation = low_precision_pointwise_operation(op, params);
-  const auto double_operation = low_operation == LowPrecisionPointwise::None ? float64_pointwise_operation(op, params) : Float64Pointwise::None;
+  const ComplexPointwise complex_operation = complex_pointwise_operation(op, params);
+  const LowPrecisionPointwise low_operation = low_precision_pointwise_operation(op, params);
+  const Float64Pointwise double_operation = low_operation == LowPrecisionPointwise::None ? float64_pointwise_operation(op, params) : Float64Pointwise::None;
   auto found = kernels.find(op);
   if (found == kernels.end() && double_operation == Float64Pointwise::None && complex_operation == ComplexPointwise::None)
     throw std::runtime_error("Unknown CUDA operator: " + op);
   const int arity = complex_operation != ComplexPointwise::None ? complex_pointwise_arity(complex_operation) :
       found == kernels.end() ? float64_pointwise_arity(double_operation) : found->second.inputs;
-  auto& target = checked_cuda(output);
+  CudaBuffer& target = checked_cuda(output);
   if (inputs.size() > 4) throw std::invalid_argument("CUDA kernels accept at most four inputs");
   if (params.v[0] < 0 || size_t(params.v[0]) != output->count) throw std::invalid_argument("CUDA dispatch output count mismatch");
-  auto* out = static_cast<uint32_t*>(output->raw_pointer());
+  uint32_t* out = static_cast<uint32_t*>(output->raw_pointer());
   const uint32_t* sources[4] = {out, out, out, out};
   CudaBuffer* operands[4]{};
   for (size_t i = 0; i < inputs.size(); ++i) {
@@ -351,23 +351,23 @@ void dispatch_cuda(const std::string& op, const BufferPtr& output,
   detail::CudaCommandRecording command(op, output, inputs, params);
   if (!detail::lowering_cuda_graph()) {
     prepare_cuda_write(target.access);
-    for (auto* operand : operands) if (operand && operand != &target) prepare_cuda_read(operand->access);
+    for (CudaBuffer* operand : operands) if (operand && operand != &target) prepare_cuda_read(operand->access);
   }
   WorkspaceFrame workspace;
   try {
-    const auto double_reduction = float64_reduction_operation(op, params);
-    const auto double_matrix = float64_matrix_operation(op, params);
-    const auto double_softmax = float64_softmax_operation(op, params);
-    const auto double_indexing = float64_indexing_operation(op, params);
-    const auto double_spatial = float64_spatial_operation(op, params);
-    const auto double_loss = float64_loss_operation(op, params);
-    const auto double_attention = float64_attention_operation(op, params);
-    const auto double_random = float64_random_operation(op, params);
+    const Float64Reduction double_reduction = float64_reduction_operation(op, params);
+    const Float64Matrix double_matrix = float64_matrix_operation(op, params);
+    const Float64Softmax double_softmax = float64_softmax_operation(op, params);
+    const Float64Indexing double_indexing = float64_indexing_operation(op, params);
+    const Float64Spatial double_spatial = float64_spatial_operation(op, params);
+    const Float64Loss double_loss = float64_loss_operation(op, params);
+    const Float64Attention double_attention = float64_attention_operation(op, params);
+    const Float64Random double_random = float64_random_operation(op, params);
   const bool double_categorical = float64_categorical_operation(op, params);
-  const auto double_normalization = float64_normalization_operation(op, params);
-    const auto integer_operation = integer_pointwise_operation(op, params);
-    const auto integer_matrix = integer_matrix_operation(op, params);
-    const auto storage_layout = storage_layout_operation(op, output->dtype);
+  const Float64Normalization double_normalization = float64_normalization_operation(op, params);
+    const IntegerPointwise integer_operation = integer_pointwise_operation(op, params);
+    const IntegerMatrix integer_matrix = integer_matrix_operation(op, params);
+    const StorageLayout storage_layout = storage_layout_operation(op, output->dtype);
     if (complex_operation != ComplexPointwise::None)
       launch_complex_pointwise_cuda(complex_operation, out, sources[0], sources[1], sources[2], params);
     else if (packed_integer_cast_operation(op, params))
@@ -433,11 +433,11 @@ void dispatch_cuda(const std::string& op, const BufferPtr& output,
     else found->second.launch(out, sources[0], sources[1], sources[2], sources[3], params);
     cuda_check(cudaGetLastError(), ("CUDA launch " + op).c_str());
     if (detail::lowering_cuda_graph()) return;
-    auto event = asynchronous_execution(Backend::CUDA) ? record_cuda_completion() : std::shared_ptr<CudaEventState>{};
+    std::shared_ptr<CudaEventState> event = asynchronous_execution(Backend::CUDA) ? record_cuda_completion() : std::shared_ptr<CudaEventState>{};
     if (!event) synchronize_cuda_stream();
-    for (auto* operand : operands) if (operand && operand != &target) finish_cuda_read(operand->access, event);
+    for (CudaBuffer* operand : operands) if (operand && operand != &target) finish_cuda_read(operand->access, event);
     finish_cuda_write(target.access, event);
-    for (const auto& buffer : workspace.buffers) finish_cuda_write(checked_cuda(buffer).access, event);
+    for (const BufferPtr& buffer : workspace.buffers) finish_cuda_write(checked_cuda(buffer).access, event);
   } catch (...) {
     // Capture errors are unwound by the graph owner; synchronizing would itself
     // invalidate the capture before it can be ended.
@@ -446,10 +446,10 @@ void dispatch_cuda(const std::string& op, const BufferPtr& output,
   }
 }
 void prepare_cuda_graph_buffers(const std::vector<BufferPtr>& buffers) {
-  for (const auto& buffer : buffers) prepare_cuda_write(checked_cuda(buffer).access);
+  for (const BufferPtr& buffer : buffers) prepare_cuda_write(checked_cuda(buffer).access);
 }
 void finish_cuda_graph_buffers(const std::vector<BufferPtr>& buffers) {
-  const auto event = record_cuda_completion();
-  for (const auto& buffer : buffers) finish_cuda_write(checked_cuda(buffer).access, event);
+  const std::shared_ptr<CudaEventState> event = record_cuda_completion();
+  for (const BufferPtr& buffer : buffers) finish_cuda_write(checked_cuda(buffer).access, event);
 }
 } // namespace elman

@@ -18,8 +18,8 @@ template<class F> void rejects(F action) {
     check(rejected, "Invalid storage layout was accepted");
 }
 void malformed(Backend backend) {
-    auto a = Tensor::from_int64_data({2, 3}, {1, 2, 3, 4, 5, 6}, backend);
-    auto out = Tensor::from_int64_data({3, 2}, std::vector<int64_t>(6), backend);
+    Tensor a = Tensor::from_int64_data({2, 3}, {1, 2, 3, 4, 5, 6}, backend);
+    Tensor out = Tensor::from_int64_data({3, 2}, std::vector<int64_t>(6), backend);
     KernelParams p;
     p.v[KernelParams::kOutputCountSlot] = 6;
     p.v[KernelParams::kOutputRankSlot] = 2;
@@ -36,8 +36,8 @@ void malformed(Backend backend) {
     p.v[KernelParams::kAttributeSlot + 1] = 0;
     backend_dispatch("permute", out.node()->value, {a.node()->value}, p);
     check(out.int64_data() == std::vector<int64_t>{1, 4, 2, 5, 3, 6}, "Storage permutation differs");
-    const auto before = out.raw_data();
-    for (auto mutation : std::vector<std::pair<int, int>>{
+    const std::vector<uint8_t> before = out.raw_data();
+    for (std::pair<int, int> mutation : std::vector<std::pair<int, int>>{
             {KernelParams::kOutputCountSlot, 5}, {KernelParams::kOutputRankSlot, -1}, {KernelParams::kOutputRankSlot, 9},
             {KernelParams::kOutputShapeSlot, -1}, {KernelParams::kOutputShapeSlot, 2},
             {KernelParams::kInputRankSlot, -1}, {KernelParams::kInputRankSlot, 9},
@@ -46,29 +46,29 @@ void malformed(Backend backend) {
             {KernelParams::kInputRankSlot + KernelParams::kInputStrideOffset, 1},
             {KernelParams::kAttributeSlot, -1}, {KernelParams::kAttributeSlot, 2},
             {KernelParams::kAttributeSlot + 1, 1}, {KernelParams::kInputDTypeSlot, int(DType::Int32)}}) {
-        auto bad = p; bad.v[mutation.first] = mutation.second;
+        KernelParams bad = p; bad.v[mutation.first] = mutation.second;
         rejects([&] { backend_dispatch("permute", out.node()->value, {a.node()->value}, bad); });
         check(out.raw_data() == before, "Rejected layout changed output bytes");
     }
     rejects([&] { backend_dispatch("permute", out.node()->value, {}, p); });
     rejects([&] { backend_dispatch("permute", out.node()->value, {a.node()->value, a.node()->value}, p); });
     rejects([&] { dispatch_tensor_into("permute", reshape(a, {3, 2}), {a}, {1, 0}); });
-    auto root = Tensor::from_int64_data({12}, {1, 2, 3, 4, 5, 6, 0, 0, 0, 0, 0, 0}, backend);
-    auto source = contiguous_view(root, {2, 3}), target = contiguous_view(root, {3, 2}, 6);
+    Tensor root = Tensor::from_int64_data({12}, {1, 2, 3, 4, 5, 6, 0, 0, 0, 0, 0, 0}, backend);
+    Tensor source = contiguous_view(root, {2, 3}), target = contiguous_view(root, {3, 2}, 6);
     dispatch_tensor_into("permute", target, {source}, {1, 0});
     check(target.int64_data() == std::vector<int64_t>{1, 4, 2, 5, 3, 6}, "Disjoint storage aliases differ");
-    auto ids = Tensor::from_int_data({2}, {-1, 0}, backend);
+    Tensor ids = Tensor::from_int_data({2}, {-1, 0}, backend);
     rejects([&] { dispatch_tensor("index_select", {2, 2}, {a, ids}, {1}, DType::Int64); });
-    auto floating = Tensor::from_raw({2, 2}, DType::Float8E8M0FNU, {0, 1, 2, 3}, backend);
+    Tensor floating = Tensor::from_raw({2, 2}, DType::Float8E8M0FNU, {0, 1, 2, 3}, backend);
     check(triu(floating).raw_data() == std::vector<uint8_t>({0, 1, 0, 3}), "E8M0 triangular zero encoding differs");
-    auto quantized = Tensor::from_raw({2, 2}, DType::QUInt8, {0, 1, 2, 3}, backend);
+    Tensor quantized = Tensor::from_raw({2, 2}, DType::QUInt8, {0, 1, 2, 3}, backend);
     rejects([&] { tril(quantized); });
 }
 void execution(Backend backend) {
     for (bool asynchronous : {false, true}) {
         AllocationPool pool(backend);
         ExecutionStream producer(backend), consumer(backend);
-        for (auto dtype : all_dtypes()) {
+        for (elman::DType dtype : all_dtypes()) {
             std::vector<uint8_t> bytes(dtype_storage_bytes(dtype, 30));
             for (size_t i = 0; i < bytes.size(); ++i) bytes[i] = uint8_t((i * 37) ^ 0xa5);
             const unsigned remaining = unsigned(30 * dtype_info(dtype).bits % 8);
@@ -89,9 +89,9 @@ void execution(Backend backend) {
 }
 int main(int argc, char** argv) {
     try {
-        const auto backend = parse_backend(argc > 1 ? argv[1] : "cpu");
+        const Backend backend = parse_backend(argc > 1 ? argv[1] : "cpu");
         if (!backend_available(backend)) return 77;
-        const auto before = memory_stats(backend).live_bytes();
+        const size_t before = memory_stats(backend).live_bytes();
         malformed(backend); execution(backend);
         check(memory_stats(backend).live_bytes() == before, "Storage layout leaked allocation ownership");
         std::cout << "Storage layout: " << checks << " passed, 0 failed\n";

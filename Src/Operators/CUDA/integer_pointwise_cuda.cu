@@ -28,7 +28,7 @@ __global__ void kernel_integer_pointwise(IntegerPointwise op, uint32_t* out, con
     if (op == IntegerPointwise::Cast) {
         if (!is_standard_integer(DType(ad))) integer_write(out, i, od, float_to_integer(read_float(a, ai, ad), od, ad));
         else {
-            const auto value = integer_reduction_value(a, ai, ad);
+            const uint64_t value = integer_reduction_value(a, ai, ad);
             if (is_standard_integer(DType(od))) integer_write(out, i, od, value);
             else if (od == int(DType::Float64)) reinterpret_cast<double*>(out)[i] = integer_to_float<double>(value, ad);
             else elman_cuda_store(out, i, elman_cuda_encode(integer_to_float<float>(value, ad), od), od);

@@ -27,7 +27,7 @@ BatchSampler::BatchSampler(size_t samples, uint32_t seed, bool shuffle)
 std::vector<size_t> BatchSampler::next(size_t count) {
   std::vector<size_t> selected;
   selected.reserve(count);
-  auto& order = state_.order;
+  std::vector<size_t>& order = state_.order;
   for (size_t sample = 0; sample < count; ++sample) {
     if (state_.offset == 0 && shuffle_) {
       for (size_t i = order.size(); i > 1; --i) {

@@ -49,7 +49,7 @@ std::string TokenizerStream::finish() {
 }
 
 TextStopFilter::TextStopFilter(std::vector<std::string> stops) : stops_(std::move(stops)) {
-    for (const auto& stop : stops_) {
+    for (const std::string& stop : stops_) {
         if (stop.empty()) throw std::invalid_argument("Stop strings must be nonempty");
         utf16(stop);
     }
@@ -61,7 +61,7 @@ std::string TextStopFilter::push(const std::string& text) {
     utf16(text);
     pending_ += text;
     size_t first = std::string::npos;
-    for (const auto& stop : stops_) {
+    for (const std::string& stop : stops_) {
         size_t index = pending_.find(stop);
         if (index < first) { first = index; matched_ = stop; }
     }
@@ -72,7 +72,7 @@ std::string TextStopFilter::push(const std::string& text) {
         return result;
     }
     size_t hold = 0;
-    for (const auto& stop : stops_) {
+    for (const std::string& stop : stops_) {
         for (size_t length = std::min(pending_.size(), stop.size() - 1); length > hold; --length) {
             if (pending_.compare(pending_.size() - length, length, stop, 0, length) == 0) {
                 hold = length;

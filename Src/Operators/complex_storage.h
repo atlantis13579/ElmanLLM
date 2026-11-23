@@ -11,7 +11,7 @@ template<class Real, class FloatReader>
 ELMAN_COMPLEX_STORAGE ComplexNumber<Real> complex_read(const uint32_t* data, uint64_t index,
                                                        DType dtype, FloatReader floating) {
     if (is_complex(dtype)) {
-        const auto component = complex_component_dtype(dtype);
+        const DType component = complex_component_dtype(dtype);
         return {Real(floating(data, index * 2, component)), Real(floating(data, index * 2 + 1, component))};
     }
     if (is_arithmetic_float(dtype)) return {Real(floating(data, index, dtype)), 0};
@@ -32,7 +32,7 @@ template<class Real, class FloatWriter>
 ELMAN_COMPLEX_STORAGE void complex_write(uint32_t* data, uint64_t index, DType dtype,
                                           ComplexNumber<Real> value, FloatWriter floating) {
     if (is_complex(dtype)) {
-        const auto component = complex_component_dtype(dtype);
+        const DType component = complex_component_dtype(dtype);
         floating(data, index * 2, component, value.real());
         floating(data, index * 2 + 1, component, value.imag());
     } else if (dtype == DType::Bool) {
@@ -41,7 +41,7 @@ ELMAN_COMPLEX_STORAGE void complex_write(uint32_t* data, uint64_t index, DType d
 }
 inline bool complex_pointwise_wide(const KernelParams& p) {
     if (p.output_dtype() == int(DType::Complex128) || p.output_dtype() == int(DType::Float64)) return true;
-    for (auto input : {KernelInput::A, KernelInput::B, KernelInput::C})
+    for (KernelInput input : {KernelInput::A, KernelInput::B, KernelInput::C})
         if (p.input_rank(input) >= 0 && (p.input_dtype(input) == int(DType::Complex128) || p.input_dtype(input) == int(DType::Float64))) return true;
     return false;
 }

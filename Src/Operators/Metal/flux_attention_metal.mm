@@ -4,9 +4,9 @@
 
 namespace elman::metal {
 Tensor lower_flux_attention(Graph m, const Operands& inputs, const KernelParams&) {
-  auto query = inputs[0];
-  auto key = inputs[1];
-  auto value = inputs[2];
+  Tensor query = inputs[0];
+  Tensor key = inputs[1];
+  Tensor value = inputs[2];
   return [m.g scaledDotProductAttentionWithQueryTensor:query
                                              keyTensor:key
                                            valueTensor:value

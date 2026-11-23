@@ -1,4 +1,5 @@
 #include "IO/Json.h"
+#include "Core/LocalFunction.h"
 
 #include <cmath>
 #include <cstdint>
@@ -119,7 +120,7 @@ private:
             expect(']');
             return Json(std::move(array));
         }
-        for (const auto& literal : {std::string("true"), std::string("false"), std::string("null")}) {
+        for (const std::string& literal : {std::string("true"), std::string("false"), std::string("null")}) {
             if (text_.compare(position_, literal.size(), literal) == 0) {
                 position_ += literal.size();
                 if (literal == "null") return Json();
@@ -240,23 +241,24 @@ std::string Json::dump(int indent) const {
     out << (obj ? '{' : '[');
     size_t count = obj ? object().size() : array().size();
     size_t index = 0;
-    auto element = [&](const std::string& key, const Json& child) {
+    LocalFunction element{[&](const std::string& key, const Json& child) {
         if (index++) out << ',';
         if (indent) out << '\n' << std::string(indent, ' ');
         if (obj) out << quote(key) << (indent ? ": " : ":");
         std::string child_text = child.dump(indent);
         for (char c : child_text) { out << c; if (indent && c == '\n') out << std::string(indent, ' '); }
-    };
-    if (obj) for (const auto& entry : object()) element(entry.first, entry.second);
-    else for (const auto& child : array()) element("", child);
+    }};
+    if (obj) for (const std::pair<const std::string, elman::Json>& entry : object()) element(entry.first, entry.second);
+    else for (const elman::Json& child : array()) element("", child);
     if (indent && count) out << '\n';
     out << (obj ? '}' : ']');
     return out.str();
 }
 void Json::write(const std::string& path) const {
-    auto parent = std::filesystem::path(path).parent_path();
+    const auto destination = std::filesystem::u8path(path);
+    std::filesystem::path parent = destination.parent_path();
     if (!parent.empty()) std::filesystem::create_directories(parent);
-    std::ofstream out(path, std::ios::binary);
+    std::ofstream out(destination, std::ios::binary);
     if (!out) throw std::runtime_error("Cannot write JSON file: " + path);
     out << dump() << '\n';
     if (!out) throw std::runtime_error("JSON write failed: " + path);

@@ -53,14 +53,14 @@ void launch_cross_entropy_cuda(uint32_t* out, const uint32_t* a,
     cross_entropy_average<<<1, 256, 0, current_cuda_stream()>>>(out, losses, p);
     return;
   }
-  auto storage = backend_workspace(Backend::CUDA,
+  BufferPtr storage = backend_workspace(Backend::CUDA,
       size_t(p.input_shape(KernelInput::A, tensor_axis::logits::kBatch)) * sizeof(float));
   losses = static_cast<float*>(storage->raw_pointer());
   cross_entropy_rows<<<
       p.input_shape(KernelInput::A, tensor_axis::logits::kBatch), 256, 0, current_cuda_stream()>>>(
       losses, a, b, p);
   cross_entropy_average<<<1, 256, 0, current_cuda_stream()>>>(out, losses, p);
-  auto status = cudaGetLastError();
+  cudaError_t status = cudaGetLastError();
   if (status != cudaSuccess) {
     throw std::runtime_error(cudaGetErrorString(status));
   }

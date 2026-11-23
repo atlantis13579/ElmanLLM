@@ -1,4 +1,5 @@
 #include "Text/HuggingFaceTokenizer.h"
+#include "Core/LocalFunction.h"
 
 #include <algorithm>
 #include <filesystem>
@@ -17,7 +18,7 @@ uint64_t pair_key(int32_t left, int32_t right) {
 }
 std::map<char16_t, uint8_t> byte_decoder() {
     std::map<char16_t, uint8_t> result;
-    const auto& codepoints = bytelevel_codepoints();
+    const std::array<char16_t, 256>& codepoints = bytelevel_codepoints();
     for (int byte = 0; byte < 256; ++byte) {
         result.emplace(codepoints[byte], static_cast<uint8_t>(byte));
     }
@@ -25,7 +26,7 @@ std::map<char16_t, uint8_t> byte_decoder() {
 }
 std::string byte_token(const std::string& token, const std::map<char16_t, uint8_t>& decoder) {
     std::string result;
-    for (auto code : utf16(token)) {
+    for (char16_t code : utf16(token)) {
         auto found = decoder.find(code);
         require(found != decoder.end(), "BPE vocabulary contains a non-ByteLevel character");
         result.push_back(static_cast<char>(found->second));
@@ -35,22 +36,22 @@ std::string byte_token(const std::string& token, const std::map<char16_t, uint8_
 }
 std::string token_content(const Json& config, const std::string& key) {
     if (!config.contains(key) || config.at(key).is_null()) return {};
-    const auto& token = config.at(key);
+    const Json& token = config.at(key);
     return token.is_object() ? token.at("content").string() : token.string();
 }
 }
 
 HuggingFaceTokenizer::HuggingFaceTokenizer(const std::string& directory) {
-    auto root = std::filesystem::path(directory);
-    auto definition = Json::read((root / "tokenizer.json").string());
-    auto config = Json::read((root / "tokenizer_config.json").string());
+    std::filesystem::path root = std::filesystem::path(directory);
+    Json definition = Json::read((root / "tokenizer.json").string());
+    Json config = Json::read((root / "tokenizer_config.json").string());
     require(definition.at("version").string() == "1.0", "unsupported tokenizer format version");
     require(definition.at("normalizer").at("type").string() == "NFC", "only NFC normalization is supported");
-    const auto& pre = definition.at("pre_tokenizer");
+    const Json& pre = definition.at("pre_tokenizer");
     require(pre.at("type").string() == "Sequence" && pre.at("pretokenizers").array().size() == 2,
             "expected regex Split followed by ByteLevel");
-    const auto& split = pre.at("pretokenizers").at(0);
-    const auto& byte_level = pre.at("pretokenizers").at(1);
+    const Json& split = pre.at("pretokenizers").at(0);
+    const Json& byte_level = pre.at("pretokenizers").at(1);
     require(split.at("type").string() == "Split" && split.at("behavior").string() == "Isolated" &&
             !split.bool_or("invert", false), "unsupported Split behavior");
     require(byte_level.at("type").string() == "ByteLevel" && !byte_level.bool_or("add_prefix_space", true) &&
@@ -61,35 +62,35 @@ HuggingFaceTokenizer::HuggingFaceTokenizer(const std::string& directory) {
     const std::string qwen_pattern = R"((?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?\p{L}+|\p{N}| ?[^\s\p{L}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+)";
     require(pattern == qwen_pattern, "unsupported pretokenizer expression");
     splitter_ = std::make_unique<UnicodeRegexSplit>(pattern);
-    const auto& model = definition.at("model");
+    const Json& model = definition.at("model");
     require(model.at("type").string() == "BPE" && model.at("dropout").is_null() && model.at("unk_token").is_null() &&
             model.string_or("continuing_subword_prefix", "").empty() && model.string_or("end_of_word_suffix", "").empty() &&
             !model.bool_or("byte_fallback", false) && !model.bool_or("fuse_unk", false), "unsupported BPE options");
-    const auto& vocabulary = model.at("vocab").object();
+    const Json::Object& vocabulary = model.at("vocab").object();
     require(vocabulary.size() >= 256 && vocabulary.size() < size_t(std::numeric_limits<int32_t>::max()), "invalid vocabulary size");
     bpe_.vocabulary_.resize(vocabulary.size());
-    const auto decoder = byte_decoder();
+    const std::map<char16_t, uint8_t> decoder = byte_decoder();
     std::map<std::string, int32_t> ids;
-    for (const auto& token : vocabulary) {
+    for (const std::pair<const std::string, Json>& token : vocabulary) {
         int id = token.second.integer();
         require(id >= 0 && size_t(id) < vocabulary.size() && bpe_.vocabulary_[id].empty(), "invalid or duplicate vocabulary ID");
         bpe_.vocabulary_[id] = byte_token(token.first, decoder);
         ids.emplace(token.first, id);
     }
-    for (const auto& item : decoder) {
+    for (const std::pair<const char16_t, unsigned char>& item : decoder) {
         std::string token = utf8(std::u16string(1, item.first));
         auto found = ids.find(token);
         require(found != ids.end(), "incomplete byte alphabet");
         bpe_.byte_ids_[item.second] = found->second;
     }
-    for (const auto& item : model.at("merges").array()) {
+    for (const Json& item : model.at("merges").array()) {
         std::string left, right;
         if (item.is_array()) {
             require(item.array().size() == 2, "invalid BPE merge pair");
             left = item.at(0).string();
             right = item.at(1).string();
         } else {
-            const auto& merge = item.string();
+            const std::string& merge = item.string();
             const size_t separator = merge.find(' ');
             require(separator != std::string::npos && separator != 0 && separator + 1 < merge.size() &&
                     merge.find(' ', separator + 1) == std::string::npos, "invalid BPE merge");
@@ -105,7 +106,7 @@ HuggingFaceTokenizer::HuggingFaceTokenizer(const std::string& directory) {
     special_.resize(decoded_.size(), false);
     std::set<int32_t> added_ids;
     std::map<std::string, int32_t> added_text;
-    for (const auto& item : definition.at("added_tokens").array()) {
+    for (const Json& item : definition.at("added_tokens").array()) {
         int id = item.at("id").integer();
         std::string text = item.at("content").string();
         require(id >= 0 && size_t(id) <= decoded_.size() && !text.empty() && added_ids.insert(id).second &&
@@ -117,14 +118,14 @@ HuggingFaceTokenizer::HuggingFaceTokenizer(const std::string& directory) {
         else { decoded_[id] = text; special_[id] = special; }
         added_.push_back({id, std::move(text), special});
     }
-    auto special_id = [&](const std::string& key) {
+    LocalFunction special_id{[&](const std::string& key) {
         std::string text = token_content(config, key);
         if (text.empty()) return int32_t(-1);
         auto found = added_text.find(text);
         require(found != added_text.end(), "configured special token is absent from added_tokens: " + key);
         special_[found->second] = true;
         return found->second;
-    };
+    }};
     bos_ = special_id("bos_token"); eos_ = special_id("eos_token"); pad_ = special_id("pad_token");
     add_bos_ = config.bool_or("add_bos_token", false); add_eos_ = config.bool_or("add_eos_token", false);
     require((!add_bos_ || bos_ >= 0) && (!add_eos_ || eos_ >= 0), "missing configured BOS/EOS token");
@@ -135,8 +136,8 @@ HuggingFaceTokenizer::HuggingFaceTokenizer(const std::string& directory) {
 
 void HuggingFaceTokenizer::ordinary(const std::string& text, std::vector<int32_t>& result) const {
     if (text.empty()) return;
-    for (const auto& piece : splitter_->split(normalize_nfc(text))) {
-        auto ids = bpe_.encode(piece, false);
+    for (const std::string& piece : splitter_->split(normalize_nfc(text))) {
+        std::vector<int32_t> ids = bpe_.encode(piece, false);
         result.insert(result.end(), ids.begin(), ids.end());
     }
 }
@@ -147,7 +148,7 @@ std::vector<int32_t> HuggingFaceTokenizer::encode(const std::string& text, bool 
     size_t begin = 0, position = 0;
     while (position < text.size()) {
         const AddedToken* match = nullptr;
-        for (const auto& token : added_)
+        for (const HuggingFaceTokenizer::AddedToken& token : added_)
             if (text.compare(position, token.text.size(), token.text) == 0 && (!match || token.text.size() > match->text.size()))
                 match = &token;
         if (!match) { ++position; continue; }

@@ -1,13 +1,14 @@
 #include "kernel.h"
+#include "Core/LocalFunction.h"
 #include "Operators/float64_pointwise_math.h"
 
 namespace elman {
 void launch_float64_pointwise_cpu(Float64Pointwise op, uint32_t* out, const uint32_t* a,
                                   const uint32_t* b, const uint32_t* c, const KernelParams& p) {
-    auto read = [&](const uint32_t* data, int index, KernelInput input) {
+    LocalFunction read{[&](const uint32_t* data, int index, KernelInput input) {
         return p.input_dtype(input) == int(DType::Float64) ? reinterpret_cast<const double*>(data)[index] :
             double(cpu_read(data, index, p.input_dtype(input)));
-    };
+    }};
     const int arity = float64_pointwise_arity(op);
     for (int i = 0; i < p.output_count(); ++i) {
         const double x = read(a, broadcast_index(i, KernelInput::A, p), KernelInput::A);

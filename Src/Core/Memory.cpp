@@ -36,7 +36,7 @@ using AccountKey = std::pair<Backend, int>;
 struct Ledger { std::mutex mutex; std::map<AccountKey, Account> accounts; uint64_t next = 0; };
 Ledger& ledger() {
     // Outlive thread-local vendor contexts whose workspaces release at exit.
-    static auto* value = new Ledger;
+    static Ledger* value = new Ledger;
     return *value;
 }
 void validate_backend(Backend backend) {
@@ -77,38 +77,38 @@ MemoryStats memory_stats(Backend backend, int device) {
     if ((backend == Backend::CPU && device != -1) || (backend == Backend::CUDA && device < 0) ||
         (backend == Backend::Metal && device != 0))
         throw std::invalid_argument("Invalid memory account device");
-    auto& value = ledger();
+    Ledger& value = ledger();
     std::lock_guard<std::mutex> lock(value.mutex);
     return value.accounts[{backend, device}].stats;
 }
 MemoryReservation::MemoryReservation(Backend backend, size_t bytes, MemoryKind kind)
     : backend_(backend), device_(current_device(backend)), kind_(kind) {
     prepare_cached_allocation(backend, bytes);
-    auto& value = ledger();
+    Ledger& value = ledger();
     std::unique_lock<std::mutex> lock(value.mutex);
-    auto& account = value.accounts[{backend, device_}];
+    Account& account = value.accounts[{backend, device_}];
     size_t next = 0;
     for (int attempt = 0; ; ++attempt) {
-        auto current = account.stats.live_bytes();
+        size_t current = account.stats.live_bytes();
         next = checked_memory_add(current, bytes);
         size_t ceiling = std::numeric_limits<size_t>::max();
-        for (const auto& entry : account.limits) ceiling = std::min(ceiling, entry.second.ceiling);
+        for (const std::pair<const uint64_t, LimitEntry>& entry : account.limits) ceiling = std::min(ceiling, entry.second.ceiling);
         if (next <= ceiling) break;
         if (attempt) throw MemoryLimitExceeded(backend, bytes, current, ceiling);
         lock.unlock();
-        auto reclaimed = reclaim_cached_allocations(backend);
+        size_t reclaimed = reclaim_cached_allocations(backend);
         lock.lock();
         if (!reclaimed) throw MemoryLimitExceeded(backend, bytes, current, ceiling);
     }
     category(account.stats, kind) += bytes;
     account.stats.peak_bytes = std::max(account.stats.peak_bytes, next);
     ++account.stats.allocations;
-    for (auto& entry : account.limits) entry.second.peak = std::max(entry.second.peak, next);
+    for (std::pair<const uint64_t, LimitEntry>& entry : account.limits) entry.second.peak = std::max(entry.second.peak, next);
     bytes_ = bytes;
 }
 void MemoryReservation::release() noexcept {
     if (!bytes_) return;
-    auto& value = ledger();
+    Ledger& value = ledger();
     std::lock_guard<std::mutex> lock(value.mutex);
     category(value.accounts[{backend_, device_}].stats, kind_) -= bytes_;
     bytes_ = 0;
@@ -124,29 +124,29 @@ MemoryReservation& MemoryReservation::operator=(MemoryReservation&& other) noexc
 }
 void MemoryReservation::reclassify(MemoryKind kind) {
     if (kind == kind_) return;
-    auto& value = ledger();
+    Ledger& value = ledger();
     std::lock_guard<std::mutex> lock(value.mutex);
-    auto& stats = value.accounts[{backend_, device_}].stats;
+    MemoryStats& stats = value.accounts[{backend_, device_}].stats;
     category(stats, kind_) -= bytes_;
     category(stats, kind) += bytes_;
     kind_ = kind;
 }
 MemoryLimit::MemoryLimit(Backend backend, size_t bytes) : backend_(backend), device_(current_device(backend)) {
-    auto& value = ledger();
+    Ledger& value = ledger();
     std::lock_guard<std::mutex> lock(value.mutex);
-    auto& account = value.accounts[{backend, device_}];
-    auto current = account.stats.live_bytes();
+    Account& account = value.accounts[{backend, device_}];
+    size_t current = account.stats.live_bytes();
     if (current > bytes) throw MemoryLimitExceeded(backend, 0, current, bytes);
     id_ = ++value.next;
     account.limits.emplace(id_, LimitEntry{bytes, current});
 }
 MemoryLimit::~MemoryLimit() {
-    auto& value = ledger();
+    Ledger& value = ledger();
     std::lock_guard<std::mutex> lock(value.mutex);
     value.accounts[{backend_, device_}].limits.erase(id_);
 }
 size_t MemoryLimit::peak_bytes() const {
-    auto& value = ledger();
+    Ledger& value = ledger();
     std::lock_guard<std::mutex> lock(value.mutex);
     return value.accounts[{backend_, device_}].limits.at(id_).peak;
 }
@@ -177,16 +177,16 @@ MemoryInfo memory_info(Backend backend) {
     vm_statistics64_data_t statistics{};
     mach_msg_type_number_t count = HOST_VM_INFO64_COUNT;
     vm_size_t page_size = 0;
-    const auto host = mach_host_self();
-    const auto queried = host_statistics64(host, HOST_VM_INFO64, reinterpret_cast<host_info64_t>(&statistics), &count);
-    const auto page_status = host_page_size(host, &page_size);
+    const mach_port_t host = mach_host_self();
+    const kern_return_t queried = host_statistics64(host, HOST_VM_INFO64, reinterpret_cast<host_info64_t>(&statistics), &count);
+    const kern_return_t page_status = host_page_size(host, &page_size);
     mach_port_deallocate(mach_task_self(), host);
     if (sysctlbyname("hw.memsize", &total, &length, nullptr, 0) || queried != KERN_SUCCESS || page_status != KERN_SUCCESS)
         throw std::runtime_error("Cannot query macOS host memory");
-    const auto pages = size_t(statistics.free_count) + statistics.inactive_count + statistics.purgeable_count;
+    const size_t pages = size_t(statistics.free_count) + statistics.inactive_count + statistics.purgeable_count;
     return {size_t(total), std::min(size_t(total), checked_memory_mul(pages, page_size))};
 #elif defined(__linux__)
-    auto pages = sysconf(_SC_PHYS_PAGES), available = sysconf(_SC_AVPHYS_PAGES), page_size = sysconf(_SC_PAGESIZE);
+    long pages = sysconf(_SC_PHYS_PAGES), available = sysconf(_SC_AVPHYS_PAGES), page_size = sysconf(_SC_PAGESIZE);
     if (pages < 0 || available < 0 || page_size <= 0) throw std::runtime_error("Cannot query host memory");
     MemoryInfo result{checked_memory_mul(size_t(pages), size_t(page_size)), checked_memory_mul(size_t(available), size_t(page_size))};
     std::ifstream file("/proc/meminfo");
@@ -203,13 +203,13 @@ MemoryInfo memory_info(Backend backend) {
 }
 size_t memory_available_limit(Backend backend, size_t maximum, size_t reserve) {
     const int device = current_device(backend);
-    auto info = memory_info(backend);
-    auto free = info.available_bytes > reserve ? info.available_bytes - reserve : 0;
-    auto limit = checked_memory_add(memory_stats(backend).live_bytes(), free);
+    MemoryInfo info = memory_info(backend);
+    size_t free = info.available_bytes > reserve ? info.available_bytes - reserve : 0;
+    size_t limit = checked_memory_add(memory_stats(backend).live_bytes(), free);
     if (maximum) limit = std::min(maximum, limit);
-    auto& value = ledger();
+    Ledger& value = ledger();
     std::lock_guard<std::mutex> lock(value.mutex);
-    for (const auto& entry : value.accounts[{backend, device}].limits) limit = std::min(limit, entry.second.ceiling);
+    for (const std::pair<const uint64_t, LimitEntry>& entry : value.accounts[{backend, device}].limits) limit = std::min(limit, entry.second.ceiling);
     return limit;
 }
 } // namespace elman

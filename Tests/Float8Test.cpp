@@ -1,4 +1,5 @@
 #include "Core/AllocationPool.h"
+#include "Core/LocalFunction.h"
 #include "Core/Execution.h"
 #include "Core/Graph.h"
 #include "Core/TensorDispatch.h"
@@ -29,9 +30,9 @@ void check(bool valid, const std::string& message) {
     if (!valid) throw std::runtime_error(message);
 }
 std::vector<uint8_t> bytes(const Json& spec) {
-    const auto text = spec.at("raw_hex").string();
+    const std::string text = spec.at("raw_hex").string();
     if (text.size() % 2) throw std::runtime_error("Odd hex length");
-    auto digit = [](char c) {
+    int (*const digit)(char) = [](char c) {
         if (c >= '0' && c <= '9') return c - '0';
         if (c >= 'a' && c <= 'f') return c - 'a' + 10;
         throw std::runtime_error("Invalid hex digit");
@@ -42,7 +43,7 @@ std::vector<uint8_t> bytes(const Json& spec) {
 }
 Shape shape(const Json& spec) {
     Shape result;
-    for (const auto& value : spec.at("shape").array()) result.push_back(value.integer());
+    for (const elman::Json& value : spec.at("shape").array()) result.push_back(value.integer());
     return result;
 }
 bool nan_code(uint64_t code, DType dtype) {
@@ -59,7 +60,7 @@ bool nan_code(uint64_t code, DType dtype) {
     }
 }
 void compare(const Tensor& output, const Json& expected, const std::string& name) {
-    const auto wanted = bytes(expected), actual = output.raw_data();
+    const std::vector<uint8_t> wanted = bytes(expected), actual = output.raw_data();
     check(output.dtype() == DType(expected.at("dtype").integer()) && output.shape() == shape(expected), name + ": layout differs");
     check(actual.size() == wanted.size(), name + ": byte count differs");
     elements += output.numel();
@@ -105,9 +106,9 @@ template<class F> void rejects(F action) {
     check(rejected, "Malformed low precision cast was accepted");
 }
 KernelParams pointwise_descriptor(const Tensor& output, const std::vector<Tensor>& inputs) {
-    auto p = descriptor(output, inputs.at(0));
+    KernelParams p = descriptor(output, inputs.at(0));
     for (size_t i = 1; i < inputs.size(); ++i) {
-        const auto input = KernelInput(i);
+        const KernelInput input = KernelInput(i);
         const int slot = KernelParams::input_slot(input);
         p.v[slot] = int(inputs[i].shape().size());
         p.v[KernelParams::input_dtype_slot(input)] = int(inputs[i].dtype());
@@ -122,24 +123,24 @@ KernelParams pointwise_descriptor(const Tensor& output, const std::vector<Tensor
 }
 void native(Backend backend) {
     const std::vector<float> values{0.f, -0.f, .5f, 1.f, -1.5f, 2.f, 4.f};
-    for (auto dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
+    for (elman::DType dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
                        DType::Float8E5M2FNUZ, DType::Float8E8M0FNU, DType::Float4E2M1FN}) {
-        auto input = Tensor::from_data({7}, values, backend);
-        auto output = cast(input, dtype);
+        Tensor input = Tensor::from_data({7}, values, backend);
+        Tensor output = cast(input, dtype);
         check(output.raw_data() == Tensor::from_data({7}, values, backend, false, dtype).raw_data(), "Upload and native cast differ");
         check(cast(output, DType::Float32).data() == output.data(), "Download and native decode differ");
         std::vector<uint8_t> codes(256);
         for (size_t i = 0; i < codes.size(); ++i) codes[i] = uint8_t(i);
-        auto all = Tensor::from_raw({dtype == DType::Float4E2M1FN ? 512 : 256}, dtype, codes, backend);
-        auto copy = Tensor::from_raw(all.shape(), dtype, std::vector<uint8_t>(256), backend);
-        auto p = descriptor(copy, all);
+        Tensor all = Tensor::from_raw({dtype == DType::Float4E2M1FN ? 512 : 256}, dtype, codes, backend);
+        Tensor copy = Tensor::from_raw(all.shape(), dtype, std::vector<uint8_t>(256), backend);
+        KernelParams p = descriptor(copy, all);
         backend_dispatch("cast", copy.node()->value, {all.node()->value}, p);
         check(copy.raw_data() == codes, "Same dtype raw cast changed NaN payloads or packed bits");
-        auto inplace = descriptor(all, all);
+        KernelParams inplace = descriptor(all, all);
         backend_dispatch("cast", all.node()->value, {all.node()->value}, inplace);
         check(all.raw_data() == codes, "In-place raw cast changed bytes");
-        auto valid = descriptor(output, input);
-        auto bad = valid; bad.v[KernelParams::kOutputCountSlot] = 6;
+        KernelParams valid = descriptor(output, input);
+        KernelParams bad = valid; bad.v[KernelParams::kOutputCountSlot] = 6;
         rejects([&] { backend_dispatch("cast", output.node()->value, {input.node()->value}, bad); });
         bad = valid; bad.v[KernelParams::kOutputRankSlot] = 9;
         rejects([&] { backend_dispatch("cast", output.node()->value, {input.node()->value}, bad); });
@@ -151,20 +152,20 @@ void native(Backend backend) {
         rejects([&] { cast(output, DType::Int32); });
         rejects([&] { add(output, Tensor::ones({7}, backend)); });
         const size_t shift = dtype == DType::Float4E2M1FN ? 2 : 1;
-        auto first = contiguous_view(all, {6});
-        auto shifted = contiguous_view(all, {6}, shift);
-        const auto overlap = descriptor(shifted, first);
+        Tensor first = contiguous_view(all, {6});
+        Tensor shifted = contiguous_view(all, {6}, shift);
+        const KernelParams overlap = descriptor(shifted, first);
         rejects([&] { backend_dispatch("cast", shifted.node()->value, {first.node()->value}, overlap); });
         check(all.raw_data() == codes, "Rejected overlapping cast modified storage");
-        auto offset_input = contiguous_view(Tensor::from_data({8}, {99.f, 0.f, .5f, 1.f, 2.f, 4.f, 99.f, 99.f}, backend), {5}, 1);
-        auto reference = cast(offset_input, dtype);
+        Tensor offset_input = contiguous_view(Tensor::from_data({8}, {99.f, 0.f, .5f, 1.f, 2.f, 4.f, 99.f, 99.f}, backend), {5}, 1);
+        Tensor reference = cast(offset_input, dtype);
         const int root_count = dtype == DType::Float4E2M1FN ? 7 : 8;
-        auto storage = Tensor::from_raw({root_count}, dtype, std::vector<uint8_t>(dtype_storage_bytes(dtype, size_t(root_count)), 0xa5), backend);
-        auto target_view = contiguous_view(storage, {5}, 2);
-        const auto into_view = descriptor(target_view, offset_input);
+        Tensor storage = Tensor::from_raw({root_count}, dtype, std::vector<uint8_t>(dtype_storage_bytes(dtype, size_t(root_count)), 0xa5), backend);
+        Tensor target_view = contiguous_view(storage, {5}, 2);
+        const KernelParams into_view = descriptor(target_view, offset_input);
         backend_dispatch("cast", target_view.node()->value, {offset_input.node()->value}, into_view);
         check(target_view.raw_data() == reference.raw_data(), "Cast into an offset storage view differs");
-        const auto written = storage.raw_data();
+        const std::vector<uint8_t> written = storage.raw_data();
         check(written[0] == 0xa5 && (dtype == DType::Float4E2M1FN || (written[1] == 0xa5 && written[7] == 0xa5)),
               "Cast modified bytes outside the output view");
         if (dtype == DType::Float4E2M1FN) {
@@ -189,76 +190,76 @@ void native(Backend backend) {
     }
 }
 Tensor evaluate(const Json& test, const std::vector<Tensor>& x) {
-    const auto op = test.at("op").string();
+    const std::string op = test.at("op").string();
     if (op == "uniform" || op == "normal" || op == "dropout") {
         if (test.contains("replicate_count")) {
             const int repeats = test.at("replicate_count").integer();
-            auto object = test.object(); object.erase("replicate_count");
+            elman::Json::Object object = test.object(); object.erase("replicate_count");
             std::vector<float> values;
             Tensor output;
             for (int repeat = 0; repeat < repeats; ++repeat) {
                 const int seed = int(uint32_t(test.at("seed").integer()) + uint32_t(repeat));
                 object["seed"] = seed;
-                auto attributes = object.at("attrs").array(); attributes[0] = seed; object["attrs"] = attributes;
+                elman::Json::Array attributes = object.at("attrs").array(); attributes[0] = seed; object["attrs"] = attributes;
                 output = evaluate(Json(object), x);
-                const auto sample = output.data(); values.insert(values.end(), sample.begin(), sample.end());
+                const std::vector<float> sample = output.data(); values.insert(values.end(), sample.begin(), sample.end());
             }
-            Shape dimensions{repeats}; const auto sample_shape = output.shape(); dimensions.insert(dimensions.end(), sample_shape.begin(), sample_shape.end());
+            Shape dimensions{repeats}; const Shape sample_shape = output.shape(); dimensions.insert(dimensions.end(), sample_shape.begin(), sample_shape.end());
             return Tensor::from_data(dimensions, values, output.backend(), false, output.dtype());
         }
-        auto parameter = [&](const char* name) {
-            const auto& words = test.at(name).array();
+        LocalFunction parameter{[&](const char* name) {
+            const elman::Json::Array& words = test.at(name).array();
             const uint64_t bits = uint64_t(uint32_t(words.at(0).integer())) | (uint64_t(uint32_t(words.at(1).integer())) << 32);
             double value; std::memcpy(&value, &bits, sizeof(value)); return value;
-        };
-        const auto backend = x.empty() ? parse_backend(test.at("backend").string()) : x[0].backend();
-        const auto dtype = op == "dropout" ? x.at(0).dtype() : DType(test.at("dtype").integer());
+        }};
+        const Backend backend = x.empty() ? parse_backend(test.at("backend").string()) : x[0].backend();
+        const DType dtype = op == "dropout" ? x.at(0).dtype() : DType(test.at("dtype").integer());
         Shape output_shape = op == "dropout" ? x.at(0).shape() : shape(test);
         if (test.bool_or("raw", false)) {
             std::vector<int> attributes;
-            for (const auto& v : test.at("attrs").array()) attributes.push_back(v.integer());
+            for (const elman::Json& v : test.at("attrs").array()) attributes.push_back(v.integer());
             return dispatch_tensor(op, output_shape, x, attributes, dtype, backend);
         }
-        const auto seed = uint32_t(test.at("seed").integer());
+        const uint32_t seed = uint32_t(test.at("seed").integer());
         if (op == "dropout") return dropout(x.at(0), parameter("p_bits"), seed, test.bool_or("training", true));
         if (op == "uniform") return Tensor::uniform(output_shape, parameter("first_bits"), parameter("second_bits"), seed, backend, false, dtype);
         return Tensor::normal(output_shape, parameter("first_bits"), parameter("second_bits"), seed, backend, false, dtype);
     }
     if (op == "sampling_scores" || op == "sampling_probabilities" || op == "sample_tokens") {
-        auto scalar = [&](const std::string& name, double fallback) {
+        LocalFunction scalar{[&](const std::string& name, double fallback) {
             if (!test.contains(name + "_bits")) return test.number_or(name, fallback);
-            const auto& words = test.at(name + "_bits").array();
+            const elman::Json::Array& words = test.at(name + "_bits").array();
             const uint64_t bits = uint64_t(uint32_t(words.at(0).integer())) | (uint64_t(uint32_t(words.at(1).integer())) << 32);
             double value; std::memcpy(&value, &bits, sizeof(value)); return value;
-        };
+        }};
         SamplingOptions options;
         options.temperature = scalar("temperature", 1.); options.top_p = scalar("top_p", 1.);
         options.repetition_penalty = scalar("repetition_penalty", 1.); options.top_k = test.int_or("top_k", 0);
         if (op == "sampling_scores") return sampling_scores(x.at(0), x.at(1), options);
         if (op == "sampling_probabilities") return softmax(sampling_scores(x.at(0), x.at(1), options), 1);
         SamplingRng rng(std::stoull(test.at("seed").string()));
-        auto ids = sample_tokens(x.at(0), x.at(1), options, rng);
+        std::vector<int32_t> ids = sample_tokens(x.at(0), x.at(1), options, rng);
         return Tensor::from_int_data({int(ids.size())}, ids, x.at(0).backend());
     }
     if (op == "categorical_sample") {
-        auto ids = categorical_sample(x.at(0), x.at(1).data());
+        std::vector<int32_t> ids = categorical_sample(x.at(0), x.at(1).data());
         return Tensor::from_int_data({int(ids.size())}, ids, x.at(0).backend());
     }
     if (test.bool_or("raw", false)) {
         std::vector<int> attributes;
-        for (const auto& value : test.at("attrs").array()) attributes.push_back(value.integer());
-        const auto& expected = test.at("expected");
+        for (const elman::Json& value : test.at("attrs").array()) attributes.push_back(value.integer());
+        const Json& expected = test.at("expected");
         return dispatch_tensor(op, shape(expected), x, attributes, DType(expected.at("dtype").integer()));
     }
     if (op == "cast") return cast(x.at(0), DType(test.at("dtype").integer()));
     if (op == "cast_roundtrip") return cast(cast(x.at(0), DType(test.at("dtype").integer())), x.at(0).dtype());
-    auto integers = [&](const char* name) { Shape values; for (const auto& value : test.at(name).array()) values.push_back(value.integer()); return values; };
-    auto divisor = [&] {
+    LocalFunction integers{[&](const char* name) { Shape values; for (const elman::Json& value : test.at(name).array()) values.push_back(value.integer()); return values; }};
+    LocalFunction divisor{[&] {
         if (!test.contains("divisor_bits")) return test.number_or("divisor", 1.);
-        const auto& words = test.at("divisor_bits").array();
+        const elman::Json::Array& words = test.at("divisor_bits").array();
         const uint64_t bits = uint64_t(uint32_t(words.at(0).integer())) | (uint64_t(uint32_t(words.at(1).integer())) << 32);
         double value; std::memcpy(&value, &bits, sizeof(value)); return value;
-    };
+    }};
     if (op == "attention_softmax") return attention_softmax(x.at(0), x.at(1), divisor(), test.contains("axis") ? test.at("axis").integer() : -1);
     if (op == "tiled_attention") return tiled_attention(x.at(0), x.at(1), x.at(2), x.at(3), divisor(), test.contains("query_tile") ? test.at("query_tile").integer() : 32,
         test.bool_or("causal", false), test.contains("causal_offset") ? test.at("causal_offset").integer() : 0, AttentionTiling(test.contains("tiling") ? test.at("tiling").integer() : 0));
@@ -288,7 +289,7 @@ Tensor evaluate(const Json& test, const std::vector<Tensor>& x) {
     if (op == "scatter") return scatter(x.at(0), test.at("axis").integer(), x.at(1), x.at(2));
     if (op == "repeat") {
         Shape reps;
-        for (const auto& value : test.at("reps").array()) reps.push_back(value.integer());
+        for (const elman::Json& value : test.at("reps").array()) reps.push_back(value.integer());
         return repeat(x.at(0), reps);
     }
     if (op == "where") return where(x.at(0), x.at(1), x.at(2));
@@ -305,7 +306,7 @@ Tensor evaluate(const Json& test, const std::vector<Tensor>& x) {
     if (op == "addmm") return addmm(x.at(0), x.at(1), x.at(2), test.number_or("beta", 1.), test.number_or("alpha", 1.));
     if (op == "packed_linear") {
         std::vector<int> widths;
-        for (const auto& value : test.at("widths").array()) widths.push_back(value.integer());
+        for (const elman::Json& value : test.at("widths").array()) widths.push_back(value.integer());
         return packed_linear(x.at(0), x.at(1), widths, x.size() > 2 ? x.at(2) : Tensor{});
     }
     if (op == "sum_all") return sum_all(x.at(0));
@@ -340,12 +341,12 @@ Json specification(const Tensor& value) {
     return Json::Object{{"shape", dimensions}, {"dtype", int(value.dtype())}, {"raw_hex", raw}};
 }
 void random_distribution(const Tensor& output, const Json& test, const Json& suite) {
-    const auto& expected = test.at("expected");
+    const Json& expected = test.at("expected");
     check(output.dtype() == DType(expected.at("dtype").integer()) && output.shape() == shape(expected), "Random distribution layout differs");
     if (is_compute_float(output.dtype())) {
-        const auto& distribution = test.at("distribution");
+        const Json& distribution = test.at("distribution");
         check(size_t(distribution.at("samples").integer()) == output.numel(), "Floating random sample count differs");
-        auto ordered = [](std::vector<float> values) {
+        std::vector<uint32_t> (*const ordered)(std::vector<float>) = [](std::vector<float> values) {
             std::vector<uint32_t> keys; keys.reserve(values.size());
             for (float value : values) {
                 uint32_t bits; std::memcpy(&bits, &value, sizeof(bits));
@@ -353,8 +354,8 @@ void random_distribution(const Tensor& output, const Json& test, const Json& sui
             }
             std::sort(keys.begin(), keys.end()); return keys;
         };
-        const auto actual = ordered(output.data());
-        const auto wanted = ordered(Tensor::from_raw(shape(expected), output.dtype(), bytes(expected), Backend::CPU).data());
+        const std::vector<uint32_t> actual = ordered(output.data());
+        const std::vector<uint32_t> wanted = ordered(Tensor::from_raw(shape(expected), output.dtype(), bytes(expected), Backend::CPU).data());
         size_t left = 0, right = 0; double distance = 0;
         while (left < actual.size() || right < wanted.size()) {
             const uint32_t key = std::min(left < actual.size() ? actual[left] : UINT32_MAX,
@@ -368,18 +369,18 @@ void random_distribution(const Tensor& output, const Json& test, const Json& sui
             for (uint32_t key : actual) check(std::binary_search(wanted.begin(), wanted.end(), key), "Floating uniform sampling grid differs from PyTorch");
         elements += output.numel(); return;
     }
-    const auto raw = output.raw_data();
+    const std::vector<uint8_t> raw = output.raw_data();
     std::vector<size_t> actual(257);
     for (size_t i = 0; i < output.numel(); ++i) {
         uint8_t code = output.dtype() == DType::Float4E2M1FN ? uint8_t((raw[i / 2] >> ((i % 2) * 4)) & 15) : raw[i];
         ++actual[nan_code(code, output.dtype()) ? 256 : code];
     }
-    const auto& distribution = test.at("distribution");
-    const auto& counts = distribution.at("counts").array();
+    const Json& distribution = test.at("distribution");
+    const elman::Json::Array& counts = distribution.at("counts").array();
     check(counts.size() == 257 && size_t(distribution.at("samples").integer()) == output.numel(), "Random histogram size differs");
     size_t left = 0, right = 0;
     double distance = 0;
-    for (const auto& index : suite.at("code_orders").at(std::to_string(int(output.dtype()))).array()) {
+    for (const elman::Json& index : suite.at("code_orders").at(std::to_string(int(output.dtype()))).array()) {
         const int code = index.integer(); left += actual.at(code); right += size_t(counts.at(code).integer());
         distance = std::max(distance, std::abs(double(left) - double(right)) / double(output.numel()));
     }
@@ -390,20 +391,20 @@ void random_distribution(const Tensor& output, const Json& test, const Json& sui
     elements += output.numel();
 }
 std::pair<std::vector<float>, std::vector<float>> observed_dropout_scales(const Json& test, const Tensor& input) {
-    const auto& words = test.at("p_bits").array();
+    const elman::Json::Array& words = test.at("p_bits").array();
     const uint64_t bits = uint64_t(uint32_t(words.at(0).integer())) | (uint64_t(uint32_t(words.at(1).integer())) << 32);
     double probability; std::memcpy(&probability, &bits, sizeof(probability));
     // E5M2 represents both an actual zero and an overflowed positive scale.
     // It makes the keep mask observable even for E8M0 and saturated FP4 output.
-    const auto control_dtype = is_low_precision_float(input.dtype()) ? DType::Float8E5M2 : input.dtype();
-    auto ones = Tensor::ones(input.shape(), input.backend(), false, control_dtype);
-    auto control = evaluate(test, {ones});
-    const auto values = control.data();
-    auto scale_bits = [&](const char* key, float fallback) {
+    const elman::DType control_dtype = is_low_precision_float(input.dtype()) ? DType::Float8E5M2 : input.dtype();
+    Tensor ones = Tensor::ones(input.shape(), input.backend(), false, control_dtype);
+    Tensor control = evaluate(test, {ones});
+    const std::vector<float> values = control.data();
+    LocalFunction scale_bits{[&](const char* key, float fallback) {
         if (!test.contains(key)) return fallback;
         const uint32_t bits = uint32_t(test.at(key).integer()); float value;
         std::memcpy(&value, &bits, sizeof(value)); return value;
-    };
+    }};
     const float scale = scale_bits("reference_scale_bits", float(1. / (1. - probability)));
     const float backward_scale = scale_bits("reference_backward_scale_bits", scale);
     const float kept = Tensor::from_data({}, {scale}, input.backend(), false, control.dtype()).data().at(0);
@@ -416,23 +417,23 @@ std::pair<std::vector<float>, std::vector<float>> observed_dropout_scales(const 
     return scales;
 }
 Tensor conditioned_dropout(const Tensor& input, const std::vector<float>& scales) {
-    auto values = input.data();
+    std::vector<float> values = input.data();
     for (size_t i = 0; i < values.size(); ++i) values[i] *= scales[i];
     return Tensor::from_data(input.shape(), values, input.backend(), false, input.dtype());
 }
 void samplings(Backend backend) {
-    for (auto dtype : {DType::Float8E4M3FN,DType::Float8E4M3FNUZ,DType::Float8E5M2,DType::Float8E5M2FNUZ,DType::Float8E8M0FNU,DType::Float4E2M1FN}) {
-        auto storage=Tensor::ones({128},backend,false,dtype);
-        auto weights=contiguous_view(storage,{2,3});
-        auto cumulative=cumsum(cast(weights,DType::Float32),1);
-        auto uniform=Tensor::from_data({2},{0.f,std::nextafter(1.f,0.f)},backend);
-        auto output=Tensor::zeros({2},backend,false,DType::Int32);
+    for (elman::DType dtype : {DType::Float8E4M3FN,DType::Float8E4M3FNUZ,DType::Float8E5M2,DType::Float8E5M2FNUZ,DType::Float8E8M0FNU,DType::Float4E2M1FN}) {
+        Tensor storage=Tensor::ones({128},backend,false,dtype);
+        Tensor weights=contiguous_view(storage,{2,3});
+        Tensor cumulative=cumsum(cast(weights,DType::Float32),1);
+        Tensor uniform=Tensor::from_data({2},{0.f,std::nextafter(1.f,0.f)},backend);
+        Tensor output=Tensor::zeros({2},backend,false,DType::Int32);
         std::vector<Tensor> tensors{weights,cumulative,uniform};
         std::vector<BufferPtr> inputs{weights.node()->value,cumulative.node()->value,uniform.node()->value};
-        auto valid=pointwise_descriptor(output,tensors);
-        auto execute=[&](const KernelParams& p){backend_dispatch("categorical",output.node()->value,inputs,p);};
+        KernelParams valid=pointwise_descriptor(output,tensors);
+        LocalFunction execute{[&](const KernelParams& p){backend_dispatch("categorical",output.node()->value,inputs,p);}};
         execute(valid);check(output.int_data()==std::vector<int32_t>({0,2}),"Low precision categorical boundary differs");
-        const auto before=output.raw_data();
+        const std::vector<uint8_t> before=output.raw_data();
         std::vector<std::pair<int,int>> mutations{{KernelParams::kOutputCountSlot,0},{KernelParams::kOutputRankSlot,0},
             {KernelParams::kOutputRankSlot,9},{KernelParams::kOutputShapeSlot,3},{KernelParams::kOutputDTypeSlot,int(DType::Float32)},
             {KernelParams::input_slot(KernelInput::D),0},{KernelParams::kAttributeSlot,1},{KernelParams::kAttributeSlot+63,1}};
@@ -445,15 +446,15 @@ void samplings(Backend backend) {
                 {slot+KernelParams::kInputShapeOffset+1,INT32_MAX},{slot+KernelParams::kInputStrideOffset+1,2}});
             else mutations.push_back({slot,2});
         }
-        for(auto mutation:mutations){auto bad=valid;bad.v[mutation.first]=mutation.second;rejects([&]{execute(bad);});
+        for(std::pair<int, int> mutation:mutations){KernelParams bad=valid;bad.v[mutation.first]=mutation.second;rejects([&]{execute(bad);});
             check(output.raw_data()==before,"Rejected low precision categorical descriptor changed output");}
         rejects([&]{backend_dispatch("categorical",output.node()->value,{},valid);});
-        auto extra=inputs;extra.push_back(weights.node()->value);
+        std::vector<BufferPtr> extra=inputs;extra.push_back(weights.node()->value);
         rejects([&]{backend_dispatch("categorical",output.node()->value,extra,valid);});
         for(int i=0;i<3;++i){
-            auto missing=inputs;missing[i].reset();rejects([&]{backend_dispatch("categorical",output.node()->value,missing,valid);});
-            auto mixed=tensors;
-            const auto other=dtype==DType::Float8E4M3FN?DType::Float8E5M2:DType::Float8E4M3FN;
+            std::vector<BufferPtr> missing=inputs;missing[i].reset();rejects([&]{backend_dispatch("categorical",output.node()->value,missing,valid);});
+            std::vector<Tensor> mixed=tensors;
+            const elman::DType other=dtype==DType::Float8E4M3FN?DType::Float8E5M2:DType::Float8E4M3FN;
             mixed[i]=cast(mixed[i],other);
             if(i==0)mixed[1]=cast(cumulative,dtype);
             rejects([&]{dispatch_tensor_into("categorical",output,mixed);});
@@ -461,30 +462,30 @@ void samplings(Backend backend) {
                 rejects([&]{dispatch_tensor_into("categorical",output,mixed);});}
             // The backing allocations have enough spare capacity for these
             // Int32 views, even if an overlap validation regression occurs.
-            auto alias=backend_view(inputs[i],0,2);alias->dtype=DType::Int32;alias->bytes=8;
-            const auto original=tensors[i].raw_data();
+            BufferPtr alias=backend_view(inputs[i],0,2);alias->dtype=DType::Int32;alias->bytes=8;
+            const std::vector<uint8_t> original=tensors[i].raw_data();
             rejects([&]{backend_dispatch("categorical",alias,inputs,valid);});
             check(tensors[i].raw_data()==original,"Rejected low precision categorical alias changed input");
         }
-        auto disjoint=backend_view(storage.node()->value,32,2);disjoint->dtype=DType::Int32;disjoint->bytes=8;
+        BufferPtr disjoint=backend_view(storage.node()->value,32,2);disjoint->dtype=DType::Int32;disjoint->bytes=8;
         backend_dispatch("categorical",disjoint,inputs,valid);
         check(backend_download_int(disjoint)==std::vector<int32_t>({0,2}),"Disjoint low precision categorical storage differs");
-        auto empty=Tensor::zeros({0,3},backend,false,dtype);
+        Tensor empty=Tensor::zeros({0,3},backend,false,dtype);
         check(dispatch_tensor("categorical",{0},{empty,Tensor::zeros({0,3},backend),Tensor::zeros({0},backend)},{},DType::Int32).numel()==0,"Empty low precision categorical differs");
         const float invalid_weight=dtype==DType::Float8E8M0FNU?std::numeric_limits<float>::quiet_NaN():-1.f;
-        auto invalid=Tensor::from_data({2,3},{1.f,invalid_weight,1.f,1.f,1.f,1.f},backend,false,dtype);
+        Tensor invalid=Tensor::from_data({2,3},{1.f,invalid_weight,1.f,1.f,1.f,1.f},backend,false,dtype);
         check(dispatch_tensor("categorical",{2},{invalid,cumulative,uniform},{},DType::Int32).int_data()==std::vector<int32_t>({-1,2}),"Invalid low precision categorical row was not isolated");
         rejects([&]{categorical_sample(invalid,{0.f,.5f});});
         rejects([&]{categorical_sample(weights,{0.f});});
         rejects([&]{categorical_sample(weights,{0.f,1.f});});
         rejects([&]{categorical_sample_double(weights,{0.,.5});});
-        auto differentiable=Tensor::ones({2,3},backend,true,dtype);
-        auto history=Tensor::zeros({2,0},backend,false,DType::Int32);
-        auto scores=sampling_scores(differentiable,history,{});
+        Tensor differentiable=Tensor::ones({2,3},backend,true,dtype);
+        Tensor history=Tensor::zeros({2,0},backend,false,DType::Int32);
+        Tensor scores=sampling_scores(differentiable,history,{});
         check(scores.dtype()==DType::Float32&&!scores.requires_grad()&&scores.data()==std::vector<float>(6,1.f),"Low precision sampling scores did not detach into FP32");
         if(dtype==DType::Float4E2M1FN){
-            auto dirty=Tensor::from_raw({1,3},dtype,{0x22,0xf2},backend);
-            auto selected=dispatch_tensor("categorical",{1},{dirty,Tensor::from_data({1,3},{1.f,2.f,3.f},backend),Tensor::zeros({1},backend)},{},DType::Int32);
+            Tensor dirty=Tensor::from_raw({1,3},dtype,{0x22,0xf2},backend);
+            Tensor selected=dispatch_tensor("categorical",{1},{dirty,Tensor::from_data({1,3},{1.f,2.f,3.f},backend),Tensor::zeros({1},backend)},{},DType::Int32);
             check(selected.int_data()==std::vector<int32_t>{0}&&dirty.raw_data()==std::vector<uint8_t>({0x22,0xf2}),"Categorical read modified packed padding");
         }
         for(bool asynchronous:{false,true}){
@@ -500,57 +501,57 @@ void samplings(Backend backend) {
     }
 }
 void floating_randoms(Backend backend) {
-    for (auto dtype : {DType::Float32, DType::Float16, DType::BFloat16}) {
+    for (elman::DType dtype : {DType::Float32, DType::Float16, DType::BFloat16}) {
         for (bool normal : {false,true}) {
             const std::string op = normal ? "normal" : "uniform";
             const double first = normal ? 1./3 : -.1234567891234, second = normal ? 1.1234567891234 : 1.9876543219876;
-            auto sample = normal ? Tensor::normal({4097},first,second,5721,backend,true,dtype) : Tensor::uniform({4097},first,second,5721,backend,true,dtype);
+            Tensor sample = normal ? Tensor::normal({4097},first,second,5721,backend,true,dtype) : Tensor::uniform({4097},first,second,5721,backend,true,dtype);
             std::vector<int> attributes(9);attributes[0]=5721;attributes[8]=1;
             std::memcpy(attributes.data()+4,&first,sizeof(first));std::memcpy(attributes.data()+6,&second,sizeof(second));
-            auto raw=dispatch_tensor(op,sample.shape(),{},attributes,dtype,backend);
+            Tensor raw=dispatch_tensor(op,sample.shape(),{},attributes,dtype,backend);
             check(raw.raw_data()==sample.raw_data(),"Public floating random scalar transport differs");
             check(raw.raw_data()==dispatch_tensor(op,sample.shape(),{},attributes,dtype,backend).raw_data(),"Floating random replay differs");
             attributes[1]=7;
             check(raw.raw_data()!=dispatch_tensor(op,sample.shape(),{},attributes,dtype,backend).raw_data(),"Floating random stream offsets collided");
             sample.backward(Tensor::ones(sample.shape(),backend,false,dtype));
             check(Tensor(sample.node()->gradient).raw_data()==Tensor::ones(sample.shape(),backend,false,dtype).raw_data(),"Floating random output is not a differentiable leaf");
-            auto target=Tensor::zeros({7},backend,false,dtype);auto valid=descriptor(target,target);
+            Tensor target=Tensor::zeros({7},backend,false,dtype);KernelParams valid=descriptor(target,target);
             valid.v[KernelParams::input_slot(KernelInput::A)]=-1;
             valid.v[KernelParams::kAttributeSlot]=5721;
             valid.v[KernelParams::kAttributeSlot+2]=0;valid.v[KernelParams::kAttributeSlot+3]=0x3f800000;
-            auto execute=[&](const KernelParams& p){backend_dispatch(op,target.node()->value,{},p);};
-            execute(valid);const auto unchanged=target.raw_data();
-            for(auto mutation:std::vector<std::pair<int,int>>{{KernelParams::kOutputCountSlot,6},{KernelParams::kOutputRankSlot,9},
+            LocalFunction execute{[&](const KernelParams& p){backend_dispatch(op,target.node()->value,{},p);}};
+            execute(valid);const std::vector<uint8_t> unchanged=target.raw_data();
+            for(std::pair<int, int> mutation:std::vector<std::pair<int,int>>{{KernelParams::kOutputCountSlot,6},{KernelParams::kOutputRankSlot,9},
                 {KernelParams::kOutputShapeSlot,6},{KernelParams::kOutputDTypeSlot,int(DType::Int32)},
                 {KernelParams::input_slot(KernelInput::A),0},{KernelParams::kAttributeSlot+8,2},{KernelParams::kAttributeSlot+9,1},
                 {KernelParams::kAttributeSlot+(normal?3:2),int(normal?0xbf800000u:0x7fc00000u)}}){
-                auto bad=valid;bad.v[mutation.first]=mutation.second;rejects([&]{execute(bad);});
+                KernelParams bad=valid;bad.v[mutation.first]=mutation.second;rejects([&]{execute(bad);});
             }
             rejects([&]{backend_dispatch(op,target.node()->value,{target.node()->value},valid);});
             check(target.raw_data()==unchanged,"Rejected floating random descriptor changed output");
-            auto empty=normal?Tensor::normal({2,0,3},0,1,5721,backend,false,dtype):Tensor::uniform({2,0,3},0,1,5721,backend,false,dtype);
+            Tensor empty=normal?Tensor::normal({2,0,3},0,1,5721,backend,false,dtype):Tensor::uniform({2,0,3},0,1,5721,backend,false,dtype);
             check(empty.shape()==Shape({2,0,3})&&empty.raw_data().empty(),"Floating random empty shape differs");
         }
         const double maximum=dtype==DType::Float16?65504.:dtype==DType::BFloat16?std::ldexp(255.,120):double(std::numeric_limits<float>::max());
         rejects([&]{Tensor::uniform({0},maximum,std::nextafter(maximum,std::numeric_limits<double>::infinity()),5721,backend,false,dtype);});
         rejects([&]{Tensor::uniform({7},-maximum,maximum,5721,backend,false,dtype);});
         rejects([&]{Tensor::normal({0},0,-1,5721,backend,false,dtype);});
-        auto constant=Tensor::normal({7},1e100,0,5721,backend,false,dtype).data();
+        std::vector<float> constant=Tensor::normal({7},1e100,0,5721,backend,false,dtype).data();
         check(std::all_of(constant.begin(),constant.end(),[](float v){return v==std::numeric_limits<float>::infinity();}),"Native normal rejected or changed an overflowing mean");
         check(Tensor::normal({0},std::numeric_limits<double>::quiet_NaN(),std::numeric_limits<double>::infinity(),5721,backend,false,dtype).raw_data().empty(),"Native empty normal nonfinite parameters differ");
         const double epsilon=dtype==DType::Float16?std::ldexp(1.,-10):dtype==DType::BFloat16?std::ldexp(1.,-7):std::ldexp(1.,-23);
-        auto unit=Tensor::uniform({65536},0,1,5721,backend,false,dtype).data();
+        std::vector<float> unit=Tensor::uniform({65536},0,1,5721,backend,false,dtype).data();
         if(backend==Backend::CPU){
             const float divisor=dtype==DType::Float16?2048.f:dtype==DType::BFloat16?256.f:16777216.f;
             for(float value:unit)check(value>=0&&value<1&&std::floor(value*divisor)==value*divisor,"Native CPU uniform grid differs");
         }else{
-            auto narrow=Tensor::uniform({65536},1,1+epsilon,5721,backend,false,dtype).data();
+            std::vector<float> narrow=Tensor::uniform({65536},1,1+epsilon,5721,backend,false,dtype).data();
             check(std::all_of(narrow.begin(),narrow.end(),[](float v){return v==1.f;}),"Native CUDA uniform upper endpoint was not reversed after storage rounding");
         }
         for(bool asynchronous:{false,true}){
             AllocationPool pool(backend);ExecutionStream producer(backend),consumer(backend);Tensor x;
             {StreamScope scope(producer,asynchronous,true);x=Tensor::uniform({513},0,1,5721,backend,true,dtype);}
-            {StreamScope scope(consumer,asynchronous,true);auto y=add(x,Tensor::zeros(x.shape(),backend,false,dtype));
+            {StreamScope scope(consumer,asynchronous,true);Tensor y=add(x,Tensor::zeros(x.shape(),backend,false,dtype));
                 check(y.raw_data()==x.raw_data(),"Floating random cross-stream dependency differs");
                 y.backward(Tensor::ones(y.shape(),backend,false,dtype));
                 check(Tensor(x.node()->gradient).raw_data()==Tensor::ones(x.shape(),backend,false,dtype).raw_data(),"Floating random cross-stream leaf derivative differs");}
@@ -560,45 +561,45 @@ void floating_randoms(Backend backend) {
 }
 void floating_dropouts(Backend backend) {
     const double probability = .857142857157409;
-    for (auto dtype : {DType::Float32, DType::Float16, DType::BFloat16, DType::Float8E4M3FN, DType::Float8E4M3FNUZ,
+    for (elman::DType dtype : {DType::Float32, DType::Float16, DType::BFloat16, DType::Float8E4M3FN, DType::Float8E4M3FNUZ,
                        DType::Float8E5M2, DType::Float8E5M2FNUZ, DType::Float8E8M0FNU, DType::Float4E2M1FN}) {
-        auto input = Tensor::from_data({7}, {1.f,-1.f,0.f,-0.f,std::numeric_limits<float>::infinity(),-std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}, backend, true, dtype);
-        auto output = dropout(input, probability, 5721);
+        Tensor input = Tensor::from_data({7}, {1.f,-1.f,0.f,-0.f,std::numeric_limits<float>::infinity(),-std::numeric_limits<float>::infinity(),std::numeric_limits<float>::quiet_NaN()}, backend, true, dtype);
+        Tensor output = dropout(input, probability, 5721);
         std::vector<int> wide(10); wide[0] = 5721; wide[2] = 0x3f5b6db7; wide[3] = 1; wide[8] = 1;
         std::memcpy(wide.data() + 4, &probability, sizeof(probability));
-        auto raw = dispatch_tensor("dropout", input.shape(), {input.detach()}, wide, dtype);
+        Tensor raw = dispatch_tensor("dropout", input.shape(), {input.detach()}, wide, dtype);
         check(raw.raw_data() == output.raw_data(), "Public dropout lost Double probability bits");
-        auto inplace = Tensor::from_raw(input.shape(), dtype, input.raw_data(), backend);
+        Tensor inplace = Tensor::from_raw(input.shape(), dtype, input.raw_data(), backend);
         dispatch_tensor_into("dropout", inplace, {inplace}, wide);
         check(inplace.raw_data() == output.raw_data(), "Floating dropout in-place execution differs");
         check(dropout(input, .5, 17, false).node()->value == input.node()->value, "Evaluation dropout did not retain identity storage");
-        auto empty = Tensor::ones({2,0,3}, backend, true, dtype);
+        Tensor empty = Tensor::ones({2,0,3}, backend, true, dtype);
         check(dropout(empty, .5, 17).node()->value == empty.node()->value, "Empty dropout did not retain identity storage");
-        auto target = Tensor::zeros(input.shape(), backend, false, dtype);
-        auto valid = pointwise_descriptor(target, {input.detach()});
+        Tensor target = Tensor::zeros(input.shape(), backend, false, dtype);
+        KernelParams valid = pointwise_descriptor(target, {input.detach()});
         valid.v[KernelParams::kAttributeSlot + 2] = 0x3f000000; valid.v[KernelParams::kAttributeSlot + 3] = 1;
-        auto execute = [&](const KernelParams& p) { backend_dispatch("dropout", target.node()->value, {input.node()->value}, p); };
-        execute(valid);const auto unchanged = target.raw_data();
-        for (auto mutation : std::vector<std::pair<int,int>>{{KernelParams::kOutputCountSlot,6},{KernelParams::kOutputRankSlot,9},
+        LocalFunction execute{[&](const KernelParams& p) { backend_dispatch("dropout", target.node()->value, {input.node()->value}, p); }};
+        execute(valid);const std::vector<uint8_t> unchanged = target.raw_data();
+        for (std::pair<int, int> mutation : std::vector<std::pair<int,int>>{{KernelParams::kOutputCountSlot,6},{KernelParams::kOutputRankSlot,9},
              {KernelParams::kOutputShapeSlot,6},{KernelParams::kOutputDTypeSlot,int(DType::Int32)},
              {KernelParams::input_slot(KernelInput::A),2},{KernelParams::input_dtype_slot(KernelInput::A),int(DType::Int32)},
              {KernelParams::input_slot(KernelInput::A)+KernelParams::kInputStrideOffset,2},
              {KernelParams::kAttributeSlot+2,int(0x7fc00000u)},{KernelParams::kAttributeSlot+3,2},
              {KernelParams::kAttributeSlot+8,2},{KernelParams::kAttributeSlot+9,2}}) {
-            auto bad=valid;bad.v[mutation.first]=mutation.second;rejects([&]{execute(bad);});
+            KernelParams bad=valid;bad.v[mutation.first]=mutation.second;rejects([&]{execute(bad);});
         }
         rejects([&]{backend_dispatch("dropout",target.node()->value,{},valid);});
         rejects([&]{backend_dispatch("dropout",target.node()->value,{input.node()->value,input.node()->value},valid);});
         check(target.raw_data()==unchanged,"Rejected floating dropout changed output");
-        auto storage=Tensor::ones({10},backend,false,dtype);
-        auto source=contiguous_view(storage,{8}),shifted=contiguous_view(storage,{8},2);
+        Tensor storage=Tensor::ones({10},backend,false,dtype);
+        Tensor source=contiguous_view(storage,{8}),shifted=contiguous_view(storage,{8},2);
         rejects([&]{dispatch_tensor_into("dropout",shifted,{source},{17,0,0x3f000000,1});});
-        auto saved=dropout(input,.5,17);input.assign(std::vector<float>(7,1));
+        Tensor saved=dropout(input,.5,17);input.assign(std::vector<float>(7,1));
         rejects([&]{saved.backward(Tensor::ones(saved.shape(),backend,false,dtype));});
     }
     const double tiny_probability=1.-1./(1.+std::ldexp(1.,-24));
-    auto leaf=Tensor::ones({1},backend,true);
-    auto result=dropout(leaf,tiny_probability,5721);
+    Tensor leaf=Tensor::ones({1},backend,true);
+    Tensor result=dropout(leaf,tiny_probability,5721);
     result.backward(Tensor::ones({1},backend));
     check(result.data()==std::vector<float>{std::nextafter(1.f,2.f)},"Dropout forward reciprocal rounding differs");
     check(leaf.grad()==std::vector<float>{backend==Backend::CUDA?1.f:std::nextafter(1.f,2.f)},"Dropout backward reciprocal rounding differs");
@@ -607,7 +608,7 @@ void floating_dropouts(Backend backend) {
         {StreamScope scope(producer,asynchronous,true);x=Tensor::ones({513},backend,true,DType::Float16);}
         {
             StreamScope scope(consumer,asynchronous,true);
-            auto y=dropout(x,.1234567891234,5721);y.backward(Tensor::ones(x.shape(),backend,false,x.dtype()));
+            Tensor y=dropout(x,.1234567891234,5721);y.backward(Tensor::ones(x.shape(),backend,false,x.dtype()));
             check(y.raw_data()==Tensor(x.node()->gradient).raw_data(),"Floating dropout cross-stream mask differs");
             check(y.raw_data()==dropout(x.detach(),.1234567891234,5721).raw_data(),"Floating dropout stream replay differs");
         }
@@ -615,77 +616,77 @@ void floating_dropouts(Backend backend) {
     }
 }
 void randoms(Backend backend) {
-    for (auto dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
+    for (elman::DType dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
                        DType::Float8E5M2FNUZ, DType::Float8E8M0FNU, DType::Float4E2M1FN}) {
-        auto first = Tensor::uniform({4097}, -2, 2, 42, backend, true, dtype);
+        Tensor first = Tensor::uniform({4097}, -2, 2, 42, backend, true, dtype);
         check(first.raw_data() == Tensor::uniform({4097}, -2, 2, 42, backend, false, dtype).raw_data(), "Low precision uniform replay differs");
         check(first.raw_data() != Tensor::uniform({4097}, -2, 2, 43, backend, false, dtype).raw_data(), "Uniform seed isolation differs");
-        auto values = first.data();
+        std::vector<float> values = first.data();
         check(std::all_of(values.begin(), values.end(), [](float x) { return x >= -2 && x <= 2; }), "Uniform support differs");
         first.backward(Tensor::ones(first.shape(), backend, false, dtype));
         check(Tensor(first.node()->gradient).raw_data() == Tensor::ones(first.shape(), backend, false, dtype).raw_data(), "Random tensor is not a differentiable leaf");
-        auto normal = Tensor::normal({4097}, .25, 1.5, 41, backend, false, dtype);
+        Tensor normal = Tensor::normal({4097}, .25, 1.5, 41, backend, false, dtype);
         check(normal.raw_data() == Tensor::normal({4097}, .25, 1.5, 41, backend, false, dtype).raw_data(), "Low precision normal replay differs");
-        auto output = Tensor::zeros({4097}, backend, false, dtype);
-        auto valid = descriptor(output, output); valid.v[KernelParams::input_slot(KernelInput::A)] = -1;
+        Tensor output = Tensor::zeros({4097}, backend, false, dtype);
+        KernelParams valid = descriptor(output, output); valid.v[KernelParams::input_slot(KernelInput::A)] = -1;
         valid.v[KernelParams::kAttributeSlot] = 41;
         valid.v[KernelParams::kAttributeSlot + 2] = 0x3e800000; valid.v[KernelParams::kAttributeSlot + 3] = 0x3fc00000;
-        auto raw = [&](const KernelParams& p) { backend_dispatch("normal", output.node()->value, {}, p); };
+        LocalFunction raw{[&](const KernelParams& p) { backend_dispatch("normal", output.node()->value, {}, p); }};
         raw(valid); check(output.raw_data() == normal.raw_data(), "Legacy random parameter encoding differs");
-        auto offset = valid; offset.v[KernelParams::kAttributeSlot + 1] = 7; raw(offset);
+        KernelParams offset = valid; offset.v[KernelParams::kAttributeSlot + 1] = 7; raw(offset);
         check(output.raw_data() != normal.raw_data(), "Random stream offsets collided");
-        const auto unchanged = output.raw_data();
-        for (auto mutation : std::vector<std::pair<int, int>>{{KernelParams::kOutputCountSlot, 4096}, {KernelParams::kOutputRankSlot, 9},
+        const std::vector<uint8_t> unchanged = output.raw_data();
+        for (std::pair<int, int> mutation : std::vector<std::pair<int, int>>{{KernelParams::kOutputCountSlot, 4096}, {KernelParams::kOutputRankSlot, 9},
              {KernelParams::kOutputShapeSlot, 4096}, {KernelParams::kOutputDTypeSlot, int(DType::Float32)},
              {KernelParams::input_slot(KernelInput::A), 0}, {KernelParams::kAttributeSlot + 8, 2}, {KernelParams::kAttributeSlot + 3, int(0xbf800000u)}}) {
-            auto bad = valid; bad.v[mutation.first] = mutation.second; rejects([&] { raw(bad); });
+            KernelParams bad = valid; bad.v[mutation.first] = mutation.second; rejects([&] { raw(bad); });
         }
         rejects([&] { backend_dispatch("normal", output.node()->value, {first.node()->value}, valid); });
         check(output.raw_data() == unchanged, "Rejected random descriptor changed output");
-        auto x = Tensor::ones({4097}, backend, true, dtype);
-        auto dropped = dropout(x, .5, 17);
+        Tensor x = Tensor::ones({4097}, backend, true, dtype);
+        Tensor dropped = dropout(x, .5, 17);
         dropped.backward(Tensor::ones(x.shape(), backend, false, dtype));
         check(dropped.raw_data() == Tensor(x.node()->gradient).raw_data(), "Dropout replayed a different backward mask");
-        auto edge_leaf = Tensor::ones({4}, backend, true, dtype);
-        auto edge_gradient = Tensor::from_data({4}, {std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(),
+        Tensor edge_leaf = Tensor::ones({4}, backend, true, dtype);
+        Tensor edge_gradient = Tensor::from_data({4}, {std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(),
             std::numeric_limits<float>::quiet_NaN(), -0.f}, backend, false, dtype);
         dropout(edge_leaf, 1., 17).backward(edge_gradient);
-        auto edge_values = edge_gradient.data(); for (auto& value : edge_values) value *= 0.f;
+        std::vector<float> edge_values = edge_gradient.data(); for (float& value : edge_values) value *= 0.f;
         compare(Tensor(edge_leaf.node()->gradient), specification(Tensor::from_data({4}, edge_values, backend, false, dtype)), "Dropout nonfinite upstream control");
         check(dropout(x, 0, 17).raw_data() == x.raw_data() && dropout(x, .5, 17, false).raw_data() == x.raw_data(), "Dropout identity differs");
-        auto inplace = Tensor::ones({4097}, backend, false, dtype);
+        Tensor inplace = Tensor::ones({4097}, backend, false, dtype);
         dispatch_tensor_into("dropout", inplace, {inplace}, {17, 0, 0x3f000000, 1});
         check(inplace.raw_data() == dropped.raw_data(), "Packed in-place dropout differs");
-        auto dropout_valid = pointwise_descriptor(output, {x.detach()});
+        KernelParams dropout_valid = pointwise_descriptor(output, {x.detach()});
         dropout_valid.v[KernelParams::kAttributeSlot + 2] = 0x3f000000; dropout_valid.v[KernelParams::kAttributeSlot + 3] = 1;
-        auto dropout_raw = [&](const KernelParams& p) { backend_dispatch("dropout", output.node()->value, {x.node()->value}, p); };
-        for (auto mutation : std::vector<std::pair<int, int>>{{KernelParams::input_slot(KernelInput::A), 2},
+        LocalFunction dropout_raw{[&](const KernelParams& p) { backend_dispatch("dropout", output.node()->value, {x.node()->value}, p); }};
+        for (std::pair<int, int> mutation : std::vector<std::pair<int, int>>{{KernelParams::input_slot(KernelInput::A), 2},
              {KernelParams::input_slot(KernelInput::A) + KernelParams::kInputStrideOffset, 2},
              {KernelParams::input_dtype_slot(KernelInput::A), int(DType::Float32)}, {KernelParams::kAttributeSlot + 3, 2},
              {KernelParams::kAttributeSlot + 2, int(0xbf800000u)}, {KernelParams::kAttributeSlot + 2, int(0x7fc00000u)}}) {
-            auto bad = dropout_valid; bad.v[mutation.first] = mutation.second; rejects([&] { dropout_raw(bad); });
+            KernelParams bad = dropout_valid; bad.v[mutation.first] = mutation.second; rejects([&] { dropout_raw(bad); });
         }
         rejects([&] { backend_dispatch("dropout", output.node()->value, {}, dropout_valid); });
         rejects([&] { backend_dispatch("dropout", output.node()->value, {x.node()->value, x.node()->value}, dropout_valid); });
-        auto storage = Tensor::ones({10}, backend, false, dtype);
-        auto source = contiguous_view(storage, {8}), shifted = contiguous_view(storage, {8}, 2);
+        Tensor storage = Tensor::ones({10}, backend, false, dtype);
+        Tensor source = contiguous_view(storage, {8}), shifted = contiguous_view(storage, {8}, 2);
         rejects([&] { dispatch_tensor_into("dropout", shifted, {source}, {17, 0, 0x3f000000, 1}); });
-        auto constant = Tensor::normal({7}, 1./3, 0., 17, backend, false, dtype);
+        Tensor constant = Tensor::normal({7}, 1./3, 0., 17, backend, false, dtype);
         check(constant.raw_data() == Tensor::from_data({7}, std::vector<float>(7, 1.f/3), backend, false, dtype).raw_data(), "Zero-variance normal differs");
-        for (auto op : {std::string("uniform"), std::string("normal")}) {
-            auto empty = op == "uniform" ? Tensor::uniform({2, 0, 3}, 0, 1, 17, backend, false, dtype) : Tensor::normal({2, 0, 3}, 0, 1, 17, backend, false, dtype);
+        for (std::string op : {std::string("uniform"), std::string("normal")}) {
+            Tensor empty = op == "uniform" ? Tensor::uniform({2, 0, 3}, 0, 1, 17, backend, false, dtype) : Tensor::normal({2, 0, 3}, 0, 1, 17, backend, false, dtype);
             check(empty.shape() == Shape({2, 0, 3}) && empty.raw_data().empty(), "Empty random tensor differs");
         }
         rejects([&] { Tensor::uniform({7}, -double(std::numeric_limits<float>::max()), double(std::numeric_limits<float>::max()), 17, backend, false, dtype); });
         rejects([&] { Tensor::uniform({7}, 2., 1., 17, backend, false, dtype); });
         rejects([&] { Tensor::normal({7}, 0., -1., 17, backend, false, dtype); });
         rejects([&] { dropout(x, std::numeric_limits<double>::quiet_NaN(), 17, false); });
-        auto saved = dropout(x, .5, 17); x.assign(std::vector<float>(4097, 2));
+        Tensor saved = dropout(x, .5, 17); x.assign(std::vector<float>(4097, 2));
         rejects([&] { saved.backward(Tensor::ones(saved.shape(), backend, false, dtype)); });
         if (dtype == DType::Float4E2M1FN) {
             check((first.raw_data().back() & 0xf0) == 0 && (normal.raw_data().back() & 0xf0) == 0 && (dropped.raw_data().back() & 0xf0) == 0, "Random packed padding is dirty");
-            auto dirty = Tensor::from_raw({3}, dtype, {0x21, 0xfa}, backend);
-            auto clean = dispatch_tensor("dropout", {3}, {dirty}, {17, 0, 0, 0}, dtype);
+            Tensor dirty = Tensor::from_raw({3}, dtype, {0x21, 0xfa}, backend);
+            Tensor clean = dispatch_tensor("dropout", {3}, {dirty}, {17, 0, 0, 0}, dtype);
             check(clean.raw_data() == std::vector<uint8_t>({0x21, 0x0a}), "Dropout identity did not clear unused packed padding");
         }
     }
@@ -696,9 +697,9 @@ void randoms(Backend backend) {
         { StreamScope scope(producer, asynchronous, true); x = Tensor::normal({4097}, 0, 1, 31, backend, true, DType::Float4E2M1FN); }
         {
             StreamScope scope(consumer, asynchronous, true);
-            auto result = dropout(x, .5, 17);
+            Tensor result = dropout(x, .5, 17);
             result.backward(Tensor::ones(result.shape(), backend, false, result.dtype()));
-            auto expected = dropout(Tensor::ones(x.shape(), backend, false, x.dtype()), .5, 17);
+            Tensor expected = dropout(Tensor::ones(x.shape(), backend, false, x.dtype()), .5, 17);
             check(Tensor(x.node()->gradient).raw_data() == expected.raw_data(), "Random cross-stream backward mask differs");
             check(result.raw_data() == dropout(x.detach(), .5, 17).raw_data(), "Random cross-stream forward replay differs");
         }
@@ -706,56 +707,56 @@ void randoms(Backend backend) {
     }
 }
 void attention(Backend backend) {
-    for (auto dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
+    for (elman::DType dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
                        DType::Float8E5M2FNUZ, DType::Float8E8M0FNU, DType::Float4E2M1FN}) {
-        auto scores = Tensor::ones({3, 3}, backend, true, dtype), mask = Tensor::zeros({}, backend, true, dtype);
-        auto probability = attention_softmax(scores, mask, 2);
+        Tensor scores = Tensor::ones({3, 3}, backend, true, dtype), mask = Tensor::zeros({}, backend, true, dtype);
+        Tensor probability = attention_softmax(scores, mask, 2);
         check(probability.raw_data() == Tensor::from_data({3, 3}, std::vector<float>(9, 1.f / 3), backend, false, dtype).raw_data(), "Low precision attention softmax differs");
         probability.backward(Tensor::ones({3, 3}, backend, false, dtype));
         check(Tensor(scores.node()->gradient).raw_data() == Tensor::zeros({3, 3}, backend, false, dtype).raw_data(), "Attention score derivative differs");
         check(Tensor(mask.node()->gradient).raw_data() == Tensor::zeros({}, backend, false, dtype).raw_data(), "Attention mask derivative differs");
-        auto q = Tensor::ones({1, 4, 3, 2}, backend, true, dtype), k = Tensor::ones({1, 2, 3, 2}, backend, true, dtype);
-        auto v = Tensor::from_data({1, 2, 3, 1}, std::vector<float>(6, 2), backend, true, dtype);
-        auto m = Tensor::zeros({}, backend, true, dtype);
-        auto result = tiled_attention(q, k, v, m, 2, 2);
+        Tensor q = Tensor::ones({1, 4, 3, 2}, backend, true, dtype), k = Tensor::ones({1, 2, 3, 2}, backend, true, dtype);
+        Tensor v = Tensor::from_data({1, 2, 3, 1}, std::vector<float>(6, 2), backend, true, dtype);
+        Tensor m = Tensor::zeros({}, backend, true, dtype);
+        Tensor result = tiled_attention(q, k, v, m, 2, 2);
         check(result.raw_data() == Tensor::from_data({1, 4, 3, 1}, std::vector<float>(12, 2), backend, false, dtype).raw_data(), "Low precision grouped attention differs");
         result.backward(Tensor::ones(result.shape(), backend, false, dtype));
         check(Tensor(q.node()->gradient).raw_data() == Tensor::zeros(q.shape(), backend, false, dtype).raw_data(), "Grouped query derivative differs");
         check(Tensor(k.node()->gradient).raw_data() == Tensor::zeros(k.shape(), backend, false, dtype).raw_data(), "Grouped key derivative differs");
         check(Tensor(v.node()->gradient).raw_data() == Tensor::from_data(v.shape(), std::vector<float>(6, 2), backend, false, dtype).raw_data(), "Grouped value derivative differs");
-        auto output = Tensor::zeros({3, 3}, backend, false, dtype);
-        auto valid = pointwise_descriptor(output, {scores.detach(), mask.detach()});
+        Tensor output = Tensor::zeros({3, 3}, backend, false, dtype);
+        KernelParams valid = pointwise_descriptor(output, {scores.detach(), mask.detach()});
         valid.v[KernelParams::kAttributeSlot] = 1; valid.v[KernelParams::kAttributeSlot + 1] = 0x40000000;
-        auto raw = [&](const KernelParams& p) { backend_dispatch("attention_softmax", output.node()->value, {scores.node()->value, mask.node()->value}, p); };
-        raw(valid); const auto unchanged = output.raw_data();
-        for (auto mutation : std::vector<std::pair<int, int>>{{KernelParams::kOutputCountSlot, 8}, {KernelParams::kOutputRankSlot, 9},
+        LocalFunction raw{[&](const KernelParams& p) { backend_dispatch("attention_softmax", output.node()->value, {scores.node()->value, mask.node()->value}, p); }};
+        raw(valid); const std::vector<uint8_t> unchanged = output.raw_data();
+        for (std::pair<int, int> mutation : std::vector<std::pair<int, int>>{{KernelParams::kOutputCountSlot, 8}, {KernelParams::kOutputRankSlot, 9},
              {KernelParams::kOutputShapeSlot, 2}, {KernelParams::kOutputDTypeSlot, int(DType::Float32)},
              {KernelParams::input_slot(KernelInput::A), 9}, {KernelParams::input_slot(KernelInput::A) + KernelParams::kInputStrideOffset, 1},
              {KernelParams::input_dtype_slot(KernelInput::B), int(DType::Float32)}, {KernelParams::kAttributeSlot, 2},
              {KernelParams::kAttributeSlot + 2, 1}, {KernelParams::kAttributeSlot + 7, 2}, {KernelParams::kAttributeSlot + 8, 1}}) {
-            auto bad = valid; bad.v[mutation.first] = mutation.second; rejects([&] { raw(bad); });
+            KernelParams bad = valid; bad.v[mutation.first] = mutation.second; rejects([&] { raw(bad); });
         }
         rejects([&] { backend_dispatch("attention_softmax", output.node()->value, {scores.node()->value}, valid); });
         rejects([&] { backend_dispatch("attention_softmax", output.node()->value, {scores.node()->value, mask.node()->value, mask.node()->value}, valid); });
         rejects([&] { attention_softmax(scores, Tensor::zeros({}, backend)); });
         rejects([&] { attention_softmax(scores, Tensor::zeros({4}, backend, false, dtype)); });
         check(output.raw_data() == unchanged, "Rejected attention descriptor wrote output bytes");
-        auto inplace = scores.detach(); dispatch_tensor_into("attention_softmax", inplace, {inplace, mask.detach()}, {1, 0x40000000});
+        Tensor inplace = scores.detach(); dispatch_tensor_into("attention_softmax", inplace, {inplace, mask.detach()}, {1, 0x40000000});
         check(inplace.raw_data() == probability.raw_data(), "In-place attention softmax differs");
-        auto alias_mask = Tensor::zeros({3, 3}, backend, false, dtype);
+        Tensor alias_mask = Tensor::zeros({3, 3}, backend, false, dtype);
         rejects([&] { dispatch_tensor_into("attention_softmax", alias_mask, {output, alias_mask}, {1, 0x40000000}); });
-        auto tiled_output = Tensor::zeros(q.shape(), backend, false, dtype);
-        auto vv = Tensor::ones(k.shape(), backend, false, dtype);
-        auto tiled_valid = pointwise_descriptor(tiled_output, {q.detach(), k.detach(), vv, m.detach()});
+        Tensor tiled_output = Tensor::zeros(q.shape(), backend, false, dtype);
+        Tensor vv = Tensor::ones(k.shape(), backend, false, dtype);
+        KernelParams tiled_valid = pointwise_descriptor(tiled_output, {q.detach(), k.detach(), vv, m.detach()});
         tiled_valid.v[KernelParams::kAttributeSlot] = 0x40000000; tiled_valid.v[KernelParams::kAttributeSlot + 1] = 2;
-        auto tiled_raw = [&](const KernelParams& p) { backend_dispatch("tiled_attention", tiled_output.node()->value, {q.node()->value, k.node()->value, vv.node()->value, m.node()->value}, p); };
-        tiled_raw(tiled_valid); const auto tiled_unchanged = tiled_output.raw_data();
-        for (auto mutation : std::vector<std::pair<int, int>>{{KernelParams::kOutputCountSlot, 23},
+        LocalFunction tiled_raw{[&](const KernelParams& p) { backend_dispatch("tiled_attention", tiled_output.node()->value, {q.node()->value, k.node()->value, vv.node()->value, m.node()->value}, p); }};
+        tiled_raw(tiled_valid); const std::vector<uint8_t> tiled_unchanged = tiled_output.raw_data();
+        for (std::pair<int, int> mutation : std::vector<std::pair<int, int>>{{KernelParams::kOutputCountSlot, 23},
              {KernelParams::input_slot(KernelInput::B), 3}, {KernelParams::input_slot(KernelInput::D), 9},
              {KernelParams::input_slot(KernelInput::B) + KernelParams::kInputShapeOffset + 1, 3},
              {KernelParams::kAttributeSlot + 1, 0}, {KernelParams::kAttributeSlot + 2, 2}, {KernelParams::kAttributeSlot + 4, 2},
              {KernelParams::kAttributeSlot + 7, -1}, {KernelParams::kAttributeSlot + 8, 1}}) {
-            auto bad = tiled_valid; bad.v[mutation.first] = mutation.second; rejects([&] { tiled_raw(bad); });
+            KernelParams bad = tiled_valid; bad.v[mutation.first] = mutation.second; rejects([&] { tiled_raw(bad); });
         }
         rejects([&] { backend_dispatch("tiled_attention", tiled_output.node()->value, {q.node()->value, k.node()->value, vv.node()->value}, tiled_valid); });
         rejects([&] { dispatch_tensor_into("tiled_attention", q.detach(), {q.detach(), k.detach(), vv, m.detach()}, {0x40000000, 2}); });
@@ -780,27 +781,27 @@ void attention(Backend backend) {
         }
         {
             StreamScope scope(consumer, asynchronous, true);
-            auto result = tiled_attention(q, k, v, m, 2, 2);
+            Tensor result = tiled_attention(q, k, v, m, 2, 2);
             result.backward(Tensor::ones(result.shape(), backend, false, result.dtype()));
             check(result.data() == std::vector<float>(6, 1), "Attention stream dependency differs");
             check(Tensor(v.node()->gradient).data() == std::vector<float>(3, 2), "Attention gradient stream dependency differs");
-            auto saved = tiled_attention(q, k, v, m, 2, 2); m.assign({1});
+            Tensor saved = tiled_attention(q, k, v, m, 2, 2); m.assign({1});
             rejects([&] { saved.backward(Tensor::ones(saved.shape(), backend, false, saved.dtype())); });
         }
         producer.synchronize(); consumer.synchronize();
     }
     for (bool reuse : {false, true}) {
-        const auto before = memory_stats(backend).live_bytes();
+        const size_t before = memory_stats(backend).live_bytes();
         {
             AllocationPool pool(backend, 0, reuse);
-            auto q = Tensor::ones({1, 4, 257, 8}, backend, false, DType::Float4E2M1FN);
-            auto k = Tensor::ones({1, 2, 512, 8}, backend, false, q.dtype());
-            auto v = Tensor::from_data(k.shape(), std::vector<float>(8192, 2), backend, false, q.dtype());
-            auto m = Tensor::zeros({}, backend, false, q.dtype());
+            Tensor q = Tensor::ones({1, 4, 257, 8}, backend, false, DType::Float4E2M1FN);
+            Tensor k = Tensor::ones({1, 2, 512, 8}, backend, false, q.dtype());
+            Tensor v = Tensor::from_data(k.shape(), std::vector<float>(8192, 2), backend, false, q.dtype());
+            Tensor m = Tensor::zeros({}, backend, false, q.dtype());
             tiled_attention(slice(q, 2, 0, 1), k, v, m, 2, 8).data(); pool.clear();
-            const auto budget = memory_stats(backend).live_bytes() + 1024 * 1024;
+            const size_t budget = memory_stats(backend).live_bytes() + 1024 * 1024;
             MemoryLimit limit(backend, budget);
-            auto output = tiled_attention(q, k, v, m, 2, 8);
+            Tensor output = tiled_attention(q, k, v, m, 2, 8);
             check(output.data() == std::vector<float>(8224, 2), "Bounded low precision attention differs");
             check(limit.peak_bytes() <= budget, "Low precision attention exceeded tile workspace bound");
             bool rejected = false;
@@ -810,60 +811,60 @@ void attention(Backend backend) {
         }
         check(memory_stats(backend).live_bytes() == before, "Low precision attention leaked workspace storage");
     }
-    auto x = Tensor::ones({2, 3}, backend), y = Tensor::ones({2, 3}, backend);
-    auto intermediate = pointwise_descriptor(y, {x});
+    Tensor x = Tensor::ones({2, 3}, backend), y = Tensor::ones({2, 3}, backend);
+    KernelParams intermediate = pointwise_descriptor(y, {x});
     intermediate.v[KernelParams::kAttributeSlot] = 1; intermediate.v[KernelParams::kAttributeSlot + 8] = 2;
-    auto probabilities_raw = [&](const KernelParams& p) { backend_dispatch("attention_softmax", y.node()->value, {x.node()->value}, p); };
+    LocalFunction probabilities_raw{[&](const KernelParams& p) { backend_dispatch("attention_softmax", y.node()->value, {x.node()->value}, p); }};
     probabilities_raw(intermediate);
     for (int slot : {1, 2, 5, 6, 7}) {
-        auto bad = intermediate; bad.v[KernelParams::kAttributeSlot + slot] = 1;
+        KernelParams bad = intermediate; bad.v[KernelParams::kAttributeSlot + slot] = 1;
         rejects([&] { probabilities_raw(bad); });
     }
-    auto alias = pointwise_descriptor(x, {x}); alias.v[KernelParams::kAttributeSlot] = 1; alias.v[KernelParams::kAttributeSlot + 8] = 2;
+    KernelParams alias = pointwise_descriptor(x, {x}); alias.v[KernelParams::kAttributeSlot] = 1; alias.v[KernelParams::kAttributeSlot + 8] = 2;
     rejects([&] { backend_dispatch("attention_softmax", x.node()->value, {x.node()->value}, alias); });
-    auto reduced = Tensor::zeros({1, 3}, backend);
-    auto reduction = pointwise_descriptor(reduced, {x}); reduction.v[KernelParams::kAttributeSlot] = 1; reduction.v[KernelParams::kAttributeSlot + 8] = 5;
+    Tensor reduced = Tensor::zeros({1, 3}, backend);
+    KernelParams reduction = pointwise_descriptor(reduced, {x}); reduction.v[KernelParams::kAttributeSlot] = 1; reduction.v[KernelParams::kAttributeSlot + 8] = 5;
     backend_dispatch("attention_softmax", reduced.node()->value, {x.node()->value}, reduction);
     check(reduced.data() == std::vector<float>(3, 2), "Attention intermediate reduction differs");
     for (int value : {0, 2, 4, -1}) {
-        auto bad = reduction; bad.v[KernelParams::kAttributeSlot] = value;
+        KernelParams bad = reduction; bad.v[KernelParams::kAttributeSlot] = value;
         rejects([&] { backend_dispatch("attention_softmax", reduced.node()->value, {x.node()->value}, bad); });
     }
-    auto a = Tensor::ones({1, 2, 3, 4}, backend), b = Tensor::ones({1, 2, 3, 5}, backend);
-    auto product = Tensor::zeros({1, 2, 4, 5}, backend);
-    auto matrix = pointwise_descriptor(product, {a, b}); matrix.v[KernelParams::kAttributeSlot] = 1; matrix.v[KernelParams::kAttributeSlot + 8] = 4;
+    Tensor a = Tensor::ones({1, 2, 3, 4}, backend), b = Tensor::ones({1, 2, 3, 5}, backend);
+    Tensor product = Tensor::zeros({1, 2, 4, 5}, backend);
+    KernelParams matrix = pointwise_descriptor(product, {a, b}); matrix.v[KernelParams::kAttributeSlot] = 1; matrix.v[KernelParams::kAttributeSlot + 8] = 4;
     backend_dispatch("attention_softmax", product.node()->value, {a.node()->value, b.node()->value}, matrix);
     check(product.data() == std::vector<float>(40, 3), "Attention transposed matrix intermediate differs");
     for (int slot : {0, 1, 2, 3, 7}) {
-        auto bad = matrix; bad.v[KernelParams::kAttributeSlot + slot] = 2;
+        KernelParams bad = matrix; bad.v[KernelParams::kAttributeSlot + slot] = 2;
         rejects([&] { backend_dispatch("attention_softmax", product.node()->value, {a.node()->value, b.node()->value}, bad); });
     }
 }
 void fusions(Backend backend) {
-    for (auto dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
+    for (elman::DType dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
                        DType::Float8E5M2FNUZ, DType::Float8E8M0FNU, DType::Float4E2M1FN}) {
-        auto gate = Tensor::ones({3}, backend, true, dtype);
-        auto up = Tensor::from_data({}, {2}, backend, true, dtype);
-        auto result = silu_mul(gate, up);
+        Tensor gate = Tensor::ones({3}, backend, true, dtype);
+        Tensor up = Tensor::from_data({}, {2}, backend, true, dtype);
+        Tensor result = silu_mul(gate, up);
         const float sigmoid = 1.f / (1.f + std::exp(-1.f));
         check(result.raw_data() == Tensor::from_data({3}, std::vector<float>(3, 2 * sigmoid), backend, false, dtype).raw_data(), "Low precision SiLU multiplication differs");
         result.backward(Tensor::ones({3}, backend, false, dtype));
         check(Tensor(gate.node()->gradient).raw_data() == Tensor::from_data({3}, std::vector<float>(3, 2 * sigmoid * (2 - sigmoid)), backend, false, dtype).raw_data(), "Fused gate derivative differs");
         check(Tensor(up.node()->gradient).raw_data() == Tensor::from_data({}, {3 * sigmoid}, backend, false, dtype).raw_data(), "Fused broadcast derivative rounded before reduction");
-        auto x = Tensor::from_data({1, 4}, {1, 2, 1, 2}, backend, true, dtype);
-        auto cosine = Tensor::ones({4}, backend, true, dtype), sine = Tensor::ones({4}, backend, true, dtype);
-        auto rotated = rotary_embedding(x, cosine, sine);
+        Tensor x = Tensor::from_data({1, 4}, {1, 2, 1, 2}, backend, true, dtype);
+        Tensor cosine = Tensor::ones({4}, backend, true, dtype), sine = Tensor::ones({4}, backend, true, dtype);
+        Tensor rotated = rotary_embedding(x, cosine, sine);
         check(rotated.raw_data() == Tensor::from_data({1, 4}, {0, 0, 2, 4}, backend, false, dtype).raw_data(), "Low precision rotary embedding differs");
         rotated.backward(Tensor::ones({1, 4}, backend, false, dtype));
         check(Tensor(x.node()->gradient).raw_data() == Tensor::from_data({1, 4}, {2, 2, 0, 0}, backend, false, dtype).raw_data(), "Rotary input derivative differs");
         check(Tensor(cosine.node()->gradient).raw_data() == Tensor::from_data({4}, {1, 2, 1, 2}, backend, false, dtype).raw_data(), "Rotary cosine derivative differs");
         check(Tensor(sine.node()->gradient).raw_data() == Tensor::from_data({4}, {-1, -2, 1, 2}, backend, false, dtype).raw_data(), "Rotary sine derivative differs");
-        auto input = Tensor::ones({3}, backend, false, dtype), factor = Tensor::ones({3}, backend, false, dtype);
-        auto output = Tensor::zeros({3}, backend, false, dtype);
-        auto valid = pointwise_descriptor(output, {input, factor});
-        auto raw = [&](const KernelParams& p) { backend_dispatch("silu_mul", output.node()->value, {input.node()->value, factor.node()->value}, p); };
-        raw(valid); const auto unchanged = output.raw_data();
-        auto bad = valid; bad.v[KernelParams::kOutputCountSlot] = 2; rejects([&] { raw(bad); });
+        Tensor input = Tensor::ones({3}, backend, false, dtype), factor = Tensor::ones({3}, backend, false, dtype);
+        Tensor output = Tensor::zeros({3}, backend, false, dtype);
+        KernelParams valid = pointwise_descriptor(output, {input, factor});
+        LocalFunction raw{[&](const KernelParams& p) { backend_dispatch("silu_mul", output.node()->value, {input.node()->value, factor.node()->value}, p); }};
+        raw(valid); const std::vector<uint8_t> unchanged = output.raw_data();
+        KernelParams bad = valid; bad.v[KernelParams::kOutputCountSlot] = 2; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputRankSlot] = 9; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputShapeSlot] = 2; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputDTypeSlot] = int(DType::Float32); rejects([&] { raw(bad); });
@@ -877,14 +878,14 @@ void fusions(Backend backend) {
         rejects([&] { silu_mul(input, Tensor::ones({3}, backend)); });
         rejects([&] { silu_mul(input, Tensor::ones({4}, backend, false, dtype)); });
         check(output.raw_data() == unchanged, "Rejected fused descriptor wrote output bytes");
-        auto inplace = Tensor::ones({3}, backend, false, dtype);
+        Tensor inplace = Tensor::ones({3}, backend, false, dtype);
         dispatch_tensor_into("silu_mul", inplace, {inplace, factor});
         check(inplace.raw_data() == unchanged, "In-place fused multiplication differs");
-        auto odd = rotary_embedding(Tensor::ones({3, 2}, backend, false, dtype), Tensor::ones({2}, backend, false, dtype), Tensor::ones({}, backend, false, dtype));
+        Tensor odd = rotary_embedding(Tensor::ones({3, 2}, backend, false, dtype), Tensor::ones({2}, backend, false, dtype), Tensor::ones({}, backend, false, dtype));
         check(odd.shape() == Shape({3, 2}), "Rotary broadcast shape differs");
-        auto rotary_input = Tensor::ones({2, 4}, backend, false, dtype);
-        auto rotary_factor = Tensor::ones({4}, backend, false, dtype);
-        auto rotary_valid = pointwise_descriptor(rotary_input, {rotary_input, rotary_factor, rotary_factor});
+        Tensor rotary_input = Tensor::ones({2, 4}, backend, false, dtype);
+        Tensor rotary_factor = Tensor::ones({4}, backend, false, dtype);
+        KernelParams rotary_valid = pointwise_descriptor(rotary_input, {rotary_input, rotary_factor, rotary_factor});
         rejects([&] { backend_dispatch("rotary_embedding", rotary_input.node()->value, {rotary_input.node()->value, rotary_factor.node()->value, rotary_factor.node()->value}, rotary_valid); });
         rejects([&] { rotary_embedding(input, factor, factor); });
         rejects([&] { rotary_embedding(Tensor::ones({}, backend, false, dtype), Tensor::ones({}, backend, false, dtype), Tensor::ones({}, backend, false, dtype)); });
@@ -906,7 +907,7 @@ void fusions(Backend backend) {
         }
         {
             StreamScope scope(consumer, asynchronous, true);
-            auto result = rotary_embedding(x, c, s);
+            Tensor result = rotary_embedding(x, c, s);
             result.backward(Tensor::ones(result.shape(), backend, false, result.dtype()));
             check(result.data() == std::vector<float>({0, 2, 0, 2, 0, 2}), "Fused stream dependency differs");
             check(Tensor(x.node()->gradient).data() == std::vector<float>({2, 0, 2, 0, 2, 0}), "Fused gradient stream dependency differs");
@@ -915,29 +916,29 @@ void fusions(Backend backend) {
     }
 }
 void losses(Backend backend) {
-    for (auto dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
+    for (elman::DType dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
                        DType::Float8E5M2FNUZ, DType::Float8E8M0FNU, DType::Float4E2M1FN}) {
-        auto x = Tensor::ones({3}, backend, true, dtype), y = Tensor::zeros({3}, backend, true, dtype);
-        auto mse = mse_loss(x, y);
+        Tensor x = Tensor::ones({3}, backend, true, dtype), y = Tensor::zeros({3}, backend, true, dtype);
+        Tensor mse = mse_loss(x, y);
         check(mse.raw_data() == Tensor::ones({}, backend, false, dtype).raw_data(), "Low precision MSE differs");
         mse.backward(Tensor::ones({}, backend, false, dtype));
         check(Tensor(x.node()->gradient).raw_data() == Tensor::from_data({3}, std::vector<float>(3, 2.f / 3), backend, false, dtype).raw_data(), "Low precision MSE input derivative differs");
         check(Tensor(y.node()->gradient).raw_data() == Tensor::from_data({3}, std::vector<float>(3, -2.f / 3), backend, false, dtype).raw_data(), "Low precision MSE target derivative differs");
-        auto scalar = Tensor::ones({}, backend, true, dtype);
-        auto broadcasted = mse_loss(scalar, Tensor::zeros({2, 3}, backend, false, dtype));
+        Tensor scalar = Tensor::ones({}, backend, true, dtype);
+        Tensor broadcasted = mse_loss(scalar, Tensor::zeros({2, 3}, backend, false, dtype));
         broadcasted.backward(Tensor::ones({}, backend, false, dtype));
         check(Tensor(scalar.node()->gradient).raw_data() == Tensor::from_data({}, {2}, backend, false, dtype).raw_data(), "Broadcast MSE derivative rounded before reduction");
-        auto logits = Tensor::ones({2, 3}, backend, true, dtype);
-        auto ids = Tensor::from_int_data({2}, {0, 2}, backend);
-        auto ce = cross_entropy(logits, ids);
+        Tensor logits = Tensor::ones({2, 3}, backend, true, dtype);
+        Tensor ids = Tensor::from_int_data({2}, {0, 2}, backend);
+        Tensor ce = cross_entropy(logits, ids);
         check(ce.raw_data() == Tensor::from_data({}, {std::log(3.f)}, backend, false, dtype).raw_data(), "Low precision cross entropy differs");
         ce.backward(Tensor::from_data({}, {2}, backend, false, dtype));
         check(Tensor(logits.node()->gradient).raw_data() == Tensor::from_data({2, 3}, {-2.f / 3, 1.f / 3, 1.f / 3, 1.f / 3, 1.f / 3, -2.f / 3}, backend, false, dtype).raw_data(), "Low precision cross entropy derivative differs");
-        auto output = Tensor::zeros({}, backend, false, dtype);
-        auto valid = pointwise_descriptor(output, {logits, ids});
-        auto raw = [&](const KernelParams& p) { backend_dispatch("cross_entropy", output.node()->value, {logits.node()->value, ids.node()->value}, p); };
-        raw(valid); const auto unchanged = output.raw_data();
-        auto bad = valid; bad.v[KernelParams::kOutputCountSlot] = 0; rejects([&] { raw(bad); });
+        Tensor output = Tensor::zeros({}, backend, false, dtype);
+        KernelParams valid = pointwise_descriptor(output, {logits, ids});
+        LocalFunction raw{[&](const KernelParams& p) { backend_dispatch("cross_entropy", output.node()->value, {logits.node()->value, ids.node()->value}, p); }};
+        raw(valid); const std::vector<uint8_t> unchanged = output.raw_data();
+        KernelParams bad = valid; bad.v[KernelParams::kOutputCountSlot] = 0; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputRankSlot] = 1; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputDTypeSlot] = int(DType::Float32); rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::input_slot(KernelInput::A)] = 9; rejects([&] { raw(bad); });
@@ -949,41 +950,41 @@ void losses(Backend backend) {
         rejects([&] { backend_dispatch("cross_entropy", output.node()->value, {logits.node()->value}, valid); });
         rejects([&] { backend_dispatch("cross_entropy", output.node()->value, {logits.node()->value, ids.node()->value, logits.node()->value}, valid); });
         for (int value : {-1, 3}) {
-            auto invalid_ids = Tensor::from_int_data({2}, {0, value}, backend);
-            auto invalid = pointwise_descriptor(output, {logits, invalid_ids});
+            Tensor invalid_ids = Tensor::from_int_data({2}, {0, value}, backend);
+            KernelParams invalid = pointwise_descriptor(output, {logits, invalid_ids});
             rejects([&] { backend_dispatch("cross_entropy", output.node()->value, {logits.node()->value, invalid_ids.node()->value}, invalid); });
             rejects([&] { cross_entropy(logits, invalid_ids); });
         }
         check(output.raw_data() == unchanged, "Rejected loss descriptor wrote output bytes");
         if (dtype != DType::Float4E2M1FN) {
-            auto loss_alias = contiguous_view(logits, {}, 0);
-            auto alias = pointwise_descriptor(loss_alias, {logits, ids});
+            Tensor loss_alias = contiguous_view(logits, {}, 0);
+            KernelParams alias = pointwise_descriptor(loss_alias, {logits, ids});
             rejects([&] { backend_dispatch("cross_entropy", loss_alias.node()->value, {logits.node()->value, ids.node()->value}, alias); });
         }
-        auto mse_valid = pointwise_descriptor(output, {x, y});
+        KernelParams mse_valid = pointwise_descriptor(output, {x, y});
         bad = mse_valid; bad.v[KernelParams::kAttributeSlot] = 2;
         rejects([&] { backend_dispatch("mse_loss", output.node()->value, {x.node()->value, y.node()->value}, bad); });
         rejects([&] { mse_loss(x, Tensor::ones({3}, backend)); });
         rejects([&] { mse_loss(x, Tensor::ones({4}, backend, false, dtype)); });
-        auto seed = Tensor::ones({}, backend, false, dtype);
-        auto gradient = Tensor::zeros({3}, backend, false, dtype);
-        auto derivative = pointwise_descriptor(gradient, {x, y, seed}); derivative.v[KernelParams::kAttributeSlot] = 1;
+        Tensor seed = Tensor::ones({}, backend, false, dtype);
+        Tensor gradient = Tensor::zeros({3}, backend, false, dtype);
+        KernelParams derivative = pointwise_descriptor(gradient, {x, y, seed}); derivative.v[KernelParams::kAttributeSlot] = 1;
         backend_dispatch("mse_loss", gradient.node()->value, {x.node()->value, y.node()->value, seed.node()->value}, derivative);
         check(gradient.raw_data() == Tensor(x.node()->gradient).raw_data(), "Raw MSE derivative differs");
-        auto upstream_vector = Tensor::ones({1}, backend, false, dtype);
-        auto invalid_derivative = pointwise_descriptor(gradient, {x, y, upstream_vector}); invalid_derivative.v[KernelParams::kAttributeSlot] = 1;
+        Tensor upstream_vector = Tensor::ones({1}, backend, false, dtype);
+        KernelParams invalid_derivative = pointwise_descriptor(gradient, {x, y, upstream_vector}); invalid_derivative.v[KernelParams::kAttributeSlot] = 1;
         rejects([&] { backend_dispatch("mse_loss", gradient.node()->value, {x.node()->value, y.node()->value, upstream_vector.node()->value}, invalid_derivative); });
-        auto alias_derivative = pointwise_descriptor(x, {x, y, seed}); alias_derivative.v[KernelParams::kAttributeSlot] = 1;
+        KernelParams alias_derivative = pointwise_descriptor(x, {x, y, seed}); alias_derivative.v[KernelParams::kAttributeSlot] = 1;
         rejects([&] { backend_dispatch("mse_loss", x.node()->value, {x.node()->value, y.node()->value, seed.node()->value}, alias_derivative); });
         if (dtype == DType::Float4E2M1FN) check((gradient.raw_data().back() & 0xf0) == 0, "Packed loss derivative padding is dirty");
-        auto odd_logits = Tensor::ones({1, 3}, backend, true, dtype);
+        Tensor odd_logits = Tensor::ones({1, 3}, backend, true, dtype);
         if (dtype == DType::Float4E2M1FN) {
-            auto tail = contiguous_view(odd_logits, {}, 2);
-            auto one_id = Tensor::from_int_data({1}, {1}, backend);
-            auto alias = pointwise_descriptor(tail, {odd_logits, one_id});
+            Tensor tail = contiguous_view(odd_logits, {}, 2);
+            Tensor one_id = Tensor::from_int_data({1}, {1}, backend);
+            KernelParams alias = pointwise_descriptor(tail, {odd_logits, one_id});
             rejects([&] { backend_dispatch("cross_entropy", tail.node()->value, {odd_logits.node()->value, one_id.node()->value}, alias); });
         }
-        auto odd_loss = cross_entropy(odd_logits, Tensor::from_int_data({1}, {1}, backend));
+        Tensor odd_loss = cross_entropy(odd_logits, Tensor::from_int_data({1}, {1}, backend));
         odd_loss.backward(Tensor::ones({}, backend, false, dtype));
         if (dtype == DType::Float4E2M1FN) check((Tensor(odd_logits.node()->gradient).raw_data().back() & 0xf0) == 0, "Packed cross entropy derivative padding is dirty");
     }
@@ -998,7 +999,7 @@ void losses(Backend backend) {
         }
         {
             StreamScope scope(consumer, asynchronous, true);
-            auto loss = cross_entropy(input, ids);
+            Tensor loss = cross_entropy(input, ids);
             loss.backward(Tensor::ones({}, backend, false, loss.dtype()));
             check(loss.raw_data() == Tensor::from_data({}, {std::log(3.f)}, backend, false, loss.dtype()).raw_data(), "Loss stream dependency differs");
             check(bool(input.node()->gradient), "Loss gradient stream dependency differs");
@@ -1007,37 +1008,37 @@ void losses(Backend backend) {
     }
 }
 void spatials(Backend backend) {
-    for (auto dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
+    for (elman::DType dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
                        DType::Float8E5M2FNUZ, DType::Float8E8M0FNU, DType::Float4E2M1FN}) {
-        auto x = Tensor::ones({1, 1, 3, 3}, backend, true, dtype);
-        auto w = Tensor::ones({1, 1, 2, 2}, backend, true, dtype);
-        auto b = Tensor::zeros({1}, backend, true, dtype);
-        auto y = conv2d(x, w, {});
+        Tensor x = Tensor::ones({1, 1, 3, 3}, backend, true, dtype);
+        Tensor w = Tensor::ones({1, 1, 2, 2}, backend, true, dtype);
+        Tensor b = Tensor::zeros({1}, backend, true, dtype);
+        Tensor y = conv2d(x, w, {});
         check(y.raw_data() == Tensor::from_data({1, 1, 2, 2}, {4, 4, 4, 4}, backend, false, dtype).raw_data(), "Low precision convolution differs");
         y.backward(Tensor::ones(y.shape(), backend, false, dtype));
         check(Tensor(x.node()->gradient).raw_data() == Tensor::from_data(x.shape(), {1, 2, 1, 2, 4, 2, 1, 2, 1}, backend, false, dtype).raw_data(),
               "Low precision convolution input gradient differs");
         check(Tensor(w.node()->gradient).raw_data() == Tensor::from_data(w.shape(), {4, 4, 4, 4}, backend, false, dtype).raw_data(),
               "Low precision convolution weight gradient differs");
-        auto biased = conv2d(x.detach(), w.detach(), b);
+        Tensor biased = conv2d(x.detach(), w.detach(), b);
         biased.backward(Tensor::ones(biased.shape(), backend, false, dtype));
         check(Tensor(b.node()->gradient).raw_data() == Tensor::from_data({1}, {4}, backend, false, dtype).raw_data(), "Convolution bias gradient differs");
         for (bool maximum : {false, true}) {
-            auto input = Tensor::from_data({1, 1, 2, 2}, {1, 1, 1, 4}, backend, true, dtype);
-            auto output = maximum ? max_pool2d(input, 2) : avg_pool2d(input, 2);
-            const auto decoded = input.data();
+            Tensor input = Tensor::from_data({1, 1, 2, 2}, {1, 1, 1, 4}, backend, true, dtype);
+            Tensor output = maximum ? max_pool2d(input, 2) : avg_pool2d(input, 2);
+            const std::vector<float> decoded = input.data();
             const float expected = maximum ? 4.f : (decoded[0] + decoded[1] + decoded[2] + decoded[3]) / 4.f;
             check(output.raw_data() == Tensor::from_data({1, 1, 1, 1}, {expected}, backend, false, dtype).raw_data(), "Low precision pooling differs");
             output.backward(Tensor::from_data({1, 1, 1, 1}, {4}, backend, false, dtype));
             check(Tensor(input.node()->gradient).raw_data() == Tensor::from_data(input.shape(), maximum ? std::vector<float>{0, 0, 0, 4} : std::vector<float>{1, 1, 1, 1}, backend, false, dtype).raw_data(), "Low precision pooling gradient differs");
         }
-        auto output = Tensor::zeros({1, 1, 2, 2}, backend, false, dtype);
-        auto valid = pointwise_descriptor(output, {x, w});
+        Tensor output = Tensor::zeros({1, 1, 2, 2}, backend, false, dtype);
+        KernelParams valid = pointwise_descriptor(output, {x, w});
         const int attributes[]{1, 1, 0, 0, 1, 1, 1};
         std::copy(std::begin(attributes), std::end(attributes), valid.v + KernelParams::kAttributeSlot);
-        auto raw = [&](const KernelParams& descriptor) { backend_dispatch("conv2d", output.node()->value, {x.node()->value, w.node()->value}, descriptor); };
-        raw(valid); const auto unchanged = output.raw_data();
-        auto bad = valid; bad.v[KernelParams::kOutputCountSlot] = 3; rejects([&] { raw(bad); });
+        LocalFunction raw{[&](const KernelParams& descriptor) { backend_dispatch("conv2d", output.node()->value, {x.node()->value, w.node()->value}, descriptor); }};
+        raw(valid); const std::vector<uint8_t> unchanged = output.raw_data();
+        KernelParams bad = valid; bad.v[KernelParams::kOutputCountSlot] = 3; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputRankSlot] = 3; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputShapeSlot + 1] = 2; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputDTypeSlot] = int(DType::Float32); rejects([&] { raw(bad); });
@@ -1050,17 +1051,17 @@ void spatials(Backend backend) {
         bad = valid; bad.v[KernelParams::kAttributeSlot + 6] = 2; rejects([&] { raw(bad); });
         rejects([&] { backend_dispatch("conv2d", output.node()->value, {x.node()->value}, valid); });
         rejects([&] { backend_dispatch("conv2d", output.node()->value, {x.node()->value, w.node()->value, x.node()->value}, valid); });
-        auto mixed_weight = Tensor::ones(w.shape(), backend);
-        auto mixed = pointwise_descriptor(output, {x, mixed_weight});
+        Tensor mixed_weight = Tensor::ones(w.shape(), backend);
+        KernelParams mixed = pointwise_descriptor(output, {x, mixed_weight});
         std::copy(std::begin(attributes), std::end(attributes), mixed.v + KernelParams::kAttributeSlot);
         rejects([&] { backend_dispatch("conv2d", output.node()->value, {x.node()->value, mixed_weight.node()->value}, mixed); });
-        auto alias = pointwise_descriptor(w, {x, w});
+        KernelParams alias = pointwise_descriptor(w, {x, w});
         std::copy(std::begin(attributes), std::end(attributes), alias.v + KernelParams::kAttributeSlot);
         rejects([&] { backend_dispatch("conv2d", w.node()->value, {x.node()->value, w.node()->value}, alias); });
         check(output.raw_data() == unchanged, "Rejected spatial descriptor wrote output bytes");
-        auto small = Tensor::ones({1, 1, 2, 2}, backend, false, dtype);
-        auto single = Tensor::zeros({1, 1, 1, 1}, backend, false, dtype);
-        auto pool = pointwise_descriptor(single, {small});
+        Tensor small = Tensor::ones({1, 1, 2, 2}, backend, false, dtype);
+        Tensor single = Tensor::zeros({1, 1, 1, 1}, backend, false, dtype);
+        KernelParams pool = pointwise_descriptor(single, {small});
         const int pool_attributes[]{2, 2, 2, 2, 0, 0, 1};
         std::copy(std::begin(pool_attributes), std::end(pool_attributes), pool.v + KernelParams::kAttributeSlot);
         for (const std::string op : {"max_pool2d", "avg_pool2d"}) {
@@ -1072,7 +1073,7 @@ void spatials(Backend backend) {
             bad = pool; bad.v[KernelParams::kAttributeSlot + 6] = 2;
             rejects([&] { backend_dispatch(op, single.node()->value, {small.node()->value}, bad); });
         }
-        auto odd = avg_pool2d(Tensor::ones({1, 1, 1, 5}, backend, false, dtype), 1);
+        Tensor odd = avg_pool2d(Tensor::ones({1, 1, 1, 5}, backend, false, dtype), 1);
         if (dtype == DType::Float4E2M1FN) check((odd.raw_data().back() & 0xf0) == 0, "Packed spatial padding is dirty");
     }
     for (bool asynchronous : {false, true}) {
@@ -1086,7 +1087,7 @@ void spatials(Backend backend) {
         }
         {
             StreamScope scope(consumer, asynchronous, true);
-            auto result = conv2d(input, weight, {});
+            Tensor result = conv2d(input, weight, {});
             result.backward(Tensor::ones(result.shape(), backend, false, result.dtype()));
             check(result.data() == std::vector<float>({4, 4, 4, 4}), "Spatial stream dependency differs");
             check(Tensor(input.node()->gradient).data() == std::vector<float>({1, 2, 1, 2, 4, 2, 1, 2, 1}), "Spatial gradient stream dependency differs");
@@ -1095,47 +1096,47 @@ void spatials(Backend backend) {
     }
 }
 void storage_gradients(Backend backend) {
-    for (auto dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
+    for (elman::DType dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
                        DType::Float8E5M2FNUZ, DType::Float8E8M0FNU, DType::Float4E2M1FN}) {
-        auto x = Tensor::ones({7}, backend, true, dtype);
-        auto selected = slice(x, 0, 1, 7, 2);
+        Tensor x = Tensor::ones({7}, backend, true, dtype);
+        Tensor selected = slice(x, 0, 1, 7, 2);
         selected.backward(Tensor::ones({3}, backend, false, dtype));
         check(Tensor(x.node()->gradient).raw_data() == Tensor::from_data({7}, {0, 1, 0, 1, 0, 1, 0}, backend, false, dtype).raw_data(),
               "Low precision slice gradient differs");
-        auto viewed = Tensor::ones({7}, backend, true, dtype);
-        auto view = contiguous_view(viewed, {5}, 2);
+        Tensor viewed = Tensor::ones({7}, backend, true, dtype);
+        Tensor view = contiguous_view(viewed, {5}, 2);
         view.backward(Tensor::ones({5}, backend, false, dtype));
         check(Tensor(viewed.node()->gradient).raw_data() == Tensor::from_data({7}, {0, 0, 1, 1, 1, 1, 1}, backend, false, dtype).raw_data(),
               "Low precision view gradient differs");
-        auto scalar = Tensor::ones({}, backend, true, dtype);
-        auto expanded = expand(scalar, {2, 3});
+        Tensor scalar = Tensor::ones({}, backend, true, dtype);
+        Tensor expanded = expand(scalar, {2, 3});
         expanded.backward(Tensor::ones({2, 3}, backend, false, dtype));
         check(Tensor(scalar.node()->gradient).raw_data() == Tensor::from_data({}, {6}, backend, false, dtype).raw_data(),
               "Low precision expand gradient rounded intermediate dimensions");
         check(squeeze(scalar, -1).shape().empty() && squeeze(scalar, 0).shape().empty(), "Scalar squeeze shape differs");
         rejects([&] { squeeze(scalar, 1); });
         rejects([&] { unsqueeze(Tensor::ones({1, 1, 1, 1, 1, 1, 1, 1}, backend, false, dtype), 0); });
-        auto triangle = Tensor::ones({2, 3}, backend, true, dtype);
-        auto upper = triu(triangle);
-        const auto upper_reference = Tensor::from_data({2, 3}, {1, 1, 1, 0, 1, 1}, backend, false, dtype).raw_data();
+        Tensor triangle = Tensor::ones({2, 3}, backend, true, dtype);
+        Tensor upper = triu(triangle);
+        const std::vector<uint8_t> upper_reference = Tensor::from_data({2, 3}, {1, 1, 1, 0, 1, 1}, backend, false, dtype).raw_data();
         check(upper.raw_data() == upper_reference, "Low precision triangular zero encoding differs");
         upper.backward(Tensor::ones({2, 3}, backend, false, dtype));
         check(Tensor(triangle.node()->gradient).raw_data() == upper_reference, "Low precision triangular gradient differs");
-        auto left = Tensor::ones({3}, backend, true, dtype), right = Tensor::ones({2}, backend, true, dtype);
-        auto joined = concat({left, right}, 0);
+        Tensor left = Tensor::ones({3}, backend, true, dtype), right = Tensor::ones({2}, backend, true, dtype);
+        Tensor joined = concat({left, right}, 0);
         joined.backward(Tensor::ones({5}, backend, false, dtype));
         check(Tensor(left.node()->gradient).raw_data() == left.raw_data() && Tensor(right.node()->gradient).raw_data() == right.raw_data(),
               "Packed concat gradient differs");
-        auto input = Tensor::ones({3}, backend, false, dtype), output = Tensor::zeros({7}, backend, false, dtype);
-        auto valid = pointwise_descriptor(output, {input});
+        Tensor input = Tensor::ones({3}, backend, false, dtype), output = Tensor::zeros({7}, backend, false, dtype);
+        KernelParams valid = pointwise_descriptor(output, {input});
         valid.v[KernelParams::kAttributeSlot] = 0; valid.v[KernelParams::kAttributeSlot + 1] = 1; valid.v[KernelParams::kAttributeSlot + 2] = 2;
         for (const std::string op : {"slice_grad", "slice_backward"}) {
             backend_dispatch(op, output.node()->value, {input.node()->value}, valid);
             check(output.raw_data() == Tensor(x.node()->gradient).raw_data(), "Raw slice derivative alias differs");
         }
-        auto raw = [&](const KernelParams& p) { backend_dispatch("slice_grad", output.node()->value, {input.node()->value}, p); };
-        const auto unchanged = output.raw_data();
-        auto bad = valid; bad.v[KernelParams::kOutputCountSlot] = 6; rejects([&] { raw(bad); });
+        LocalFunction raw{[&](const KernelParams& p) { backend_dispatch("slice_grad", output.node()->value, {input.node()->value}, p); }};
+        const std::vector<uint8_t> unchanged = output.raw_data();
+        KernelParams bad = valid; bad.v[KernelParams::kOutputCountSlot] = 6; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputRankSlot] = 9; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputShapeSlot] = 6; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputDTypeSlot] = int(DType::Float32); rejects([&] { raw(bad); });
@@ -1150,15 +1151,15 @@ void storage_gradients(Backend backend) {
         bad = valid; bad.v[KernelParams::kAttributeSlot + 2] = INT32_MAX; rejects([&] { raw(bad); });
         rejects([&] { backend_dispatch("slice_grad", output.node()->value, {}, valid); });
         rejects([&] { backend_dispatch("slice_grad", output.node()->value, {input.node()->value, input.node()->value}, valid); });
-        auto wrong = Tensor::ones({3}, backend);
-        auto mixed = pointwise_descriptor(output, {wrong}); mixed.v[KernelParams::kAttributeSlot + 2] = 1;
+        Tensor wrong = Tensor::ones({3}, backend);
+        KernelParams mixed = pointwise_descriptor(output, {wrong}); mixed.v[KernelParams::kAttributeSlot + 2] = 1;
         rejects([&] { backend_dispatch("slice_grad", output.node()->value, {wrong.node()->value}, mixed); });
-        auto alias = pointwise_descriptor(input, {input}); alias.v[KernelParams::kAttributeSlot + 2] = 1;
+        KernelParams alias = pointwise_descriptor(input, {input}); alias.v[KernelParams::kAttributeSlot + 2] = 1;
         rejects([&] { backend_dispatch("slice_grad", input.node()->value, {input.node()->value}, alias); });
         check(output.raw_data() == unchanged, "Rejected storage gradient modified output bytes");
-        auto storage = Tensor::ones({7}, backend, false, dtype);
-        auto offset_output = contiguous_view(storage, {5}, 2);
-        auto offset_input = Tensor::ones({2}, backend, false, dtype);
+        Tensor storage = Tensor::ones({7}, backend, false, dtype);
+        Tensor offset_output = contiguous_view(storage, {5}, 2);
+        Tensor offset_input = Tensor::ones({2}, backend, false, dtype);
         dispatch_tensor_into("slice_grad", offset_output, {offset_input}, {0, 0, 2});
         check(storage.raw_data() == Tensor::from_data({7}, {1, 1, 1, 0, 1, 0, 0}, backend, false, dtype).raw_data(),
               "Offset storage gradient modified surrounding bytes");
@@ -1177,7 +1178,7 @@ void storage_gradients(Backend backend) {
         }
         {
             StreamScope scope(consumer, asynchronous, true);
-            auto selected = slice(input, 0, 1, 7, 2);
+            Tensor selected = slice(input, 0, 1, 7, 2);
             selected.backward(Tensor::ones({3}, backend, false, DType::Float4E2M1FN));
             check(Tensor(input.node()->gradient).data() == std::vector<float>({0, 1, 0, 1, 0, 1, 0}), "Storage gradient stream dependency differs");
         }
@@ -1185,35 +1186,35 @@ void storage_gradients(Backend backend) {
     }
 }
 void indexings(Backend backend) {
-    for (auto dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
+    for (elman::DType dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
                        DType::Float8E5M2FNUZ, DType::Float8E8M0FNU, DType::Float4E2M1FN}) {
-        auto x = Tensor::from_data({2, 3}, {4, 1, 2, 4, 1, 2}, backend, true, dtype);
-        auto sorted = sort(x, 1);
+        Tensor x = Tensor::from_data({2, 3}, {4, 1, 2, 4, 1, 2}, backend, true, dtype);
+        std::pair<Tensor, Tensor> sorted = sort(x, 1);
         check(sorted.second.int_data() == std::vector<int32_t>({1, 2, 0, 1, 2, 0}), "Low precision stable sort indices differ");
         check(sorted.first.raw_data() == gather(x, 1, sorted.second).raw_data(), "Low precision sorted values changed storage");
         sorted.first.backward(Tensor::from_data({2, 3}, {1, 2, 3, 1, 2, 3}, backend, false, dtype));
         check(Tensor(x.node()->gradient).raw_data() == Tensor::from_data({2, 3}, {3, 1, 2, 3, 1, 2}, backend, false, dtype).raw_data(),
               "Low precision sorting gradient differs");
-        auto repeated = Tensor::ones({2, 3}, backend, true, dtype);
-        auto tiled = repeat(repeated, {2, 3});
+        Tensor repeated = Tensor::ones({2, 3}, backend, true, dtype);
+        Tensor tiled = repeat(repeated, {2, 3});
         tiled.backward(Tensor::ones(tiled.shape(), backend, false, dtype));
         check(Tensor(repeated.node()->gradient).raw_data() == Tensor::from_data({2, 3}, std::vector<float>(6, 6), backend, false, dtype).raw_data(),
               "Low precision repeated gradient differs");
-        auto values = Tensor::ones({2, 3}, backend, false, dtype);
-        auto ids = Tensor::from_int_data({2, 3}, {0, 1, 0, 1, 2, 1}, backend);
-        auto output = Tensor::zeros({2, 3}, backend, false, dtype);
-        auto valid = pointwise_descriptor(output, {values, ids});
+        Tensor values = Tensor::ones({2, 3}, backend, false, dtype);
+        Tensor ids = Tensor::from_int_data({2, 3}, {0, 1, 0, 1, 2, 1}, backend);
+        Tensor output = Tensor::zeros({2, 3}, backend, false, dtype);
+        KernelParams valid = pointwise_descriptor(output, {values, ids});
         valid.v[KernelParams::kAttributeSlot] = 1;
         for (const std::string op : {"gather_grad", "gather_backward"}) {
             backend_dispatch(op, output.node()->value, {values.node()->value, ids.node()->value}, valid);
             check(output.raw_data() == Tensor::from_data({2, 3}, {2, 1, 0, 0, 2, 1}, backend, false, dtype).raw_data(),
                   "Low precision gather derivative differs");
         }
-        auto raw = [&](const KernelParams& descriptor) {
+        LocalFunction raw{[&](const KernelParams& descriptor) {
             backend_dispatch("gather_grad", output.node()->value, {values.node()->value, ids.node()->value}, descriptor);
-        };
-        const auto unchanged = output.raw_data();
-        auto bad = valid; bad.v[KernelParams::kOutputCountSlot] = 5; rejects([&] { raw(bad); });
+        }};
+        const std::vector<uint8_t> unchanged = output.raw_data();
+        KernelParams bad = valid; bad.v[KernelParams::kOutputCountSlot] = 5; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputRankSlot] = 9; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputShapeSlot] = 3; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputDTypeSlot] = int(DType::Float32); rejects([&] { raw(bad); });
@@ -1226,34 +1227,34 @@ void indexings(Backend backend) {
         bad = valid; bad.v[KernelParams::kAttributeSlot] = -1; rejects([&] { raw(bad); });
         rejects([&] { backend_dispatch("gather_grad", output.node()->value, {values.node()->value}, valid); });
         rejects([&] { backend_dispatch("gather_grad", output.node()->value, {values.node()->value, ids.node()->value, values.node()->value}, valid); });
-        auto float_ids = Tensor::ones({2, 3}, backend);
-        auto mixed = pointwise_descriptor(output, {values, float_ids}); mixed.v[KernelParams::kAttributeSlot] = 1;
+        Tensor float_ids = Tensor::ones({2, 3}, backend);
+        KernelParams mixed = pointwise_descriptor(output, {values, float_ids}); mixed.v[KernelParams::kAttributeSlot] = 1;
         rejects([&] { backend_dispatch("gather_grad", output.node()->value, {values.node()->value, float_ids.node()->value}, mixed); });
-        auto out_of_range = Tensor::from_int_data({2, 3}, {0, 1, 3, 0, 1, 2}, backend);
-        auto invalid = pointwise_descriptor(output, {values, out_of_range}); invalid.v[KernelParams::kAttributeSlot] = 1;
+        Tensor out_of_range = Tensor::from_int_data({2, 3}, {0, 1, 3, 0, 1, 2}, backend);
+        KernelParams invalid = pointwise_descriptor(output, {values, out_of_range}); invalid.v[KernelParams::kAttributeSlot] = 1;
         rejects([&] { backend_dispatch("gather_grad", output.node()->value, {values.node()->value, out_of_range.node()->value}, invalid); });
         rejects([&] { gather(values, 1, out_of_range); });
-        auto alias = pointwise_descriptor(values, {values, ids}); alias.v[KernelParams::kAttributeSlot] = 1;
+        KernelParams alias = pointwise_descriptor(values, {values, ids}); alias.v[KernelParams::kAttributeSlot] = 1;
         rejects([&] { backend_dispatch("gather_grad", values.node()->value, {values.node()->value, ids.node()->value}, alias); });
         rejects([&] { backend_dispatch("sort_backward", output.node()->value, {values.node()->value, ids.node()->value}, valid); });
-        auto repeat_bad = pointwise_descriptor(output, {Tensor::ones({2, 4}, backend, false, dtype)});
-        auto repeat_input = Tensor::ones({2, 4}, backend, false, dtype);
+        KernelParams repeat_bad = pointwise_descriptor(output, {Tensor::ones({2, 4}, backend, false, dtype)});
+        Tensor repeat_input = Tensor::ones({2, 4}, backend, false, dtype);
         rejects([&] { backend_dispatch("repeat_grad", output.node()->value, {repeat_input.node()->value}, repeat_bad); });
         check(output.raw_data() == unchanged, "Rejected low precision indexing wrote output bytes");
         std::vector<uint8_t> codes(256);
         for (int i = 0; i < 256; ++i) codes[i] = uint8_t(i);
         const int count = dtype == DType::Float4E2M1FN ? 512 : 256;
-        auto encoded = Tensor::from_raw({count}, dtype, codes, backend);
+        Tensor encoded = Tensor::from_raw({count}, dtype, codes, backend);
         std::vector<int32_t> identity(count);
         for (int i = 0; i < count; ++i) identity[i] = i;
-        auto identity_ids = Tensor::from_int_data({count}, identity, backend);
+        Tensor identity_ids = Tensor::from_int_data({count}, identity, backend);
         for (const std::string op : {"scatter_source_grad", "sort_backward"})
             check(dispatch_tensor(op, encoded.shape(), {encoded, identity_ids}, {0}, dtype).raw_data() == codes,
                   "Indexed copy changed NaN payloads or signed zero");
         check(scatter(encoded, 0, identity_ids, encoded).raw_data() == codes, "Scatter changed encoded values");
-        auto odd = Tensor::ones({3}, backend, true, dtype);
-        auto odd_ids = Tensor::from_int_data({3}, {2, 0, 2}, backend);
-        auto selected = gather(odd, 0, odd_ids);
+        Tensor odd = Tensor::ones({3}, backend, true, dtype);
+        Tensor odd_ids = Tensor::from_int_data({3}, {2, 0, 2}, backend);
+        Tensor selected = gather(odd, 0, odd_ids);
         selected.backward(Tensor::ones({3}, backend, false, dtype));
         if (dtype == DType::Float4E2M1FN) {
             check((selected.raw_data().back() & 0xf0) == 0, "Packed indexing output padding is dirty");
@@ -1271,7 +1272,7 @@ void indexings(Backend backend) {
         }
         {
             StreamScope scope(consumer, asynchronous, true);
-            auto selected = gather(encoded, 0, ids);
+            Tensor selected = gather(encoded, 0, ids);
             selected.backward(Tensor::ones({3}, backend, false, DType::Float4E2M1FN));
             check(selected.data() == std::vector<float>({6, 1, 3}), "Indexed stream dependency differs");
             check(Tensor(encoded.node()->gradient).data() == std::vector<float>({1, 0, 1, 0, 1}), "Indexed gradient stream dependency differs");
@@ -1280,26 +1281,26 @@ void indexings(Backend backend) {
     }
 }
 void matrices(Backend backend) {
-    for (auto dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
+    for (elman::DType dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
                        DType::Float8E5M2FNUZ, DType::Float8E8M0FNU, DType::Float4E2M1FN}) {
-        auto a = Tensor::ones({3, 3}, backend, true, dtype);
-        auto b = Tensor::ones({3, 5}, backend, true, dtype);
-        auto product = matmul(a, b);
-        auto expected = Tensor::from_data({3, 5}, std::vector<float>(15, 3.f), backend, false, dtype);
+        Tensor a = Tensor::ones({3, 3}, backend, true, dtype);
+        Tensor b = Tensor::ones({3, 5}, backend, true, dtype);
+        Tensor product = matmul(a, b);
+        Tensor expected = Tensor::from_data({3, 5}, std::vector<float>(15, 3.f), backend, false, dtype);
         check(product.raw_data() == expected.raw_data(), "Low precision matrix product differs");
         product.backward(Tensor::ones(product.shape(), backend, false, dtype));
         check(Tensor(a.node()->gradient).raw_data() == Tensor::from_data(a.shape(), std::vector<float>(9, 5.f), backend, false, dtype).raw_data(),
               "Low precision matrix input gradient differs");
         check(Tensor(b.node()->gradient).raw_data() == Tensor::from_data(b.shape(), std::vector<float>(15, 3.f), backend, false, dtype).raw_data(),
               "Low precision matrix weight gradient differs");
-        auto w = Tensor::ones({5, 3}, backend, true, dtype);
-        auto x = Tensor::ones({3, 3}, backend, true, dtype);
-        auto bias = Tensor::zeros({5}, backend, true, dtype);
+        Tensor w = Tensor::ones({5, 3}, backend, true, dtype);
+        Tensor x = Tensor::ones({3, 3}, backend, true, dtype);
+        Tensor bias = Tensor::zeros({5}, backend, true, dtype);
         // E8M0 has no zero; retain its decoded bias in the arithmetic reference.
-        auto reference = cast(linear(cast(x.detach(), DType::Float32), cast(w.detach(), DType::Float32), cast(bias.detach(), DType::Float32)), dtype);
+        Tensor reference = cast(linear(cast(x.detach(), DType::Float32), cast(w.detach(), DType::Float32), cast(bias.detach(), DType::Float32)), dtype);
         check(linear(x, w, bias).raw_data() == reference.raw_data(), "Low precision linear bias differs");
         const std::vector<int> widths{1, 0, 3, 1};
-        auto packed = packed_linear(x, w, widths);
+        Tensor packed = packed_linear(x, w, widths);
         packed.backward(Tensor::ones(packed.shape(), backend, false, dtype));
         check(packed.raw_data() == reshape(expected, {15}).raw_data(), "Packed low precision matrix layout differs");
         check(Tensor(x.node()->gradient).raw_data() == Tensor::from_data(x.shape(), std::vector<float>(9, 5.f), backend, false, dtype).raw_data(),
@@ -1307,11 +1308,11 @@ void matrices(Backend backend) {
         check(Tensor(w.node()->gradient).raw_data() == Tensor::from_data(w.shape(), std::vector<float>(15, 3.f), backend, false, dtype).raw_data(),
               "Packed matrix weight gradient differs");
         if (dtype == DType::Float4E2M1FN) check((packed.raw_data().back() & 0xf0) == 0, "Packed matrix padding is not zero");
-        auto output = Tensor::zeros({3, 5}, backend, false, dtype);
-        const auto unchanged = output.raw_data();
-        const auto valid = pointwise_descriptor(output, {a, b});
-        auto raw = [&](const KernelParams& p) { backend_dispatch("matmul", output.node()->value, {a.node()->value, b.node()->value}, p); };
-        auto bad = valid; bad.v[KernelParams::kOutputCountSlot] = 14; rejects([&] { raw(bad); });
+        Tensor output = Tensor::zeros({3, 5}, backend, false, dtype);
+        const std::vector<uint8_t> unchanged = output.raw_data();
+        const KernelParams valid = pointwise_descriptor(output, {a, b});
+        LocalFunction raw{[&](const KernelParams& p) { backend_dispatch("matmul", output.node()->value, {a.node()->value, b.node()->value}, p); }};
+        KernelParams bad = valid; bad.v[KernelParams::kOutputCountSlot] = 14; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputRankSlot] = 9; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputShapeSlot] = 5; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::input_slot(KernelInput::A)] = 9; rejects([&] { raw(bad); });
@@ -1323,37 +1324,37 @@ void matrices(Backend backend) {
         bad = valid; bad.v[KernelParams::input_slot(KernelInput::D)] = 0; rejects([&] { raw(bad); });
         rejects([&] { backend_dispatch("matmul", output.node()->value, {a.node()->value}, valid); });
         rejects([&] { backend_dispatch("matmul", output.node()->value, {a.node()->value, b.node()->value, a.node()->value}, valid); });
-        auto wrong = Tensor::ones(b.shape(), backend);
-        auto mixed = pointwise_descriptor(output, {a, wrong});
+        Tensor wrong = Tensor::ones(b.shape(), backend);
+        KernelParams mixed = pointwise_descriptor(output, {a, wrong});
         rejects([&] { backend_dispatch("matmul", output.node()->value, {a.node()->value, wrong.node()->value}, mixed); });
         check(output.raw_data() == unchanged, "Rejected matrix descriptor wrote output bytes");
-        auto alias = pointwise_descriptor(b, {a, b});
+        KernelParams alias = pointwise_descriptor(b, {a, b});
         rejects([&] { backend_dispatch("matmul", b.node()->value, {a.node()->value, b.node()->value}, alias); });
         check(b.data() == std::vector<float>(15, 1.f), "Rejected matrix alias changed storage");
-        auto raw_bmm = pointwise_descriptor(output, {a, b});
+        KernelParams raw_bmm = pointwise_descriptor(output, {a, b});
         rejects([&] { backend_dispatch("bmm", output.node()->value, {a.node()->value, b.node()->value}, raw_bmm); });
-        auto flat = Tensor::zeros({15}, backend, false, dtype);
-        auto projection = pointwise_descriptor(flat, {a, w});
+        Tensor flat = Tensor::zeros({15}, backend, false, dtype);
+        KernelParams projection = pointwise_descriptor(flat, {a, w});
         projection.v[KernelParams::kAttributeSlot] = 3;
         projection.v[KernelParams::kAttributeSlot + 1] = 1;
         projection.v[KernelParams::kAttributeSlot + 2] = 0;
         projection.v[KernelParams::kAttributeSlot + 3] = 4;
         backend_dispatch("packed_linear", flat.node()->value, {a.node()->value, w.node()->value}, projection);
         check(flat.raw_data() == reshape(expected, {15}).raw_data(), "Raw packed projection differs");
-        for (auto entry : std::vector<std::pair<int,int>>{{0,0},{0,64},{1,-1},{3,5}}) {
+        for (std::pair<int, int> entry : std::vector<std::pair<int,int>>{{0,0},{0,64},{1,-1},{3,5}}) {
             bad = projection; bad.v[KernelParams::kAttributeSlot + entry.first] = entry.second;
             rejects([&] { backend_dispatch("packed_linear", flat.node()->value, {a.node()->value, w.node()->value}, bad); });
         }
-        auto addend = Tensor::ones({5}, backend, false, dtype);
-        auto addition = pointwise_descriptor(output, {a, b, addend});
+        Tensor addend = Tensor::ones({5}, backend, false, dtype);
+        KernelParams addition = pointwise_descriptor(output, {a, b, addend});
         const float one = 1.f;
         std::memcpy(&addition.v[KernelParams::kAttributeSlot], &one, sizeof(one));
         std::memcpy(&addition.v[KernelParams::kAttributeSlot + 1], &one, sizeof(one));
         backend_dispatch("addmm", output.node()->value, {a.node()->value, b.node()->value, addend.node()->value}, addition);
         check(output.data() == std::vector<float>(15, 4.f), "Raw low precision addmm differs");
         rejects([&] { backend_dispatch("addmm", output.node()->value, {a.node()->value, b.node()->value}, addition); });
-        auto mutable_input = Tensor::ones({2, 3}, backend, true, dtype);
-        auto tracked = linear(mutable_input, w.detach());
+        Tensor mutable_input = Tensor::ones({2, 3}, backend, true, dtype);
+        Tensor tracked = linear(mutable_input, w.detach());
         mutable_input.assign(std::vector<float>(6, 2.f));
         rejects([&] { tracked.backward(Tensor::ones(tracked.shape(), backend, false, dtype)); });
     }
@@ -1377,53 +1378,53 @@ void matrices(Backend backend) {
     }
 }
 void softmaxes(Backend backend) {
-    for (auto dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
+    for (elman::DType dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
                        DType::Float8E5M2FNUZ, DType::Float8E8M0FNU, DType::Float4E2M1FN}) {
         for (const std::string operation : {"softmax", "log_softmax"}) {
             const bool logarithmic = operation == "log_softmax";
-            auto input = Tensor::ones({2, 2}, backend, true, dtype);
-            auto result = logarithmic ? log_softmax(input, 1) : softmax(input, 1);
+            Tensor input = Tensor::ones({2, 2}, backend, true, dtype);
+            Tensor result = logarithmic ? log_softmax(input, 1) : softmax(input, 1);
             const float forward = logarithmic ? -std::log(2.f) : .5f;
             check(result.raw_data() == Tensor::from_data({2, 2}, std::vector<float>(4, forward), backend, false, dtype).raw_data(), "Uniform low precision softmax differs");
             result.backward(Tensor::from_data({2, 2}, {1.f, 0.f, 0.f, 1.f}, backend));
             const float derivative = logarithmic ? .5f : .25f;
-            auto expected = Tensor::from_data({2, 2}, {derivative, -derivative, -derivative, derivative}, backend, false, dtype);
+            Tensor expected = Tensor::from_data({2, 2}, {derivative, -derivative, -derivative, derivative}, backend, false, dtype);
             check(Tensor(input.node()->gradient).raw_data() == expected.raw_data(), "Low precision softmax Jacobian differs");
             input.zero_grad();
             result.backward(Tensor::from_data({2, 2}, {1.f, 0.f, 0.f, 1.f}, backend));
             check(Tensor(input.node()->gradient).raw_data() == expected.raw_data(), "Repeated softmax backward lost saved probabilities");
-            auto output = Tensor::zeros(input.shape(), backend, false, dtype);
-            auto valid = descriptor(output, input); valid.v[KernelParams::kAttributeSlot] = 1;
-            auto raw = [&](const KernelParams& params) { backend_dispatch(operation, output.node()->value, {input.node()->value}, params); };
+            Tensor output = Tensor::zeros(input.shape(), backend, false, dtype);
+            KernelParams valid = descriptor(output, input); valid.v[KernelParams::kAttributeSlot] = 1;
+            LocalFunction raw{[&](const KernelParams& params) { backend_dispatch(operation, output.node()->value, {input.node()->value}, params); }};
             raw(valid); check(output.raw_data() == result.raw_data(), "Raw and tracked softmax differ");
-            const auto unchanged = output.raw_data();
-            for (auto field : {KernelParams::kOutputCountSlot, KernelParams::kOutputRankSlot, KernelParams::kOutputShapeSlot,
+            const std::vector<uint8_t> unchanged = output.raw_data();
+            for (int field : {KernelParams::kOutputCountSlot, KernelParams::kOutputRankSlot, KernelParams::kOutputShapeSlot,
                                KernelParams::input_slot(KernelInput::A), KernelParams::input_slot(KernelInput::A) + KernelParams::kInputStrideOffset}) {
-                auto bad = valid; bad.v[field] = 9; rejects([&] { raw(bad); });
+                KernelParams bad = valid; bad.v[field] = 9; rejects([&] { raw(bad); });
             }
-            for (int axis : {-1, 2}) { auto bad = valid; bad.v[KernelParams::kAttributeSlot] = axis; rejects([&] { raw(bad); }); }
-            for (int mode : {-1, 1, 2, 3}) { auto bad = valid; bad.v[KernelParams::kAttributeSlot + 1] = mode; rejects([&] { raw(bad); }); }
-            for (auto descriptor_input : {KernelInput::B, KernelInput::C, KernelInput::D}) {
-                auto bad = valid; bad.v[KernelParams::input_slot(descriptor_input)] = 0; rejects([&] { raw(bad); });
+            for (int axis : {-1, 2}) { KernelParams bad = valid; bad.v[KernelParams::kAttributeSlot] = axis; rejects([&] { raw(bad); }); }
+            for (int mode : {-1, 1, 2, 3}) { KernelParams bad = valid; bad.v[KernelParams::kAttributeSlot + 1] = mode; rejects([&] { raw(bad); }); }
+            for (elman::KernelInput descriptor_input : {KernelInput::B, KernelInput::C, KernelInput::D}) {
+                KernelParams bad = valid; bad.v[KernelParams::input_slot(descriptor_input)] = 0; rejects([&] { raw(bad); });
             }
             rejects([&] { backend_dispatch(operation, output.node()->value, {}, valid); });
             rejects([&] { backend_dispatch(operation, output.node()->value, {input.node()->value, input.node()->value}, valid); });
             check(output.raw_data() == unchanged, "Rejected softmax modified output");
-            auto wide = dispatch_tensor(operation, input.shape(), {input}, {1, 1}, DType::Float32);
-            auto upstream = Tensor::ones(input.shape(), backend, false, dtype);
-            auto backward = pointwise_descriptor(output, {wide, upstream});
+            Tensor wide = dispatch_tensor(operation, input.shape(), {input}, {1, 1}, DType::Float32);
+            Tensor upstream = Tensor::ones(input.shape(), backend, false, dtype);
+            KernelParams backward = pointwise_descriptor(output, {wide, upstream});
             backward.v[KernelParams::kAttributeSlot] = 1; backward.v[KernelParams::kAttributeSlot + 1] = 2;
-            auto bad = backward; bad.v[KernelParams::input_slot(KernelInput::B) + KernelParams::kInputStrideOffset] = 9;
+            KernelParams bad = backward; bad.v[KernelParams::input_slot(KernelInput::B) + KernelParams::kInputStrideOffset] = 9;
             rejects([&] { backend_dispatch(operation, output.node()->value, {wide.node()->value, upstream.node()->value}, bad); });
             rejects([&] { backend_dispatch(operation, upstream.node()->value, {wide.node()->value, upstream.node()->value}, backward); });
-            auto inplace = Tensor::ones({3}, backend, false, dtype);
-            auto fresh = logarithmic ? log_softmax(inplace) : softmax(inplace);
+            Tensor inplace = Tensor::ones({3}, backend, false, dtype);
+            Tensor fresh = logarithmic ? log_softmax(inplace) : softmax(inplace);
             dispatch_tensor_into(operation, inplace, {inplace}, {0});
             check(inplace.raw_data() == fresh.raw_data(), "In-place softmax differs");
             if (dtype == DType::Float4E2M1FN) check((inplace.raw_data().back() & 0xf0) == 0, "Softmax packed padding is nonzero");
-            auto storage = Tensor::ones({10}, backend, false, dtype);
-            auto source = contiguous_view(storage, {8}), destination = contiguous_view(storage, {8}, 2);
-            auto overlap = descriptor(destination, source);
+            Tensor storage = Tensor::ones({10}, backend, false, dtype);
+            Tensor source = contiguous_view(storage, {8}), destination = contiguous_view(storage, {8}, 2);
+            KernelParams overlap = descriptor(destination, source);
             rejects([&] { backend_dispatch(operation, destination.node()->value, {source.node()->value}, overlap); });
             input.assign(std::vector<float>(4, 2.f));
             rejects([&] { result.backward(Tensor::ones(result.shape(), backend)); });
@@ -1448,21 +1449,21 @@ void softmaxes(Backend backend) {
     }
 }
 void normalizations(Backend backend) {
-    auto normalize = [](const std::string& op, const Tensor& x, const Tensor& w, const Tensor& b) {
+    Tensor (*const normalize)(const std::string&, const Tensor&, const Tensor&, const Tensor&) = [](const std::string& op, const Tensor& x, const Tensor& w, const Tensor& b) {
         if (op == "layer_norm") return layer_norm(x, w, b, 0.);
         if (op == "rms_norm") return rms_norm(x, w, 0.);
         if (op == "batch_norm") return batch_norm(x, w, b, 0.);
         return group_norm(x, 1, w, b, 0.);
     };
-    for (auto dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
+    for (elman::DType dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
                        DType::Float8E5M2FNUZ, DType::Float8E8M0FNU, DType::Float4E2M1FN}) {
         for (const std::string op : {"layer_norm", "rms_norm", "batch_norm", "group_norm"}) {
             const bool rms = op == "rms_norm", batch = op == "batch_norm";
-            auto x = Tensor::from_data({3, 3}, {.5f, 1.f, 2.f, 1.f, 2.f, .5f, 2.f, .5f, 1.f}, backend, true, dtype);
-            auto w = Tensor::ones({3}, backend, true, dtype), b = Tensor::ones({3}, backend, true, dtype);
-            auto y = normalize(op, x, w, b);
+            Tensor x = Tensor::from_data({3, 3}, {.5f, 1.f, 2.f, 1.f, 2.f, .5f, 2.f, .5f, 1.f}, backend, true, dtype);
+            Tensor w = Tensor::ones({3}, backend, true, dtype), b = Tensor::ones({3}, backend, true, dtype);
+            Tensor y = normalize(op, x, w, b);
             y.backward(Tensor::ones(y.shape(), backend, false, dtype));
-            const auto dx = Tensor(x.node()->gradient).raw_data(), dw = Tensor(w.node()->gradient).raw_data();
+            const std::vector<uint8_t> dx = Tensor(x.node()->gradient).raw_data(), dw = Tensor(w.node()->gradient).raw_data();
             x.zero_grad(); w.zero_grad(); b.zero_grad();
             y.backward(Tensor::ones(y.shape(), backend, false, dtype));
             check(dx == Tensor(x.node()->gradient).raw_data() && dw == Tensor(w.node()->gradient).raw_data(), "Normalization repeated backward differs");
@@ -1471,40 +1472,40 @@ void normalizations(Backend backend) {
                 check((y.raw_data().back() & 0xf0) == 0, "Normalization output padding is nonzero");
                 check((dx.back() & 0xf0) == 0 && (dw.back() & 0xf0) == 0, "Normalization gradient padding is nonzero");
             }
-            auto output = Tensor::zeros(x.shape(), backend, false, dtype);
+            Tensor output = Tensor::zeros(x.shape(), backend, false, dtype);
             std::vector<Tensor> operands{x, w}; if (!rms) operands.push_back(b);
-            auto valid = pointwise_descriptor(output, operands);
+            KernelParams valid = pointwise_descriptor(output, operands);
             valid.v[KernelParams::kAttributeSlot] = batch ? 0 : 1;
             valid.v[KernelParams::kAttributeSlot + 9] = batch ? 1 : 0;
-            std::vector<BufferPtr> buffers; for (const auto& value : operands) buffers.push_back(value.node()->value);
-            auto raw = [&](const KernelParams& p) { backend_dispatch(op, output.node()->value, buffers, p); };
+            std::vector<BufferPtr> buffers; for (const elman::Tensor& value : operands) buffers.push_back(value.node()->value);
+            LocalFunction raw{[&](const KernelParams& p) { backend_dispatch(op, output.node()->value, buffers, p); }};
             raw(valid); check(output.raw_data() == y.raw_data(), "Normalization raw/public paths differ");
-            const auto unchanged = output.raw_data();
-            for (auto field : {KernelParams::kOutputCountSlot, KernelParams::kOutputRankSlot, KernelParams::kOutputShapeSlot,
+            const std::vector<uint8_t> unchanged = output.raw_data();
+            for (int field : {KernelParams::kOutputCountSlot, KernelParams::kOutputRankSlot, KernelParams::kOutputShapeSlot,
                                KernelParams::input_slot(KernelInput::A), KernelParams::input_slot(KernelInput::A) + KernelParams::kInputStrideOffset,
                                KernelParams::input_slot(KernelInput::B), KernelParams::input_slot(KernelInput::B) + KernelParams::kInputShapeOffset}) {
-                auto bad = valid; bad.v[field] = 99; rejects([&] { raw(bad); });
+                KernelParams bad = valid; bad.v[field] = 99; rejects([&] { raw(bad); });
             }
-            for (int mode : {-1, 4}) { auto bad = valid; bad.v[KernelParams::kAttributeSlot + 8] = mode; rejects([&] { raw(bad); }); }
-            auto bad = valid; bad.v[KernelParams::kAttributeSlot + 2] = 2; rejects([&] { raw(bad); });
+            for (int mode : {-1, 4}) { KernelParams bad = valid; bad.v[KernelParams::kAttributeSlot + 8] = mode; rejects([&] { raw(bad); }); }
+            KernelParams bad = valid; bad.v[KernelParams::kAttributeSlot + 2] = 2; rejects([&] { raw(bad); });
             bad = valid; bad.v[KernelParams::kAttributeSlot + (batch ? 0 : 1)] = int(0xbf800000u); rejects([&] { raw(bad); });
             bad = valid; bad.v[KernelParams::input_slot(KernelInput::D)] = 0; rejects([&] { raw(bad); });
             rejects([&] { backend_dispatch(op, output.node()->value, {}, valid); });
             rejects([&] { backend_dispatch(op, x.node()->value, buffers, valid); });
             check(output.raw_data() == unchanged, "Rejected normalization modified output");
-            auto storage = Tensor::ones({14}, backend, false, dtype);
-            auto source = contiguous_view(storage, {4, 3}), destination = contiguous_view(storage, {4, 3}, 2);
-            auto overlapping = operands; overlapping[0] = source;
-            auto overlap = pointwise_descriptor(destination, overlapping); overlap.v[KernelParams::kAttributeSlot] = batch ? 0 : 1;
+            Tensor storage = Tensor::ones({14}, backend, false, dtype);
+            Tensor source = contiguous_view(storage, {4, 3}), destination = contiguous_view(storage, {4, 3}, 2);
+            std::vector<Tensor> overlapping = operands; overlapping[0] = source;
+            KernelParams overlap = pointwise_descriptor(destination, overlapping); overlap.v[KernelParams::kAttributeSlot] = batch ? 0 : 1;
             overlap.v[KernelParams::kAttributeSlot + 9] = batch ? 1 : 0;
-            auto overlap_buffers = buffers; overlap_buffers[0] = source.node()->value;
+            std::vector<BufferPtr> overlap_buffers = buffers; overlap_buffers[0] = source.node()->value;
             rejects([&] { backend_dispatch(op, destination.node()->value, overlap_buffers, overlap); });
             for (int parent = 0; parent < (rms ? 2 : 3); ++parent) {
-                auto fresh_x = Tensor::from_raw(x.shape(), dtype, x.raw_data(), backend, true);
-                auto fresh_w = Tensor::from_raw(w.shape(), dtype, w.raw_data(), backend, true);
-                auto fresh_b = Tensor::from_raw(b.shape(), dtype, b.raw_data(), backend, true);
-                auto result = normalize(op, fresh_x, fresh_w, fresh_b);
-                auto changed = parent == 0 ? fresh_x : parent == 1 ? fresh_w : fresh_b;
+                Tensor fresh_x = Tensor::from_raw(x.shape(), dtype, x.raw_data(), backend, true);
+                Tensor fresh_w = Tensor::from_raw(w.shape(), dtype, w.raw_data(), backend, true);
+                Tensor fresh_b = Tensor::from_raw(b.shape(), dtype, b.raw_data(), backend, true);
+                Tensor result = normalize(op, fresh_x, fresh_w, fresh_b);
+                Tensor changed = parent == 0 ? fresh_x : parent == 1 ? fresh_w : fresh_b;
                 changed.assign(std::vector<float>(changed.numel(), 2.f));
                 rejects([&] { result.backward(Tensor::ones(result.shape(), backend)); });
             }
@@ -1524,7 +1525,7 @@ void normalizations(Backend backend) {
             StreamScope scope(consumer, asynchronous, true);
             check(result.data() == std::vector<float>({0.f, 2.f, 6.f}), "Normalization producer stream was lost");
             check(rms_norm(input, weight, 0.).data() == std::vector<float>({0.f, 1.5f, 6.f}), "RMS intermediate rounding boundary was lost");
-            auto raw = dispatch_tensor("rms_norm", input.shape(), {input, weight}, {1, 0, 1}, input.dtype());
+            Tensor raw = dispatch_tensor("rms_norm", input.shape(), {input, weight}, {1, 0, 1}, input.dtype());
             check(raw.raw_data() == result.raw_data(), "Raw normalized RMS differs from the public operation");
             result.backward(Tensor::ones(result.shape(), backend));
             check(weight.grad() == std::vector<float>({.5f, 1.f, 1.5f}), "Async normalization affine gradient differs");
@@ -1533,50 +1534,50 @@ void normalizations(Backend backend) {
     }
 }
 void raw_normalizations(Backend backend) {
-    for (auto dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
+    for (elman::DType dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
                        DType::Float8E5M2FNUZ, DType::Float8E8M0FNU, DType::Float4E2M1FN}) {
-        auto x = Tensor::ones({3, 3}, backend, false, dtype), w = Tensor::ones({3}, backend, false, dtype);
-        auto b = Tensor::zeros({3}, backend, false, dtype), g = Tensor::ones(x.shape(), backend, false, dtype);
+        Tensor x = Tensor::ones({3, 3}, backend, false, dtype), w = Tensor::ones({3}, backend, false, dtype);
+        Tensor b = Tensor::zeros({3}, backend, false, dtype), g = Tensor::ones(x.shape(), backend, false, dtype);
         for (const std::string op : {"layer_norm", "rms_norm", "group_norm", "batch_norm", "group_norm_input_grad", "group_norm_weight_grad"}) {
             const bool batch = op == "batch_norm", dw = op == "group_norm_weight_grad", dx = op == "group_norm_input_grad", rms = op == "rms_norm";
             std::vector<Tensor> inputs = batch ? std::vector<Tensor>{x, w, w} : dx ? std::vector<Tensor>{x, w, g} : dw ? std::vector<Tensor>{x, g} : std::vector<Tensor>{x};
             std::vector<int> attributes{batch ? int(0x3f800000) : 1, int(0x3f800000)};
-            auto result = dispatch_tensor(op, dw ? w.shape() : x.shape(), inputs, attributes, dtype);
-            auto wanted = rms ? Tensor::from_data(x.shape(), std::vector<float>(9, 1.f / std::sqrt(2.f)), backend, false, dtype) : Tensor::zeros(result.shape(), backend, false, dtype);
+            Tensor result = dispatch_tensor(op, dw ? w.shape() : x.shape(), inputs, attributes, dtype);
+            Tensor wanted = rms ? Tensor::from_data(x.shape(), std::vector<float>(9, 1.f / std::sqrt(2.f)), backend, false, dtype) : Tensor::zeros(result.shape(), backend, false, dtype);
             check(result.raw_data() == wanted.raw_data(), "Raw normalization constant reference differs");
             if (dtype == DType::Float4E2M1FN) check((result.raw_data().back() & 0xf0) == 0, "Raw normalization packed padding is nonzero");
-            auto output = Tensor::zeros(result.shape(), backend, false, dtype);
-            auto valid = pointwise_descriptor(output, inputs);
+            Tensor output = Tensor::zeros(result.shape(), backend, false, dtype);
+            KernelParams valid = pointwise_descriptor(output, inputs);
             for (size_t i = 0; i < attributes.size(); ++i) valid.v[KernelParams::kAttributeSlot + i] = attributes[i];
-            std::vector<BufferPtr> buffers; for (const auto& input : inputs) buffers.push_back(input.node()->value);
-            auto dispatch = [&](const KernelParams& p) { backend_dispatch(op, output.node()->value, buffers, p); };
+            std::vector<BufferPtr> buffers; for (const elman::Tensor& input : inputs) buffers.push_back(input.node()->value);
+            LocalFunction dispatch{[&](const KernelParams& p) { backend_dispatch(op, output.node()->value, buffers, p); }};
             dispatch(valid); check(output.raw_data() == result.raw_data(), "Raw normalization descriptor differs");
-            const auto unchanged = output.raw_data();
+            const std::vector<uint8_t> unchanged = output.raw_data();
             for (int slot : {KernelParams::kOutputCountSlot, KernelParams::kOutputRankSlot, KernelParams::kOutputShapeSlot,
                              KernelParams::input_slot(KernelInput::A), KernelParams::input_slot(KernelInput::A) + KernelParams::kInputStrideOffset}) {
-                auto bad = valid; bad.v[slot] = 99; rejects([&] { dispatch(bad); });
+                KernelParams bad = valid; bad.v[slot] = 99; rejects([&] { dispatch(bad); });
             }
-            for (int attribute : {2, 7, 9}) { auto bad = valid; bad.v[KernelParams::kAttributeSlot + attribute] = 2; rejects([&] { dispatch(bad); }); }
-            for (int mode : {-1, 4}) { auto bad = valid; bad.v[KernelParams::kAttributeSlot + 8] = mode; rejects([&] { dispatch(bad); }); }
-            auto bad = valid; bad.v[KernelParams::kAttributeSlot + 7] = 1; bad.v[KernelParams::kAttributeSlot + 6] = int(0xbff00000); rejects([&] { dispatch(bad); });
+            for (int attribute : {2, 7, 9}) { KernelParams bad = valid; bad.v[KernelParams::kAttributeSlot + attribute] = 2; rejects([&] { dispatch(bad); }); }
+            for (int mode : {-1, 4}) { KernelParams bad = valid; bad.v[KernelParams::kAttributeSlot + 8] = mode; rejects([&] { dispatch(bad); }); }
+            KernelParams bad = valid; bad.v[KernelParams::kAttributeSlot + 7] = 1; bad.v[KernelParams::kAttributeSlot + 6] = int(0xbff00000); rejects([&] { dispatch(bad); });
             bad.v[KernelParams::kAttributeSlot + 6] = int(0x7ff80000); rejects([&] { dispatch(bad); });
             bad = valid; bad.v[KernelParams::input_slot(KernelInput::D)] = 0; rejects([&] { dispatch(bad); });
             rejects([&] { backend_dispatch(op, output.node()->value, {}, valid); });
             if (dx || dw || batch) {
                 bad = valid; bad.v[KernelParams::kAttributeSlot + 8] = 1; rejects([&] { dispatch(bad); });
-                auto missing = buffers; missing[1].reset(); rejects([&] { backend_dispatch(op, output.node()->value, missing, valid); });
+                std::vector<BufferPtr> missing = buffers; missing[1].reset(); rejects([&] { backend_dispatch(op, output.node()->value, missing, valid); });
             }
             if (!dw) rejects([&] { backend_dispatch(op, x.node()->value, buffers, valid); });
             check(output.raw_data() == unchanged, "Rejected raw normalization modified output");
             if (!batch && !dx && !dw) {
-                auto bias_only = dispatch_tensor(op, x.shape(), {x, Tensor{}, b}, attributes, dtype);
+                Tensor bias_only = dispatch_tensor(op, x.shape(), {x, Tensor{}, b}, attributes, dtype);
                 check(bias_only.raw_data() == result.raw_data(), "Optional normalization weight was not skipped");
             }
         }
-        auto input = Tensor::from_data({2, 3}, {1.f, 2.f, 3.f, 1.f, 2.f, 3.f}, backend, false, dtype);
-        auto variance = Tensor::from_data({3}, {4.f, 4.f, 4.f}, backend, false, dtype);
-        auto inference = dispatch_tensor("batch_norm", input.shape(), {input, w, variance}, {0}, dtype);
-        auto expected = Tensor::from_data(input.shape(), {0.f, .5f, 1.f, 0.f, .5f, 1.f}, backend, false, dtype);
+        Tensor input = Tensor::from_data({2, 3}, {1.f, 2.f, 3.f, 1.f, 2.f, 3.f}, backend, false, dtype);
+        Tensor variance = Tensor::from_data({3}, {4.f, 4.f, 4.f}, backend, false, dtype);
+        Tensor inference = dispatch_tensor("batch_norm", input.shape(), {input, w, variance}, {0}, dtype);
+        Tensor expected = Tensor::from_data(input.shape(), {0.f, .5f, 1.f, 0.f, .5f, 1.f}, backend, false, dtype);
         if (dtype != DType::Float8E8M0FNU) check(inference.raw_data() == expected.raw_data(), "Inference BatchNorm used training statistics");
         // E8M0 rounds the value three to four before normalization.
         else check(inference.raw_data() == Tensor::from_data(input.shape(), {0.f, .5f, 2.f, 0.f, .5f, 2.f}, backend, false, dtype).raw_data(), "E8M0 inference BatchNorm differs");
@@ -1588,9 +1589,9 @@ void raw_normalizations(Backend backend) {
         Tensor result;
         {
             StreamScope scope(producer, asynchronous, true);
-            auto x = Tensor::from_data({1, 3}, {1.f, 2.f, 3.f}, backend, false, DType::Float4E2M1FN);
-            auto m = Tensor::ones({3}, backend, false, x.dtype());
-            auto v = Tensor::from_data({3}, {4.f, 4.f, 4.f}, backend, false, x.dtype());
+            Tensor x = Tensor::from_data({1, 3}, {1.f, 2.f, 3.f}, backend, false, DType::Float4E2M1FN);
+            Tensor m = Tensor::ones({3}, backend, false, x.dtype());
+            Tensor v = Tensor::from_data({3}, {4.f, 4.f, 4.f}, backend, false, x.dtype());
             result = dispatch_tensor("batch_norm", x.shape(), {x, m, v}, {0}, x.dtype());
         }
         {
@@ -1601,23 +1602,23 @@ void raw_normalizations(Backend backend) {
     }
 }
 void reductions(Backend backend) {
-    for (auto dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
+    for (elman::DType dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
                        DType::Float8E5M2FNUZ, DType::Float8E8M0FNU, DType::Float4E2M1FN}) {
-        auto input = Tensor::from_data({2, 3}, {.5f, 1.f, 1.5f, 2.f, 3.f, 4.f}, backend, true, dtype);
-        auto wide = cast(input.detach(), DType::Float32);
+        Tensor input = Tensor::from_data({2, 3}, {.5f, 1.f, 1.5f, 2.f, 3.f, 4.f}, backend, true, dtype);
+        Tensor wide = cast(input.detach(), DType::Float32);
 #define ELMAN_LOW_CHECK_REDUCTION(name) check(name(input, 1).raw_data() == cast(name(wide, 1), dtype).raw_data(), "Low precision " #name " differs")
         ELMAN_LOW_CHECK_REDUCTION(sum); ELMAN_LOW_CHECK_REDUCTION(mean); ELMAN_LOW_CHECK_REDUCTION(prod);
         ELMAN_LOW_CHECK_REDUCTION(max); ELMAN_LOW_CHECK_REDUCTION(min); ELMAN_LOW_CHECK_REDUCTION(amax); ELMAN_LOW_CHECK_REDUCTION(amin);
 #undef ELMAN_LOW_CHECK_REDUCTION
-        auto loss = sum_all(input);
+        Tensor loss = sum_all(input);
         loss.backward(); loss.backward();
         check(input.grad() == std::vector<float>(6, 2.f), "Low precision reduction gradient accumulation differs");
-        auto output = Tensor::zeros({2}, backend, false, dtype);
-        const auto untouched = output.raw_data();
-        auto valid = descriptor(output, input);
+        Tensor output = Tensor::zeros({2}, backend, false, dtype);
+        const std::vector<uint8_t> untouched = output.raw_data();
+        KernelParams valid = descriptor(output, input);
         valid.v[KernelParams::kAttributeSlot] = 1;
-        auto raw = [&](const KernelParams& p) { backend_dispatch("sum", output.node()->value, {input.node()->value}, p); };
-        auto bad = valid; bad.v[KernelParams::kOutputCountSlot] = 1; rejects([&] { raw(bad); });
+        LocalFunction raw{[&](const KernelParams& p) { backend_dispatch("sum", output.node()->value, {input.node()->value}, p); }};
+        KernelParams bad = valid; bad.v[KernelParams::kOutputCountSlot] = 1; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputRankSlot] = 9; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::kOutputShapeSlot] = 3; rejects([&] { raw(bad); });
         bad = valid; bad.v[KernelParams::input_slot(KernelInput::A)] = 9; rejects([&] { raw(bad); });
@@ -1630,32 +1631,32 @@ void reductions(Backend backend) {
         rejects([&] { backend_dispatch("sum", output.node()->value, {}, valid); });
         rejects([&] { backend_dispatch("sum", output.node()->value, {input.node()->value, input.node()->value}, valid); });
         check(output.raw_data() == untouched, "Rejected reduction wrote output bytes");
-        auto wrong = Tensor::zeros({2}, backend);
-        auto wrong_descriptor = descriptor(wrong, input); wrong_descriptor.v[KernelParams::kAttributeSlot] = 1;
+        Tensor wrong = Tensor::zeros({2}, backend);
+        KernelParams wrong_descriptor = descriptor(wrong, input); wrong_descriptor.v[KernelParams::kAttributeSlot] = 1;
         rejects([&] { backend_dispatch("sum", wrong.node()->value, {input.node()->value}, wrong_descriptor); });
-        auto overlapping = contiguous_view(input, {2});
-        auto overlap = descriptor(overlapping, input); overlap.v[KernelParams::kAttributeSlot] = 1;
+        Tensor overlapping = contiguous_view(input, {2});
+        KernelParams overlap = descriptor(overlapping, input); overlap.v[KernelParams::kAttributeSlot] = 1;
         rejects([&] { backend_dispatch("sum", overlapping.node()->value, {input.node()->value}, overlap); });
-        auto scan = descriptor(input, input); scan.v[KernelParams::kAttributeSlot] = 1;
+        KernelParams scan = descriptor(input, input); scan.v[KernelParams::kAttributeSlot] = 1;
         rejects([&] { backend_dispatch("cumsum", input.node()->value, {input.node()->value}, scan); });
         rejects([&] { max(Tensor::zeros({2, 0}, backend, false, dtype), 1); });
         rejects([&] { cumsum(input, 2); });
-        auto saved = sum(input.detach(), 1), upstream = Tensor::ones({2}, backend, false, dtype);
-        auto gradient = Tensor::zeros(input.shape(), backend);
-        auto gradient_descriptor = pointwise_descriptor(gradient, {input, saved, upstream});
+        Tensor saved = sum(input.detach(), 1), upstream = Tensor::ones({2}, backend, false, dtype);
+        Tensor gradient = Tensor::zeros(input.shape(), backend);
+        KernelParams gradient_descriptor = pointwise_descriptor(gradient, {input, saved, upstream});
         gradient_descriptor.v[KernelParams::kAttributeSlot] = 1;
         backend_dispatch("reduce_grad", gradient.node()->value, {input.node()->value, saved.node()->value, upstream.node()->value}, gradient_descriptor);
         check(gradient.data() == std::vector<float>(6, 1.f), "Raw low precision gradient differs");
         bad = gradient_descriptor; bad.v[KernelParams::kAttributeSlot + 2] = 7;
         rejects([&] { backend_dispatch("reduce_grad", gradient.node()->value, {input.node()->value, saved.node()->value, upstream.node()->value}, bad); });
         rejects([&] { backend_dispatch("reduce_grad", gradient.node()->value, {input.node()->value, saved.node()->value}, gradient_descriptor); });
-        auto negative_zero = Tensor::from_data({}, {-0.f}, backend, false, dtype);
-        auto scalar_leaf = Tensor::ones({}, backend, true, dtype);
+        Tensor negative_zero = Tensor::from_data({}, {-0.f}, backend, false, dtype);
+        Tensor scalar_leaf = Tensor::ones({}, backend, true, dtype);
         amin(scalar_leaf, 0).backward(negative_zero);
         check(Tensor(scalar_leaf.node()->gradient).raw_data() == Tensor::zeros({}, backend, false, dtype).raw_data(),
               "Scalar amin backward zero sign differs");
-        auto odd = Tensor::ones({3, 5}, backend, true, dtype);
-        auto prefix = cumsum(odd, 1);
+        Tensor odd = Tensor::ones({3, 5}, backend, true, dtype);
+        Tensor prefix = cumsum(odd, 1);
         check(prefix.raw_data() == cast(cumsum(cast(odd.detach(), DType::Float32), 1), dtype).raw_data(), "Packed scan forward differs");
         prefix.backward(Tensor::ones(prefix.shape(), backend, false, dtype));
         check(Tensor(odd.node()->gradient).raw_data() == Tensor::from_data({3, 5}, {5,4,3,2,1,5,4,3,2,1,5,4,3,2,1}, backend, false, dtype).raw_data(),
@@ -1678,20 +1679,20 @@ void reductions(Backend backend) {
     }
 }
 void pointwise(Backend backend) {
-    for (auto dtype : {DType::Float32, DType::Float16, DType::BFloat16, DType::Float64}) {
-        auto values = Tensor::from_data({4}, {1.f, -1.f, 0.f, std::numeric_limits<float>::quiet_NaN()}, backend, true, dtype);
+    for (elman::DType dtype : {DType::Float32, DType::Float16, DType::BFloat16, DType::Float64}) {
+        Tensor values = Tensor::from_data({4}, {1.f, -1.f, 0.f, std::numeric_limits<float>::quiet_NaN()}, backend, true, dtype);
         sign(values).backward(Tensor::from_data({4}, {std::numeric_limits<float>::infinity(), -std::numeric_limits<float>::infinity(),
             std::numeric_limits<float>::quiet_NaN(), -1.f}, backend, false, dtype));
-        const auto gradient = Tensor(values.node()->gradient).raw_data();
+        const std::vector<uint8_t> gradient = Tensor(values.node()->gradient).raw_data();
         check(std::all_of(gradient.begin(), gradient.end(), [](uint8_t byte) { return byte == 0; }),
               "Sign backward must return positive zero independently of its upstream");
     }
-    for (auto dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
+    for (elman::DType dtype : {DType::Float8E4M3FN, DType::Float8E4M3FNUZ, DType::Float8E5M2,
                        DType::Float8E5M2FNUZ, DType::Float8E8M0FNU, DType::Float4E2M1FN}) {
-        auto a = Tensor::ones({7}, backend, true, dtype);
-        auto b = Tensor::ones({7}, backend, false, dtype);
+        Tensor a = Tensor::ones({7}, backend, true, dtype);
+        Tensor b = Tensor::ones({7}, backend, false, dtype);
         check(add(a, b).data() == std::vector<float>(7, 2.f), "Low precision addition differs");
-        auto loss = sum(cast(mul(a, b), DType::Float32), 0);
+        Tensor loss = sum(cast(mul(a, b), DType::Float32), 0);
         loss.backward();
         check(a.grad() == std::vector<float>(7, 1.f), "Low precision multiplication gradient differs");
         loss.backward();
@@ -1699,43 +1700,43 @@ void pointwise(Backend backend) {
         a.zero_grad();
         sum(add(cast(a, DType::Float32), cast(a, DType::Float32)), 0).backward();
         check(a.grad() == std::vector<float>(7, 2.f), "Branched low precision cast gradient differs");
-        auto leaf = Tensor::from_data({1}, {1.1f}, backend, true);
-        auto roundtrip = cast(cast(leaf, dtype), DType::Float32);
+        Tensor leaf = Tensor::from_data({1}, {1.1f}, backend, true);
+        Tensor roundtrip = cast(cast(leaf, dtype), DType::Float32);
         check(roundtrip.requires_grad(), "Low precision cast detached its input");
         roundtrip.backward(Tensor::from_data({1}, {.3f}, backend));
         const float expected = dtype == DType::Float4E2M1FN ? .5f : dtype == DType::Float8E8M0FNU ? .25f : .3125f;
         check(leaf.grad() == std::vector<float>{expected}, "Cast backward omitted intermediate dtype rounding");
-        auto output = add(a, b);
+        Tensor output = add(a, b);
         a.assign(std::vector<float>(7, 2.f));
         rejects([&] { output.backward(Tensor::ones({7}, backend)); });
         rejects([&] { add(a, Tensor::ones({7}, backend)); });
-        auto target = Tensor::zeros({7}, backend, false, dtype);
-        const auto valid = pointwise_descriptor(target, {a, b});
-        const auto untouched = target.raw_data();
+        Tensor target = Tensor::zeros({7}, backend, false, dtype);
+        const KernelParams valid = pointwise_descriptor(target, {a, b});
+        const std::vector<uint8_t> untouched = target.raw_data();
         for (int field : {KernelParams::kOutputCountSlot, KernelParams::kOutputRankSlot, KernelParams::kOutputShapeSlot,
                           KernelParams::input_slot(KernelInput::A),
                           KernelParams::input_slot(KernelInput::A) + KernelParams::kInputStrideOffset,
                           KernelParams::input_slot(KernelInput::B)}) {
-            auto bad = valid; bad.v[field] = 9;
+            KernelParams bad = valid; bad.v[field] = 9;
             rejects([&] { backend_dispatch("add", target.node()->value, {a.node()->value, b.node()->value}, bad); });
         }
         rejects([&] { backend_dispatch("add", target.node()->value, {a.node()->value}, valid); });
         rejects([&] { backend_dispatch("add", target.node()->value, {a.node()->value, b.node()->value, b.node()->value}, valid); });
         check(target.raw_data() == untouched, "Rejected pointwise descriptor wrote output bytes");
-        auto wide = Tensor::ones({7}, backend);
-        auto wrong_type = pointwise_descriptor(target, {a, wide});
+        Tensor wide = Tensor::ones({7}, backend);
+        KernelParams wrong_type = pointwise_descriptor(target, {a, wide});
         rejects([&] { backend_dispatch("add", target.node()->value, {a.node()->value, wide.node()->value}, wrong_type); });
-        auto bad_where = pointwise_descriptor(target, {a, a, b});
+        KernelParams bad_where = pointwise_descriptor(target, {a, a, b});
         rejects([&] { backend_dispatch("where", target.node()->value, {a.node()->value, a.node()->value, b.node()->value}, bad_where); });
-        auto storage = Tensor::ones({10}, backend, false, dtype);
-        auto source_view = contiguous_view(storage, {8});
-        auto output_view = contiguous_view(storage, {8}, 2);
-        auto other = Tensor::ones({8}, backend, false, dtype);
-        auto overlap = pointwise_descriptor(output_view, {source_view, other});
+        Tensor storage = Tensor::ones({10}, backend, false, dtype);
+        Tensor source_view = contiguous_view(storage, {8});
+        Tensor output_view = contiguous_view(storage, {8}, 2);
+        Tensor other = Tensor::ones({8}, backend, false, dtype);
+        KernelParams overlap = pointwise_descriptor(output_view, {source_view, other});
         rejects([&] { backend_dispatch("add", output_view.node()->value, {source_view.node()->value, other.node()->value}, overlap); });
         check(storage.data() == std::vector<float>(10, 1.f), "Overlapping pointwise rejection changed storage");
-        auto inplace = Tensor::ones({4097}, backend, false, dtype);
-        auto scalar = Tensor::ones({}, backend, false, dtype);
+        Tensor inplace = Tensor::ones({4097}, backend, false, dtype);
+        Tensor scalar = Tensor::ones({}, backend, false, dtype);
         dispatch_tensor_into("add", inplace, {inplace, scalar});
         check(inplace.data() == std::vector<float>(4097, 2.f), "In-place packed pointwise execution differs");
         if (dtype == DType::Float4E2M1FN) check((inplace.raw_data().back() & 0xf0) == 0, "Pointwise packed padding is not zero");
@@ -1748,9 +1749,9 @@ void pointwise(Backend backend) {
         const int count = dtype == DType::Float4E2M1FN ? 512 : 256;
         std::vector<int32_t> selected(count);
         for (int i = 0; i < count; ++i) selected[i] = i % 2 == 0;
-        auto condition = Tensor::from_int_data({count}, selected, backend, DType::Bool);
-        auto first = Tensor::from_raw({count}, dtype, first_codes, backend);
-        auto second = Tensor::from_raw({count}, dtype, second_codes, backend);
+        Tensor condition = Tensor::from_int_data({count}, selected, backend, DType::Bool);
+        Tensor first = Tensor::from_raw({count}, dtype, first_codes, backend);
+        Tensor second = Tensor::from_raw({count}, dtype, second_codes, backend);
         check(where(condition, first, second).raw_data() == expected_codes, "Where changed selected raw NaN or packed encodings");
         dispatch_tensor_into("where", first, {condition, first, second});
         check(first.raw_data() == expected_codes, "In-place where changed selected raw encodings");
@@ -1767,14 +1768,14 @@ void float16_arithmetic(Backend backend) {
         0x01, 0x00, 0x00, 0x00, 0x00, 0x80, // Subnormal limit and signed zeros.
         0xff, 0x7b, 0x00, 0x7c // Largest finite value and overflow.
     };
-    const auto input = Tensor::from_data({int(edges.size())}, edges, backend);
+    const Tensor input = Tensor::from_data({int(edges.size())}, edges, backend);
     check(cast(input, DType::Float16).raw_data() == expected, "Float16 cast boundary rounding differs");
     check(Tensor::from_data(input.shape(), edges, backend, false, DType::Float16).raw_data() == expected,
           "Float16 upload boundary rounding differs");
 
-    auto x = Tensor::from_data({2, 3}, {1, 2, -1, 0, -2, 3}, backend, true, DType::Float16);
-    auto weight = Tensor::from_data({3, 2}, {2, 1, 1, -2, -4, 3}, backend, true, DType::Float16);
-    auto output = matmul(x, weight);
+    Tensor x = Tensor::from_data({2, 3}, {1, 2, -1, 0, -2, 3}, backend, true, DType::Float16);
+    Tensor weight = Tensor::from_data({3, 2}, {2, 1, 1, -2, -4, 3}, backend, true, DType::Float16);
+    Tensor output = matmul(x, weight);
     check(output.dtype() == DType::Float16 && output.shape() == Shape{2, 2} &&
           output.data() == std::vector<float>{8, -6, -14, 13}, "Float16 matmul forward differs");
     output.backward(Tensor::from_data({2, 2}, {1, -2, 3, .5f}, backend, false, DType::Float16));
@@ -1812,15 +1813,15 @@ const Suite other_suites[] = {
 };
 
 void reference(Backend backend, const std::filesystem::path& path) {
-    const auto suite = Json::read(path);
+    const Json suite = Json::read(path);
     int failed = 0;
-    for (const auto& original : suite.at("cases").array()) {
-        auto object = original.object();
+    for (const elman::Json& original : suite.at("cases").array()) {
+        elman::Json::Object object = original.object();
         object["backend"] = backend_name(backend);
         const Json test(std::move(object));
         try {
             std::vector<Tensor> inputs;
-            for (const auto& spec : test.at("inputs").array()) {
+            for (const elman::Json& spec : test.at("inputs").array()) {
                 inputs.push_back(spec.is_null() ? Tensor{} :
                     Tensor::from_raw(shape(spec), DType(spec.at("dtype").integer()), bytes(spec),
                                      backend, spec.bool_or("grad", false)));
@@ -1829,10 +1830,10 @@ void reference(Backend backend, const std::filesystem::path& path) {
                 rejects([&] { evaluate(test, inputs); });
                 continue;
             }
-            auto output = evaluate(test, inputs);
-            const auto name = test.at("name").string();
+            Tensor output = evaluate(test, inputs);
+            const std::string name = test.at("name").string();
             const bool observed_mask = test.bool_or("observed_mask_control", false);
-            const auto scales = observed_mask ? observed_dropout_scales(test, inputs.at(0)) :
+            const std::pair<std::vector<float>, std::vector<float>> scales = observed_mask ? observed_dropout_scales(test, inputs.at(0)) :
                 std::pair<std::vector<float>, std::vector<float>>{};
             if (observed_mask) compare(output, specification(conditioned_dropout(inputs.at(0), scales.first)), name);
             else if (test.contains("distribution")) random_distribution(output, test, suite);
@@ -1840,15 +1841,15 @@ void reference(Backend backend, const std::filesystem::path& path) {
             if (test.bool_or("replay", false))
                 check(evaluate(test, inputs).raw_data() == output.raw_data(), "Random seed replay differs");
             if (!test.contains("upstream")) continue;
-            const auto& seed = test.at("upstream");
-            const auto upstream = Tensor::from_raw(shape(seed), DType(seed.at("dtype").integer()), bytes(seed), backend);
+            const Json& seed = test.at("upstream");
+            const Tensor upstream = Tensor::from_raw(shape(seed), DType(seed.at("dtype").integer()), bytes(seed), backend);
             output.backward(upstream);
-            const auto& gradients = test.at("gradients").array();
+            const elman::Json::Array& gradients = test.at("gradients").array();
             check(gradients.size() == inputs.size(), "Reference gradient count differs");
             for (size_t i = 0; i < inputs.size(); ++i) {
                 if (gradients[i].is_null()) continue;
                 check(bool(inputs[i].node()->gradient), "Reference gradient was not produced");
-                const auto expected = observed_mask ? specification(conditioned_dropout(upstream, scales.second)) : gradients[i];
+                const elman::Json expected = observed_mask ? specification(conditioned_dropout(upstream, scales.second)) : gradients[i];
                 compare(Tensor(inputs[i].node()->gradient), expected, name + "/gradient/" + std::to_string(i));
             }
         } catch (const std::exception& error) {
@@ -1861,10 +1862,10 @@ void reference(Backend backend, const std::filesystem::path& path) {
 
 template<class Callback>
 void run_checked(Backend backend, const std::string& name, Callback&& callback) {
-    const auto live = memory_stats(backend).live_bytes();
-    const auto previous_checks = checks;
-    const auto previous_elements = elements;
-    const auto previous_nan_encodings = nan_encodings;
+    const size_t live = memory_stats(backend).live_bytes();
+    const int previous_checks = checks;
+    const size_t previous_elements = elements;
+    const size_t previous_nan_encodings = nan_encodings;
     try {
         {
             // Release the suite's lazy BLAS workspace before checking storage lifetime.
@@ -1892,10 +1893,10 @@ namespace optimizer_reference {
 using namespace elman;
 size_t checks=0,elements=0,nan_encodings=0,steps=0;
 void check(bool valid,const std::string& message){++checks;if(!valid)throw std::runtime_error(message);}
-Shape shape(const Json& value){Shape result;for(const auto& d:value.at("shape").array())result.push_back(d.integer());return result;}
+Shape shape(const Json& value){Shape result;for(const elman::Json& d:value.at("shape").array())result.push_back(d.integer());return result;}
 std::vector<uint8_t> bytes(const Json& value){
-    const auto& hex=value.at("raw_hex").string();std::vector<uint8_t> result;
-    auto digit=[](char c){if(c>='0'&&c<='9')return c-'0';if(c>='a'&&c<='f')return c-'a'+10;throw std::runtime_error("Invalid optimizer reference hex");};
+    const std::string& hex=value.at("raw_hex").string();std::vector<uint8_t> result;
+    int (*const digit)(char)=[](char c){if(c>='0'&&c<='9')return c-'0';if(c>='a'&&c<='f')return c-'a'+10;throw std::runtime_error("Invalid optimizer reference hex");};
     check(hex.size()%2==0,"Odd optimizer reference hex length");
     for(size_t i=0;i<hex.size();i+=2)result.push_back(uint8_t(16*digit(hex[i])+digit(hex[i+1])));return result;
 }
@@ -1909,7 +1910,7 @@ bool nan_code(uint32_t code,DType dtype){
 }
 void compare(const Tensor& actual,const Json& expected,const std::string& context){
     check(actual.dtype()==DType(expected.at("dtype").integer())&&actual.shape()==shape(expected),context+": layout differs");
-    const auto got=actual.raw_data(),wanted=bytes(expected);check(got.size()==wanted.size(),context+": storage length differs");elements+=actual.numel();
+    const std::vector<uint8_t> got=actual.raw_data(),wanted=bytes(expected);check(got.size()==wanted.size(),context+": storage length differs");elements+=actual.numel();
     if(actual.dtype()==DType::Float4E2M1FN){check(got==wanted,context+": packed FP4 bytes differ");return;}
     const size_t width=dtype_info(actual.dtype()).bits/8;
     for(size_t i=0;i<actual.numel();++i){uint32_t a=0,b=0;std::memcpy(&a,got.data()+i*width,width);std::memcpy(&b,wanted.data()+i*width,width);
@@ -1917,9 +1918,9 @@ void compare(const Tensor& actual,const Json& expected,const std::string& contex
         throw std::runtime_error(context+": exact bits differ at "+std::to_string(i)+" (actual "+std::to_string(a)+", expected "+std::to_string(b)+")");}
     ++checks;
 }
-double scalar(const Json& words){const auto& a=words.array();uint64_t bits=uint64_t(uint32_t(a[0].integer()))|(uint64_t(uint32_t(a[1].integer()))<<32);double value;std::memcpy(&value,&bits,8);return value;}
+double scalar(const Json& words){const elman::Json::Array& a=words.array();uint64_t bits=uint64_t(uint32_t(a[0].integer()))|(uint64_t(uint32_t(a[1].integer()))<<32);double value;std::memcpy(&value,&bits,8);return value;}
 std::vector<int> attributes(const Json& test,const Json& record,size_t index){
-    const auto& settings=test.at("settings");const auto algorithm=test.at("algorithm").string();
+    const Json& settings=test.at("settings");const std::string algorithm=test.at("algorithm").string();
     const uint64_t step=record.contains("step")?std::stoull(record.at("step").string()):index+1;
     const double beta1=settings.at("beta1").number(),beta2=settings.at("beta2").number();
     const double parameters[]={record.at("rate").number(),record.at("gradient_scale").number(),settings.at("weight_decay").number(),
@@ -1932,12 +1933,12 @@ std::vector<int> attributes(const Json& test,const Json& record,size_t index){
 }
 void raw_case(const Json& test,Backend backend){
     size_t index=0;
-    for(const auto& record:test.at("steps").array()){
+    for(const elman::Json& record:test.at("steps").array()){
         std::vector<Tensor> inputs{tensor(record.at("parameter_before"),backend),tensor(record.at("gradient"),backend),
             tensor(record.at("first_moment_before"),backend),tensor(record.at("second_moment_before"),backend)};
-        auto params=attributes(test,record,index);const char* fields[]={"parameter","first_moment","second_moment","parameter_float32"};
-        for(int mode=0;mode<4;++mode){params[1]=mode;const auto dtype=mode==0?inputs[0].dtype():DType::Float32;
-            auto output=dispatch_tensor("optimizer_step",inputs[0].shape(),inputs,params,dtype);
+        std::vector<int> params=attributes(test,record,index);const char* fields[]={"parameter","first_moment","second_moment","parameter_float32"};
+        for(int mode=0;mode<4;++mode){params[1]=mode;const elman::DType dtype=mode==0?inputs[0].dtype():DType::Float32;
+            Tensor output=dispatch_tensor("optimizer_step",inputs[0].shape(),inputs,params,dtype);
             compare(output,record.at(fields[mode]),test.at("name").string()+"/step/"+std::to_string(index)+"/"+fields[mode]);}
         ++index;++steps;
     }
@@ -1945,7 +1946,7 @@ void raw_case(const Json& test,Backend backend){
 class Probe final:public Model {
 public:
     Probe(const Json& test,Backend backend):Model("LowOptimizerProbe","optimizer-probe",backend,1){
-        size_t index=0;for(const auto& value:test.at("parameters").array())
+        size_t index=0;for(const elman::Json& value:test.at("parameters").array())
             parameters_.push_back({"parameter"+std::to_string(index++),Tensor::from_raw(shape(value),DType(value.at("dtype").integer()),bytes(value),backend,true)});
     }
     Tensor forward(const Tensor& input,bool,uint32_t) override{return input;}
@@ -1956,19 +1957,19 @@ using Snapshot=std::vector<std::vector<uint8_t>>;
 Snapshot snapshot(const Model& model,const TrainingState& state){
     Snapshot result;std::vector<uint8_t> step(sizeof(state.step));std::memcpy(step.data(),&state.step,step.size());result.push_back(step);
     result.emplace_back(state.optimizer.begin(),state.optimizer.end());result.push_back(state.sgd_buffer_initialized);
-    for(const auto& parameter:model.parameters())result.push_back(parameter.value.raw_data());
-    for(const auto* group:{&state.first_moment_float,&state.second_moment_float})
-        for(const auto& moment:*group)result.push_back(moment.defined()?moment.raw_data():std::vector<uint8_t>{});
+    for(const elman::Parameter& parameter:model.parameters())result.push_back(parameter.value.raw_data());
+    for(const std::vector<elman::Tensor>* group:{&state.first_moment_float,&state.second_moment_float})
+        for(const elman::Tensor& moment:*group)result.push_back(moment.defined()?moment.raw_data():std::vector<uint8_t>{});
     return result;
 }
 void frontend_expected(const Probe& model,const TrainingState& state,const Json& record,bool initial,const Json& test,size_t case_steps){
     check(state.step==std::stoull(test.at("initial_step").string())+case_steps,"Optimizer frontend step metadata differs");
     check(state.optimizer==test.at("algorithm").string(),"Optimizer frontend algorithm differs");
     for(size_t i=0;i<model.parameters().size();++i){
-        const auto& value=model.parameters()[i].value;const auto context=test.at("name").string()+"/parameter/"+std::to_string(i);
+        const Tensor& value=model.parameters()[i].value;const std::string context=test.at("name").string()+"/parameter/"+std::to_string(i);
         compare(value,record.at("parameters").at(i),context);
         if(!initial)compare(cast(value.detach(),DType::Float32),record.at("parameter_decoded").at(i),context+"/decoded");
-        const auto& first=state.first_moment_float[i];const auto& second=state.second_moment_float[i];
+        const elman::Tensor& first=state.first_moment_float[i];const elman::Tensor& second=state.second_moment_float[i];
         check(first.backend()==value.backend()&&second.backend()==value.backend()&&!first.requires_grad()&&!second.requires_grad(),context+": moment descriptor differs");
         compare(first,record.at(initial?"first_moment_initial":"first_moment").at(i),context+"/first");
         compare(second,record.at(initial?"second_moment_initial":"second_moment").at(i),context+"/second");
@@ -1979,19 +1980,19 @@ void frontend_expected(const Probe& model,const TrainingState& state,const Json&
 }
 void apply_step(Probe& model,Optimizer& optimizer,const Json& record){
     std::vector<uint64_t> versions;
-    for(size_t i=0;i<model.parameters().size();++i){auto& value=model.parameters()[i].value;
+    for(size_t i=0;i<model.parameters().size();++i){Tensor& value=model.parameters()[i].value;
         versions.push_back(value.node()->value->version);value.zero_grad();value.backward(tensor(record.at("gradients").at(i),value.backend()));}
-    const auto old=optimizer.state();Snapshot moments;
-    for(const auto* group:{&old.first_moment_float,&old.second_moment_float})for(const auto& moment:*group)moments.push_back(moment.raw_data());
+    const TrainingState old=optimizer.state();Snapshot moments;
+    for(const std::vector<elman::Tensor>* group:{&old.first_moment_float,&old.second_moment_float})for(const elman::Tensor& moment:*group)moments.push_back(moment.raw_data());
     const double norm=optimizer.update(model,record.at("rate").number()),expected=scalar(record.at("norm_bits"));
     check(std::memcmp(&norm,&expected,sizeof(norm))==0,"Optimizer frontend norm bits differ");
-    size_t index=0;for(const auto* group:{&old.first_moment_float,&old.second_moment_float})for(const auto& moment:*group)
+    size_t index=0;for(const std::vector<elman::Tensor>* group:{&old.first_moment_float,&old.second_moment_float})for(const elman::Tensor& moment:*group)
         check(moment.raw_data()==moments[index++],"Optimizer mutated a retained state snapshot");
     for(size_t i=0;i<versions.size();++i)check(model.parameters()[i].value.node()->value->version==versions[i]+1,"Optimizer parameter version did not advance exactly once");
 }
 void frontend_case(const Json& test,Backend backend,const std::filesystem::path& directory,size_t case_index){
-    Probe model(test,backend);auto settings=test.at("settings").object();settings["optimizer"]=test.at("algorithm");
-    Optimizer optimizer(Json(settings),model);auto& state=optimizer.state();state.step=std::stoull(test.at("initial_step").string());
+    Probe model(test,backend);elman::Json::Object settings=test.at("settings").object();settings["optimizer"]=test.at("algorithm");
+    Optimizer optimizer(Json(settings),model);TrainingState& state=optimizer.state();state.step=std::stoull(test.at("initial_step").string());
     for(size_t i=0;i<model.parameters().size();++i){
         state.first_moment_float[i]=tensor(test.at("first_moment_initial").at(i),backend);
         state.second_moment_float[i]=tensor(test.at("second_moment_initial").at(i),backend);
@@ -1999,15 +2000,15 @@ void frontend_case(const Json& test,Backend backend,const std::filesystem::path&
     }
     const Json definition=Json::Object{{"architecture","optimizer-probe"}};
     std::unique_ptr<Probe> restored;std::unique_ptr<Optimizer> resumed;
-    auto checkpoint=[&](const std::string& suffix){
-        auto path=directory/("frontend-"+std::to_string(case_index)+suffix+".bin");save_checkpoint(path.string(),model,definition,optimizer.state());
+    LocalFunction checkpoint{[&](const std::string& suffix){
+        std::filesystem::path path=directory/("frontend-"+std::to_string(case_index)+suffix+".bin");save_checkpoint(path.string(),model,definition,optimizer.state());
         restored=std::make_unique<Probe>(test,backend);resumed=std::make_unique<Optimizer>(Json(settings),*restored);
         load_checkpoint(path.string(),*restored,definition,&resumed->state());
         check(snapshot(model,optimizer.state())==snapshot(*restored,resumed->state()),"Checkpoint changed low-format parameters, moments or history");
-    };
+    }};
     frontend_expected(model,optimizer.state(),test,true,test,0);
     if(test.bool_or("checkpoint_initial",false)){checkpoint("-initial");frontend_expected(*restored,resumed->state(),test,true,test,0);}
-    size_t index=0;for(const auto& record:test.at("steps").array()){
+    size_t index=0;for(const elman::Json& record:test.at("steps").array()){
         apply_step(model,optimizer,record);++steps;frontend_expected(model,optimizer.state(),record,false,test,index+1);
         if(resumed){apply_step(*restored,*resumed,record);frontend_expected(*restored,resumed->state(),record,false,test,index+1);
             check(snapshot(model,optimizer.state())==snapshot(*restored,resumed->state()),"Resumed optimizer trajectory differs");}
@@ -2018,17 +2019,17 @@ void frontend_case(const Json& test,Backend backend,const std::filesystem::path&
 int run(Backend backend, const std::filesystem::path& fixture, bool frontend,
         const std::filesystem::path& checkpoint_directory) {
     if (frontend) std::filesystem::create_directories(checkpoint_directory);
-    const auto suite = Json::read(fixture);
+    const Json suite = Json::read(fixture);
     check(suite.at("backend").string() == backend_name(backend), "Optimizer reference backend differs");
-    const auto live = memory_stats(backend).live_bytes();
+    const size_t live = memory_stats(backend).live_bytes();
     size_t cases = 0, failed = 0;
     {
         AllocationPool pool(backend);
         ExecutionStream stream(backend);
         StreamScope scope(stream, false);
         if (frontend) {
-            for (const auto& test : suite.at("frontend_cases").array()) {
-                const auto previous_steps = steps;
+            for (const elman::Json& test : suite.at("frontend_cases").array()) {
+                const size_t previous_steps = steps;
                 try {
                     frontend_case(test, backend, checkpoint_directory, cases);
                 } catch (const std::exception& error) {
@@ -2039,8 +2040,8 @@ int run(Backend backend, const std::filesystem::path& fixture, bool frontend,
                 ++cases;
             }
         } else {
-            for (const auto* group : {"cases", "extensions"}) {
-                for (const auto& test : suite.at(group).array()) {
+            for (const char* group : {"cases", "extensions"}) {
+                for (const elman::Json& test : suite.at(group).array()) {
                     ++cases;
                     try {
                         raw_case(test, backend);
@@ -2072,11 +2073,11 @@ Json settings(const std::string& algorithm){return Json::Object{{"optimizer",alg
 class Probe final:public Model {
 public:
     Probe(Backend backend,bool mixed=true):Model("MixedLowOptimizerProbe","optimizer-guards",backend,1){
-        for(auto dtype:low_types)parameters_.push_back({"low"+std::to_string(int(dtype)),Tensor::from_data({3},{1.,.5,2.},backend,true,dtype)});
+        for(DType dtype:low_types)parameters_.push_back({"low"+std::to_string(int(dtype)),Tensor::from_data({3},{1.,.5,2.},backend,true,dtype)});
         parameters_.push_back({"scalar",Tensor::from_data({}, {-0.f},backend,true,DType::Float4E2M1FN)});
         parameters_.push_back({"empty",Tensor::zeros({2,0,3},backend,true,DType::Float8E5M2)});
         if(mixed){parameters_.push_back({"double",Tensor::from_double_data({2},{1.+std::ldexp(1.,-40),1e-100},backend,true)});
-            for(auto dtype:{DType::Float32,DType::Float16,DType::BFloat16})parameters_.push_back({"native"+std::to_string(int(dtype)),Tensor::from_data({3},{1.f,.5f,2.f},backend,true,dtype)});}
+            for(elman::DType dtype:{DType::Float32,DType::Float16,DType::BFloat16})parameters_.push_back({"native"+std::to_string(int(dtype)),Tensor::from_data({3},{1.f,.5f,2.f},backend,true,dtype)});}
     }
     Tensor forward(const Tensor& input,bool,uint32_t) override{return input;}
     Shape sample_shape() const override{return {1};}
@@ -2086,52 +2087,52 @@ using Snapshot=std::vector<std::vector<uint8_t>>;
 template<class T> std::vector<uint8_t> raw(const std::vector<T>& values){std::vector<uint8_t> result(values.size()*sizeof(T));if(!result.empty())std::memcpy(result.data(),values.data(),result.size());return result;}
 Snapshot snapshot(const Model& model,const TrainingState& state){
     Snapshot result{raw(std::vector<uint64_t>{state.step}),std::vector<uint8_t>(state.optimizer.begin(),state.optimizer.end()),state.sgd_buffer_initialized};
-    for(const auto& parameter:model.parameters())result.push_back(parameter.value.raw_data());
-    for(const auto* group:{&state.first_moment,&state.second_moment}){result.push_back(raw(std::vector<size_t>{group->size()}));for(const auto& row:*group)result.push_back(raw(row));}
-    for(const auto* group:{&state.first_moment_float,&state.second_moment_float,&state.first_moment_double,&state.second_moment_double}){
+    for(const elman::Parameter& parameter:model.parameters())result.push_back(parameter.value.raw_data());
+    for(const std::vector<std::vector<float>>* group:{&state.first_moment,&state.second_moment}){result.push_back(raw(std::vector<size_t>{group->size()}));for(const std::vector<float>& row:*group)result.push_back(raw(row));}
+    for(const std::vector<elman::Tensor>* group:{&state.first_moment_float,&state.second_moment_float,&state.first_moment_double,&state.second_moment_double}){
         result.push_back(raw(std::vector<size_t>{group->size()}));
-        for(const auto& row:*group){result.push_back(raw(std::vector<int>{row.defined()?int(row.dtype()):-1}));result.push_back(row.defined()?row.raw_data():std::vector<uint8_t>{});}}
+        for(const elman::Tensor& row:*group){result.push_back(raw(std::vector<int>{row.defined()?int(row.dtype()):-1}));result.push_back(row.defined()?row.raw_data():std::vector<uint8_t>{});}}
     return result;
 }
-std::vector<uint64_t> versions(const Model& model){std::vector<uint64_t> result;for(const auto& p:model.parameters())result.push_back(p.value.node()->value->version);return result;}
-void gradients(Probe& model,float value=1.f){for(auto& parameter:model.parameters()){
-    auto& x=parameter.value;x.zero_grad();
+std::vector<uint64_t> versions(const Model& model){std::vector<uint64_t> result;for(const elman::Parameter& p:model.parameters())result.push_back(p.value.node()->value->version);return result;}
+void gradients(Probe& model,float value=1.f){for(elman::Parameter& parameter:model.parameters()){
+    Tensor& x=parameter.value;x.zero_grad();
     if(x.dtype()==DType::Float64)x.backward(Tensor::from_double_data(x.shape(),std::vector<double>(x.numel(),double(value)),x.backend()));
     else x.backward(Tensor::from_data(x.shape(),std::vector<float>(x.numel(),value),x.backend(),false,x.dtype()));}}
-template<class F>void atomic_reject(Probe& model,Optimizer& optimizer,F action){const auto before=snapshot(model,optimizer.state());const auto stamps=versions(model);
+template<class F>void atomic_reject(Probe& model,Optimizer& optimizer,F action){const Snapshot before=snapshot(model,optimizer.state());const std::vector<uint64_t> stamps=versions(model);
     rejects(action);check(snapshot(model,optimizer.state())==before&&versions(model)==stamps,"Rejected optimizer action partially mutated parameters, versions or state");}
 std::vector<int> attributes(){std::vector<int> result(22);result[2]=1;const double values[]={.01,1.,.01,.6,.9,.999,1e-8,.1,std::sqrt(.001)};
     for(int i=0;i<9;++i)std::memcpy(result.data()+4+2*i,values+i,8);return result;}
 KernelParams descriptor(const Tensor& output,const std::vector<Tensor>& inputs,const std::vector<int>& attrs){
     KernelParams p;p.v[0]=int(output.numel());p.v[1]=int(output.shape().size());p.v[255]=int(output.dtype());
     for(size_t d=0;d<output.shape().size();++d)p.v[2+d]=output.shape()[d];
-    for(size_t i=0;i<inputs.size();++i){const auto slot=KernelParams::input_slot(KernelInput(i));p.v[slot]=int(inputs[i].shape().size());p.v[KernelParams::input_dtype_slot(KernelInput(i))]=int(inputs[i].dtype());
+    for(size_t i=0;i<inputs.size();++i){const int slot=KernelParams::input_slot(KernelInput(i));p.v[slot]=int(inputs[i].shape().size());p.v[KernelParams::input_dtype_slot(KernelInput(i))]=int(inputs[i].dtype());
         int stride=1;for(int d=int(inputs[i].shape().size())-1;d>=0;--d){p.v[slot+1+d]=inputs[i].shape()[d];p.v[slot+9+d]=stride;stride*=inputs[i].shape()[d];}}
     for(size_t i=0;i<attrs.size();++i)p.v[64+i]=attrs[i];return p;
 }
-void raw_validation(Backend backend){for(auto dtype:low_types){
+void raw_validation(Backend backend){for(DType dtype:low_types){
     std::vector<Tensor> inputs{Tensor::ones({2,3},backend,false,dtype),Tensor::ones({2,3},backend,false,dtype),Tensor::zeros({2,3},backend),Tensor::zeros({2,3},backend)};
-    auto output=Tensor::zeros({2,3},backend,false,dtype);auto p=descriptor(output,inputs,attributes());std::vector<BufferPtr> buffers;for(const auto& x:inputs)buffers.push_back(x.node()->value);
-    auto dispatch=[&](const KernelParams& candidate){backend_dispatch("optimizer_step",output.node()->value,buffers,candidate);};dispatch(p);const auto unchanged=output.raw_data();
-    for(int slot:{0,1,2,255}){auto bad=p;bad.v[slot]=slot==1?9:-1;rejects([&]{dispatch(bad);});}
-    for(int i=0;i<4;++i)for(int offset:{0,1,9}){auto bad=p;bad.v[KernelParams::input_slot(KernelInput(i))+offset]=-1;rejects([&]{dispatch(bad);});}
-    for(int i=0;i<4;++i){auto bad=p;bad.v[KernelParams::input_dtype_slot(KernelInput(i))]=int(DType::Int32);rejects([&]{dispatch(bad);});
-        auto missing=buffers;missing[i].reset();rejects([&]{backend_dispatch("optimizer_step",output.node()->value,missing,p);});}
-    for(int count:{0,1,2,3}){auto missing=buffers;missing.resize(count);rejects([&]{backend_dispatch("optimizer_step",output.node()->value,missing,p);});}
-    for(int slot:{0,1,2,3,22,63}){auto bad=p;bad.v[64+slot]=7;rejects([&]{dispatch(bad);});}
-    for(int scalar=0;scalar<9;++scalar)for(double value:{double(NAN),double(INFINITY),-1.}){auto bad=p;std::memcpy(bad.v+68+2*scalar,&value,8);rejects([&]{dispatch(bad);});}
-    for(int scalar:{3,4,5,7,8}){auto bad=p;const double value=2.;std::memcpy(bad.v+68+2*scalar,&value,8);rejects([&]{dispatch(bad);});}
-    for(int scalar:{6,7,8}){auto bad=p;const double value=0.;std::memcpy(bad.v+68+2*scalar,&value,8);rejects([&]{dispatch(bad);});}
-    for(int mode=0;mode<4;++mode){auto attrs=attributes();attrs[1]=mode;const auto& alias=inputs[mode==0?0:2];auto alias_p=descriptor(alias,inputs,attrs);
+    Tensor output=Tensor::zeros({2,3},backend,false,dtype);KernelParams p=descriptor(output,inputs,attributes());std::vector<BufferPtr> buffers;for(const elman::Tensor& x:inputs)buffers.push_back(x.node()->value);
+    LocalFunction dispatch{[&](const KernelParams& candidate){backend_dispatch("optimizer_step",output.node()->value,buffers,candidate);}};dispatch(p);const std::vector<uint8_t> unchanged=output.raw_data();
+    for(int slot:{0,1,2,255}){KernelParams bad=p;bad.v[slot]=slot==1?9:-1;rejects([&]{dispatch(bad);});}
+    for(int i=0;i<4;++i)for(int offset:{0,1,9}){KernelParams bad=p;bad.v[KernelParams::input_slot(KernelInput(i))+offset]=-1;rejects([&]{dispatch(bad);});}
+    for(int i=0;i<4;++i){KernelParams bad=p;bad.v[KernelParams::input_dtype_slot(KernelInput(i))]=int(DType::Int32);rejects([&]{dispatch(bad);});
+        std::vector<BufferPtr> missing=buffers;missing[i].reset();rejects([&]{backend_dispatch("optimizer_step",output.node()->value,missing,p);});}
+    for(int count:{0,1,2,3}){std::vector<BufferPtr> missing=buffers;missing.resize(count);rejects([&]{backend_dispatch("optimizer_step",output.node()->value,missing,p);});}
+    for(int slot:{0,1,2,3,22,63}){KernelParams bad=p;bad.v[64+slot]=7;rejects([&]{dispatch(bad);});}
+    for(int scalar=0;scalar<9;++scalar)for(double value:{double(NAN),double(INFINITY),-1.}){KernelParams bad=p;std::memcpy(bad.v+68+2*scalar,&value,8);rejects([&]{dispatch(bad);});}
+    for(int scalar:{3,4,5,7,8}){KernelParams bad=p;const double value=2.;std::memcpy(bad.v+68+2*scalar,&value,8);rejects([&]{dispatch(bad);});}
+    for(int scalar:{6,7,8}){KernelParams bad=p;const double value=0.;std::memcpy(bad.v+68+2*scalar,&value,8);rejects([&]{dispatch(bad);});}
+    for(int mode=0;mode<4;++mode){std::vector<int> attrs=attributes();attrs[1]=mode;const elman::Tensor& alias=inputs[mode==0?0:2];KernelParams alias_p=descriptor(alias,inputs,attrs);
         rejects([&]{backend_dispatch("optimizer_step",alias.node()->value,buffers,alias_p);});}
-    auto owner=Tensor::ones({10},backend,false,dtype),a=contiguous_view(owner,{2,3},0),overlap=contiguous_view(owner,{2,3},2);auto partial_inputs=inputs;partial_inputs[0]=a;
-    auto partial=descriptor(overlap,partial_inputs,attributes());auto partial_buffers=buffers;partial_buffers[0]=a.node()->value;
+    Tensor owner=Tensor::ones({10},backend,false,dtype),a=contiguous_view(owner,{2,3},0),overlap=contiguous_view(owner,{2,3},2);std::vector<Tensor> partial_inputs=inputs;partial_inputs[0]=a;
+    KernelParams partial=descriptor(overlap,partial_inputs,attributes());std::vector<BufferPtr> partial_buffers=buffers;partial_buffers[0]=a.node()->value;
     rejects([&]{backend_dispatch("optimizer_step",overlap.node()->value,partial_buffers,partial);});
-    auto native=inputs;native[0]=Tensor::ones({2,3},backend);native[1]=native[0];
+    std::vector<Tensor> native=inputs;native[0]=Tensor::ones({2,3},backend);native[1]=native[0];
     rejects([&]{dispatch_tensor("optimizer_step",{2,3},native,attributes(),DType::Float32);});
-    auto mixed=inputs;mixed[1]=Tensor::ones({2,3},backend,false,dtype==low_types[0]?low_types[1]:low_types[0]);
+    std::vector<Tensor> mixed=inputs;mixed[1]=Tensor::ones({2,3},backend,false,dtype==low_types[0]?low_types[1]:low_types[0]);
     rejects([&]{dispatch_tensor("optimizer_step",{2,3},mixed,attributes(),dtype);});
-    auto overflow=p;overflow.v[2]=INT32_MAX;overflow.v[3]=2;
+    KernelParams overflow=p;overflow.v[2]=INT32_MAX;overflow.v[3]=2;
     for(int i=0;i<4;++i){overflow.v[KernelParams::input_slot(KernelInput(i))+1]=INT32_MAX;overflow.v[KernelParams::input_slot(KernelInput(i))+2]=2;}
     rejects([&]{dispatch(overflow);});
     check(output.raw_data()==unchanged,"Rejected raw optimizer descriptor modified output bytes");
@@ -2139,7 +2140,7 @@ void raw_validation(Backend backend){for(auto dtype:low_types){
 void validation(Backend backend){for(const std::string algorithm:{"sgd","adam","adamw"}){
     Probe model(backend);Optimizer optimizer(settings(algorithm),model);gradients(model);
     for(double rate:{-1.,double(NAN),double(INFINITY)})atomic_reject(model,optimizer,[&]{optimizer.update(model,rate);});
-    for(int kind=0;kind<23;++kind){gradients(model);const auto saved=optimizer.state();auto& state=optimizer.state();auto& value=model.parameters()[5].value;const auto parameter=value.raw_data();
+    for(int kind=0;kind<23;++kind){gradients(model);const TrainingState saved=optimizer.state();TrainingState& state=optimizer.state();Tensor& value=model.parameters()[5].value;const std::vector<uint8_t> parameter=value.raw_data();
         if(kind==0)state.first_moment_float.pop_back();
         if(kind==1)state.second_moment_float.pop_back();
         if(kind==2)state.sgd_buffer_initialized.pop_back();
@@ -2155,8 +2156,8 @@ void validation(Backend backend){for(const std::string algorithm:{"sgd","adam","
         if(kind==12)state.step=uint64_t(std::numeric_limits<int64_t>::max());
         if(kind==13)state.optimizer="other";
         if(kind==14)value.zero_grad();
-        if(kind==15){auto& bad=model.parameters()[0].value;bad.zero_grad();bad.backward(Tensor::from_data({3},{NAN,1,1},backend,false,bad.dtype()));}
-        if(kind==16){auto& bad=model.parameters()[0].value;bad.assign({NAN,1,1});}
+        if(kind==15){Tensor& bad=model.parameters()[0].value;bad.zero_grad();bad.backward(Tensor::from_data({3},{NAN,1,1},backend,false,bad.dtype()));}
+        if(kind==16){Tensor& bad=model.parameters()[0].value;bad.assign({NAN,1,1});}
         if(kind==17)state.first_moment_float[8]=Tensor::zeros({2},backend);
         if(kind==18)state.sgd_buffer_initialized[8]=1;
         if(kind==19)state.second_moment_double[5]=Tensor::zeros({3},backend,false,DType::Float64);
@@ -2167,13 +2168,13 @@ void validation(Backend backend){for(const std::string algorithm:{"sgd","adam","
         state=saved;value.assign_raw(parameter);model.parameters()[0].value.assign({1,.5,2});
     }
     gradients(model);atomic_reject(model,optimizer,[&]{optimizer.update(model,1e300);});
-    if(backend==Backend::CUDA){const auto saved=optimizer.state();optimizer.state().first_moment_float[5]=Tensor::zeros({3},Backend::CPU);
+    if(backend==Backend::CUDA){const TrainingState saved=optimizer.state();optimizer.state().first_moment_float[5]=Tensor::zeros({3},Backend::CPU);
         atomic_reject(model,optimizer,[&]{optimizer.update(model,.01);});optimizer.state()=saved;}
     // Packed saturation must not conceal a nonfinite pre-quantization result.
     Probe packed(backend,false);packed.parameters().erase(packed.parameters().begin(),packed.parameters().begin()+5);
-    auto config=settings(algorithm).object();config["weight_decay"]=1e300;Optimizer overflow(Json(config),packed);gradients(packed);
+    elman::Json::Object config=settings(algorithm).object();config["weight_decay"]=1e300;Optimizer overflow(Json(config),packed);gradients(packed);
     atomic_reject(packed,overflow,[&]{overflow.update(packed,.01);});
-    gradients(model);auto graph=mul(model.parameters()[0].value,model.parameters()[0].value);optimizer.update(model,.01);rejects([&]{graph.backward();});
+    gradients(model);Tensor graph=mul(model.parameters()[0].value,model.parameters()[0].value);optimizer.update(model,.01);rejects([&]{graph.backward();});
     check(model.parameters()[0].value.requires_grad(),"Optimizer detached a low-format parameter leaf");
 }}
 std::vector<uint8_t> read_bytes(const std::filesystem::path& path){std::ifstream file(path,std::ios::binary);return {std::istreambuf_iterator<char>(file),std::istreambuf_iterator<char>()};}
@@ -2181,9 +2182,9 @@ void write_bytes(const std::filesystem::path& path,const std::vector<uint8_t>& d
 void checksum(std::vector<uint8_t>& data){uint64_t hash=14695981039346656037ull;for(size_t i=0;i<data.size()-8;++i){hash^=data[i];hash*=1099511628211ull;}for(int i=0;i<8;++i)data[data.size()-8+i]=uint8_t(hash>>(8*i));}
 struct Offsets{size_t dtype,length,parameter,history,first_length,first,second_length,second;};
 std::vector<Offsets> offsets(const std::vector<uint8_t>& data){size_t cursor=12;
-    auto integer=[&](int width){uint64_t result=0;for(int i=0;i<width;++i)result|=uint64_t(data.at(cursor++))<<(8*i);return result;};
-    auto string=[&]{auto length=integer(4);cursor+=size_t(length);};string();string();integer(8);string();const auto count=integer(4);std::vector<Offsets> result;
-    for(uint64_t i=0;i<count;++i){string();auto rank=integer(4);cursor+=4*size_t(rank);Offsets o{};o.dtype=cursor;auto dtype=DType(integer(4));o.length=cursor;auto length=integer(8);o.parameter=cursor;cursor+=size_t(length);
+    LocalFunction integer{[&](int width){uint64_t result=0;for(int i=0;i<width;++i)result|=uint64_t(data.at(cursor++))<<(8*i);return result;}};
+    LocalFunction string{[&]{uint64_t length=integer(4);cursor+=size_t(length);}};string();string();integer(8);string();const uint64_t count=integer(4);std::vector<Offsets> result;
+    for(uint64_t i=0;i<count;++i){string();uint64_t rank=integer(4);cursor+=4*size_t(rank);Offsets o{};o.dtype=cursor;DType dtype=DType(integer(4));o.length=cursor;uint64_t length=integer(8);o.parameter=cursor;cursor+=size_t(length);
         if(is_low_precision_float(dtype)){o.history=cursor;integer(4);}o.first_length=cursor;length=integer(8);o.first=cursor;cursor+=size_t(length)*(dtype==DType::Float64?8:4);
         o.second_length=cursor;length=integer(8);o.second=cursor;cursor+=size_t(length)*(dtype==DType::Float64?8:4);result.push_back(o);}
     check(cursor==data.size()-8,"Invalid version 3 checkpoint layout");return result;
@@ -2192,28 +2193,28 @@ void checkpoint(Backend backend,const std::filesystem::path& directory){const Js
     for(const std::string algorithm:{"sgd","adam","adamw"}){
         Probe model(backend),restored(backend);Optimizer optimizer(settings(algorithm),model),resumed(settings(algorithm),restored);
         // Preserve the unused nibble too: raw storage is the v3 persistence contract.
-        auto packed=model.parameters()[5].value.raw_data();packed.back()|=0xf0;model.parameters()[5].value.assign_raw(packed);
-        const auto path=directory/(algorithm+".bin"),bad=directory/(algorithm+"-bad.bin");
-        save_checkpoint(path.string(),model,definition,optimizer.state());auto data=read_bytes(path);check(data.at(8)==3,"Low-format checkpoint did not use version 3");
-        const auto stamps=versions(restored);auto stale=mul(restored.parameters()[0].value,restored.parameters()[0].value);
+        std::vector<uint8_t> packed=model.parameters()[5].value.raw_data();packed.back()|=0xf0;model.parameters()[5].value.assign_raw(packed);
+        const std::filesystem::path path=directory/(algorithm+".bin"),bad=directory/(algorithm+"-bad.bin");
+        save_checkpoint(path.string(),model,definition,optimizer.state());std::vector<uint8_t> data=read_bytes(path);check(data.at(8)==3,"Low-format checkpoint did not use version 3");
+        const std::vector<uint64_t> stamps=versions(restored);Tensor stale=mul(restored.parameters()[0].value,restored.parameters()[0].value);
         load_checkpoint(path.string(),restored,definition,&resumed.state());check(snapshot(model,optimizer.state())==snapshot(restored,resumed.state()),"Mixed initial checkpoint lost raw parameters or typed moments");
-        const auto after=versions(restored);for(size_t i=0;i<stamps.size();++i)check(after[i]==stamps[i]+1,"Checkpoint restore did not advance parameter versions exactly once");
+        const std::vector<uint64_t> after=versions(restored);for(size_t i=0;i<stamps.size();++i)check(after[i]==stamps[i]+1,"Checkpoint restore did not advance parameter versions exactly once");
         rejects([&]{stale.backward();});
         for(int i=0;i<5;++i){gradients(model);gradients(restored);optimizer.update(model,.01);resumed.update(restored,.01);check(snapshot(model,optimizer.state())==snapshot(restored,resumed.state()),"Mixed resumed optimizer differs");}
-        save_checkpoint(path.string(),model,definition,optimizer.state());data=read_bytes(path);const auto fields=offsets(data);
+        save_checkpoint(path.string(),model,definition,optimizer.state());data=read_bytes(path);const std::vector<Offsets> fields=offsets(data);
         if(backend==Backend::CUDA){Probe cpu(Backend::CPU);Optimizer cpu_optimizer(settings(algorithm),cpu);load_checkpoint(path.string(),cpu,definition,&cpu_optimizer.state());
-            check(snapshot(cpu,cpu_optimizer.state())==snapshot(model,optimizer.state()),"Version 3 cross-backend restore differs");auto cross=directory/(algorithm+"-cpu.bin");save_checkpoint(cross.string(),cpu,definition,cpu_optimizer.state());check(read_bytes(cross)==data,"Cross-backend version 3 bytes differ");}
-        auto reject_file=[&](std::vector<uint8_t> invalid,bool rehash=true){if(rehash)checksum(invalid);write_bytes(bad,invalid);atomic_reject(restored,resumed,[&]{load_checkpoint(bad.string(),restored,definition,&resumed.state());});};
+            check(snapshot(cpu,cpu_optimizer.state())==snapshot(model,optimizer.state()),"Version 3 cross-backend restore differs");std::filesystem::path cross=directory/(algorithm+"-cpu.bin");save_checkpoint(cross.string(),cpu,definition,cpu_optimizer.state());check(read_bytes(cross)==data,"Cross-backend version 3 bytes differ");}
+        LocalFunction reject_file{[&](std::vector<uint8_t> invalid,bool rehash=true){if(rehash)checksum(invalid);write_bytes(bad,invalid);atomic_reject(restored,resumed,[&]{load_checkpoint(bad.string(),restored,definition,&resumed.state());});}};
         for(size_t cut:{size_t(0),size_t(1),size_t(8),size_t(12),data.size()/2,data.size()-1})reject_file(std::vector<uint8_t>(data.begin(),data.begin()+cut),false);
-        for(size_t location:{size_t(0),size_t(8),data.size()-1}){auto invalid=data;invalid[location]^=0x40;reject_file(invalid,false);}
-        auto trailing=data;trailing.push_back(0);reject_file(trailing,false);
-        for(size_t i=0;i<fields.size();++i){for(size_t location:{fields[i].dtype,fields[i].length,fields[i].first_length,fields[i].second_length}){auto invalid=data;invalid[location]=255;reject_file(invalid);}
-            if(fields[i].history){auto invalid=data;invalid[fields[i].history]=2;reject_file(invalid);
+        for(size_t location:{size_t(0),size_t(8),data.size()-1}){std::vector<uint8_t> invalid=data;invalid[location]^=0x40;reject_file(invalid,false);}
+        std::vector<uint8_t> trailing=data;trailing.push_back(0);reject_file(trailing,false);
+        for(size_t i=0;i<fields.size();++i){for(size_t location:{fields[i].dtype,fields[i].length,fields[i].first_length,fields[i].second_length}){std::vector<uint8_t> invalid=data;invalid[location]=255;reject_file(invalid);}
+            if(fields[i].history){std::vector<uint8_t> invalid=data;invalid[fields[i].history]=2;reject_file(invalid);
                 if(algorithm!="sgd"){invalid=data;invalid[fields[i].history]=1;reject_file(invalid);}}
-            if(i<6&&i!=5){auto invalid=data;invalid[fields[i].parameter]=i==0?127:i==2?127:i==4?255:128;reject_file(invalid);}
-            if(i<6){for(size_t location:{fields[i].first,fields[i].second}){auto invalid=data;const float value=location==fields[i].first?float(NAN):-1.f;std::memcpy(invalid.data()+location,&value,4);reject_file(invalid);}}
+            if(i<6&&i!=5){std::vector<uint8_t> invalid=data;invalid[fields[i].parameter]=i==0?127:i==2?127:i==4?255:128;reject_file(invalid);}
+            if(i<6){for(size_t location:{fields[i].first,fields[i].second}){std::vector<uint8_t> invalid=data;const float value=location==fields[i].first?float(NAN):-1.f;std::memcpy(invalid.data()+location,&value,4);reject_file(invalid);}}
         }
-        for(int kind=0;kind<8;++kind){auto invalid=optimizer.state();
+        for(int kind=0;kind<8;++kind){TrainingState invalid=optimizer.state();
             if(kind==0)invalid.first_moment_float[0]=Tensor::zeros({2},backend);
             if(kind==1)invalid.second_moment_float[0]=Tensor::from_data({3},{-1,0,0},backend);
             if(kind==2)invalid.sgd_buffer_initialized[0]=2;
@@ -2223,7 +2224,7 @@ void checkpoint(Backend backend,const std::filesystem::path& directory){const Js
             if(kind==6)invalid.first_moment_float[0]=Tensor::from_data({3},{NAN,0,0},backend);
             if(kind==7)invalid.second_moment_float.pop_back();
             rejects([&]{save_checkpoint(path.string(),model,definition,invalid);});check(read_bytes(path)==data&&!std::filesystem::exists(path.string()+".tmp"),"Invalid save damaged checkpoint or left temporary output");}
-        if(backend==Backend::CUDA){auto invalid=optimizer.state();invalid.second_moment_float[5]=Tensor::zeros({3},Backend::CPU);
+        if(backend==Backend::CUDA){TrainingState invalid=optimizer.state();invalid.second_moment_float[5]=Tensor::zeros({3},Backend::CPU);
             rejects([&]{save_checkpoint(path.string(),model,definition,invalid);});check(read_bytes(path)==data,"Wrong-backend moment damaged a valid checkpoint");}
     }
 }
@@ -2237,7 +2238,7 @@ void execution(Backend backend){for(bool pooled:{false,true})for(bool asynchrono
 }}
 
 void run(elman::Backend backend,const std::filesystem::path& directory){
-    check(!std::filesystem::exists(directory),"Low optimizer guard directory already exists");std::filesystem::create_directories(directory);const auto before=elman::memory_stats(backend).live_bytes();
+    check(!std::filesystem::exists(directory),"Low optimizer guard directory already exists");std::filesystem::create_directories(directory);const size_t before=elman::memory_stats(backend).live_bytes();
     raw_validation(backend);validation(backend);checkpoint(backend,directory);execution(backend);
     check(elman::memory_stats(backend).live_bytes()==before,"Low optimizer guards leaked storage");std::cout<<"Low precision optimizer guards: "<<checks<<" passed, 0 failed\n";
 }
@@ -2245,8 +2246,8 @@ void run(elman::Backend backend,const std::filesystem::path& directory){
 }  // namespace optimizer_guards
 
 void run_float8(elman::Backend backend, const std::filesystem::path& output) {
-    for (const auto& suite : operators::float8_suites) operators::run_suite(backend, suite);
-    const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
+    for (const operators::Suite& suite : operators::float8_suites) operators::run_suite(backend, suite);
+    const std::chrono::steady_clock::rep stamp = std::chrono::steady_clock::now().time_since_epoch().count();
     optimizer_guards::run(backend, output / std::to_string(stamp));
 }
 
@@ -2256,7 +2257,7 @@ int main(int argc, char** argv) {
     try {
         if (argc < 2 || argc > 5)
             throw std::invalid_argument("Usage: elman_float8_tests <cpu|cuda> [--suite OUTPUT|--float16|suite flag|fixture]");
-        const auto backend = elman::parse_backend(argv[1]);
+        const elman::Backend backend = elman::parse_backend(argv[1]);
         if (!elman::backend_available(backend)) return 77;
         if (argc == 2) {
             run_float8(backend, std::filesystem::path("TestArtifacts/Float8") / elman::backend_name(backend));
@@ -2270,12 +2271,12 @@ int main(int argc, char** argv) {
             return optimizer_reference::run(backend, argv[2], true, argv[4]);
         } else if (argc == 3) {
             const std::string option = argv[2];
-            for (const auto& suite : operators::float8_suites) {
+            for (const operators::Suite& suite : operators::float8_suites) {
                 if (option != suite.option) continue;
                 operators::run_suite(backend, suite);
                 return 0;
             }
-            for (const auto& suite : operators::other_suites) {
+            for (const operators::Suite& suite : operators::other_suites) {
                 if (option != suite.option) continue;
                 operators::run_suite(backend, suite);
                 return 0;

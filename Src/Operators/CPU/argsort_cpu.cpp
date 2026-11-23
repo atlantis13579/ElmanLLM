@@ -15,8 +15,8 @@ void launch_argsort_cpu(uint32_t* out, const uint32_t* a, const uint32_t*,
   bool descending = p.attribute(operator_attr::sorting::kDescending) != 0;
   // The standard library still owns its merge scratch; reserve its upper bound.
   MemoryReservation reservation(Backend::CPU, checked_memory_mul(size_t(length), sizeof(int32_t)));
-  auto workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(length), sizeof(int32_t)));
-  auto indices = static_cast<int32_t*>(workspace->raw_pointer());
+  BufferPtr workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(length), sizeof(int32_t)));
+  int32_t* indices = static_cast<int32_t*>(workspace->raw_pointer());
   for (int group = 0; group < p.output_count() / length; ++group) {
     int base = group / inner * length * inner + group % inner;
     std::iota(indices, indices + length, 0);

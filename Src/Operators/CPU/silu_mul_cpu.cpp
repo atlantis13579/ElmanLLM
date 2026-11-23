@@ -57,7 +57,7 @@ void launch_silu_mul_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
   if (p.output_dtype() == int(DType::Float32) && cpu_vector_math_available()) {
     int count = input_count(KernelInput::A, p);
     workspace = backend_workspace(Backend::CPU, size_t(count) * sizeof(float));
-    auto* values = static_cast<float*>(workspace->raw_pointer());
+    float* values = static_cast<float*>(workspace->raw_pointer());
     if (try_unary_math_cpu(values, reinterpret_cast<const float*>(a), count, CpuMathOperation::Silu)) activations = values;
   }
   for (int i = 0; i < p.output_count(); ++i) {

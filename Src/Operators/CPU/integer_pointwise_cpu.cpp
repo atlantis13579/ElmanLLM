@@ -30,7 +30,7 @@ void launch_integer_pointwise_cpu(IntegerPointwise op, uint32_t* out, const uint
         if (op == IntegerPointwise::Cast) {
             if (!is_standard_integer(DType(ad))) integer_write(out, i, od, float_to_integer(read_float(a, ai, ad), od));
             else {
-                const auto value = integer_reduction_value(a, ai, ad);
+                const uint64_t value = integer_reduction_value(a, ai, ad);
                 if (is_standard_integer(DType(od))) integer_write(out, i, od, value);
                 else if (od == int(DType::Float64)) reinterpret_cast<double*>(out)[i] = integer_to_float<double>(value, ad);
                 else cpu_write(out, i, integer_to_float<float>(value, ad), od);

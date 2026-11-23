@@ -1,4 +1,5 @@
 #include "Models/LLM/Qwen2.h"
+#include "Core/LocalFunction.h"
 #include "Inference/LLM/MemoryPlan.h"
 #include "Inference/LLM/PagedKVCache.h"
 #include "Core/Graph.h"
@@ -22,7 +23,7 @@ void require(bool condition, const std::string& message) {
 std::vector<int32_t> integers(const Tensor& tensor, bool allow_bool = false) {
     if (tensor.dtype() == DType::Int32 || (allow_bool && tensor.dtype() == DType::Bool)) return tensor.int_data();
     require(tensor.dtype() == DType::Int64, "indices must have Int32 or Int64 dtype");
-    auto bytes = tensor.raw_data();
+    std::vector<uint8_t> bytes = tensor.raw_data();
     std::vector<int32_t> values(tensor.numel());
     for (size_t i = 0; i < values.size(); ++i) {
         int64_t value;
@@ -36,9 +37,9 @@ std::vector<int32_t> integers(const Tensor& tensor, bool allow_bool = false) {
 Tensor normalize(const Tensor& x, const Tensor& weight, float epsilon, bool fused,
                  const std::function<void(const std::string&, const Tensor&)>& trace = {}) {
     if (fused && !trace) return rms_norm(x, weight, epsilon, RmsNormRounding::Normalized);
-    auto wide = cast(x, DType::Float32);
-    auto variance = mean(mul(wide, wide), -1, true);
-    auto inverse = rsqrt(add(variance, epsilon));
+    Tensor wide = cast(x, DType::Float32);
+    Tensor variance = mean(mul(wide, wide), -1, true);
+    Tensor inverse = rsqrt(add(variance, epsilon));
     if (trace) { trace("variance", variance); trace("inverse", inverse); trace("normalized", mul(wide, inverse)); }
     if (fused) return rms_norm(x, weight, epsilon, RmsNormRounding::Normalized);
     // Qwen2 rounds the normalized activation before applying the affine weight.
@@ -46,11 +47,11 @@ Tensor normalize(const Tensor& x, const Tensor& weight, float epsilon, bool fuse
 }
 Tensor rotary(const Tensor& x, const Tensor& cosine, const Tensor& sine) {
     int dim = x.shape().back();
-    auto rotated = concat({mul(slice(x, -1, dim / 2, dim), -1.0f), slice(x, -1, 0, dim / 2)}, -1);
+    Tensor rotated = concat({mul(slice(x, -1, dim / 2, dim), -1.0f), slice(x, -1, 0, dim / 2)}, -1);
     return add(mul(x, cosine), mul(rotated, sine));
 }
 Tensor repeat_kv(const Tensor& x, int heads) {
-    const auto& s = x.shape();
+    const Shape& s = x.shape();
     if (s[1] == heads) return x;
     return reshape(expand(unsqueeze(x, 2), {s[0], s[1], heads / s[1], s[2], s[3]}),
                    {s[0], heads, s[2], s[3]});
@@ -85,7 +86,7 @@ Qwen2Config Qwen2Config::from_json(const Json& value) {
 }
 
 size_t Qwen2::quantization_workspace_bytes(Qwen2Logits logits) const {
-    const auto count = std::max(quantized_layer_count_, logits == Qwen2Logits::None ? size_t(0) : quantized_head_count_);
+    const uint64_t count = std::max(quantized_layer_count_, logits == Qwen2Logits::None ? size_t(0) : quantized_head_count_);
     return count ? memory_allocation_bytes(backend_, dtype_storage_bytes(dtype_, count)) : 0;
 }
 int32_t Qwen2::synchronize_token(int32_t id) const {
@@ -111,11 +112,11 @@ Qwen2::Qwen2(const std::string& directory, Backend backend, DType dtype, bool fu
     require(ranks == 1 || (!placement_.distributed() && !direct_paged_attention),
             "tensor parallel ranks use one device and a contiguous cache each");
     require(!placement_.distributed() || !direct_paged_attention, "layer-partitioned models use per-layer contiguous caches");
-    auto input_device = placement_.enter_input();
+    DeviceStage input_device = placement_.enter_input();
     InferenceWeights weights(directory);
     quantized_weights_ = weights.has_quantization();
     require(ranks == 1 || !quantized_weights_, "tensor parallel Qwen2 requires dense weights");
-    const auto& c = config_;
+    const Qwen2Config& c = config_;
     require(weights.tensors().size() == size_t(c.layers) * 12 + 2 + (c.tied_embeddings ? 0 : 1),
             "checkpoint tensor count differs from the configuration");
     int kv_width = c.kv_heads * c.head_dim();
@@ -125,9 +126,9 @@ Qwen2::Qwen2(const std::string& directory, Backend backend, DType dtype, bool fu
     if (!c.tied_embeddings) expected.emplace("lm_head.weight", Shape{c.vocabulary, c.hidden});
     for (int i = 0; i < c.layers; ++i) {
         std::string prefix = "model.layers." + std::to_string(i) + ".";
-        for (auto norm : {"input_layernorm.weight", "post_attention_layernorm.weight"})
+        for (const char* norm : {"input_layernorm.weight", "post_attention_layernorm.weight"})
             expected.emplace(prefix + norm, Shape{c.hidden});
-        for (auto projection : {"q_proj", "k_proj", "v_proj"}) {
+        for (const char* projection : {"q_proj", "k_proj", "v_proj"}) {
             int width = std::string(projection) == "q_proj" ? c.hidden : kv_width;
             expected.emplace(prefix + "self_attn." + projection + ".weight", Shape{width, c.hidden});
             expected.emplace(prefix + "self_attn." + projection + ".bias", Shape{width});
@@ -138,41 +139,41 @@ Qwen2::Qwen2(const std::string& directory, Backend backend, DType dtype, bool fu
         expected.emplace(prefix + "mlp.down_proj.weight", Shape{c.hidden, c.intermediate});
     }
     require(weights.tensors().size() == expected.size(), "checkpoint tensor count differs from the configuration");
-    for (const auto& item : expected) {
-        const auto& info = weights.info(item.first);
+    for (const std::pair<const std::string, std::vector<int>>& item : expected) {
+        const SafetensorInfo& info = weights.info(item.first);
         require(info.shape == item.second, "checkpoint shape differs: " + item.first);
         require(is_compute_float(info.dtype) || (weights.quantized(item.first) && info.shape.size() == 2),
                 "checkpoint uses unsupported weight dtype: " + item.first);
         parameter_count_ += shape_element_count(item.second);
     }
-    auto load = [&](const std::string& name) { return cast(weights.load(name, backend), dtype); };
-    auto load_weight = [&](const std::string& name) {
+    LocalFunction load{[&](const std::string& name) { return cast(weights.load(name, backend), dtype); }};
+    LocalFunction load_weight{[&](const std::string& name) {
         return weights.quantized(name) ? Weight(weights.load_quantized(name, backend)) : Weight(load(name));
-    };
-    auto shard = [&](const std::string& name, int axis, int offset, int size) {
+    }};
+    LocalFunction shard{[&](const std::string& name, int axis, int offset, int size) {
         return cast(weights.load_slice(name, axis, offset, size, backend), dtype);
-    };
+    }};
     embedding_ = load_weight("model.embed_tokens.weight");
     {
-        auto output_device = placement_.enter_output();
+        DeviceStage output_device = placement_.enter_output();
         norm_ = load("model.norm.weight");
         lm_head_ = c.tied_embeddings ? embedding_.to_device(placement_.output_device()) : load_weight("lm_head.weight");
     }
     for (int i = 0; i < c.layers; ++i) {
-        auto layer_device = placement_.enter_layer(i);
+        DeviceStage layer_device = placement_.enter_layer(i);
         std::string p = "model.layers." + std::to_string(i) + ".";
         Layer layer;
         layer.input_norm = load(p + "input_layernorm.weight");
         layer.post_norm = load(p + "post_attention_layernorm.weight");
-        auto load_sharded = [&](const std::string& name, int axis, int offset, int size) {
+        LocalFunction load_sharded{[&](const std::string& name, int axis, int offset, int size) {
             return ranks == 1 ? load_weight(name) : Weight(shard(name, axis, offset, size));
-        };
-        auto attention_projection = [&](const char* name, int offset, int heads, Weight& weight, Tensor& bias) {
+        }};
+        LocalFunction attention_projection{[&](const char* name, int offset, int heads, Weight& weight, Tensor& bias) {
             const std::string prefix = p + "self_attn." + name;
             const int dim = c.head_dim(), width = heads * dim;
             weight = load_sharded(prefix + ".weight", 0, offset * dim, width);
             bias = ranks == 1 ? load(prefix + ".bias") : shard(prefix + ".bias", 0, offset * dim, width);
-        };
+        }};
         attention_projection("q_proj", parallel_heads_.query_offset, parallel_heads_.query_heads, layer.query, layer.query_bias);
         attention_projection("k_proj", parallel_heads_.kv_offset, parallel_heads_.kv_heads, layer.key, layer.key_bias);
         attention_projection("v_proj", parallel_heads_.kv_offset, parallel_heads_.kv_heads, layer.value, layer.value_bias);
@@ -192,7 +193,7 @@ Qwen2::Qwen2(const std::string& directory, Backend backend, DType dtype, bool fu
             layer.gate = layer.up = {};
         }
         layer.down = load_sharded(p + "mlp.down_proj.weight", 1, intermediate_offset, local_intermediate_);
-        for (const auto* weight : {&layer.query, &layer.key, &layer.value, &layer.output,
+        for (const ProjectionWeight* weight : {&layer.query, &layer.key, &layer.value, &layer.output,
                                     &layer.gate, &layer.up, &layer.down, &layer.qkv, &layer.gate_up})
             quantized_layer_count_ = std::max(quantized_layer_count_, weight->workspace_count());
         layers_.push_back(std::move(layer));
@@ -217,12 +218,12 @@ Qwen2Output Qwen2::forward_paged(const Tensor& input_ids, PagedKVCache& cache,
                                 const std::function<void(const std::string&, const Tensor&)>& trace) const {
     require(supports_paged_cache(), "layer-partitioned models require per-layer contiguous caches");
     require(input_ids.defined() && input_ids.shape().size() == 2 && input_ids.shape()[0] == cache.batch(), "paged cache batch differs");
-    auto shape = cache.shape();
+    PagedKVShape shape = cache.shape();
     require(shape.layers == config_.layers && shape.heads == config_.kv_heads && shape.dimension == config_.head_dim() &&
             cache.backend() == backend_ && cache.dtype() == dtype_ && cache.max_length() <= config_.max_positions,
             "paged cache geometry, backend, dtype or context differs");
-    auto append = cache.append(input_ids.shape()[1]);
-    auto result = forward_impl(input_ids, attention_mask, position_ids, nullptr, append.get(), capture_hidden, logits, trace);
+    std::unique_ptr<PagedKVAppend> append = cache.append(input_ids.shape()[1]);
+    Qwen2Output result = forward_impl(input_ids, attention_mask, position_ids, nullptr, append.get(), capture_hidden, logits, trace);
     append->commit();
     return result;
 }
@@ -233,23 +234,23 @@ Qwen2Output Qwen2::forward_paged_batch(const Tensor& input_ids, PagedKVBatch& ca
                                       const std::function<void(const std::string&, const Tensor&)>& trace) const {
     require(supports_paged_cache(), "layer-partitioned models require per-layer contiguous caches");
     require(input_ids.defined() && input_ids.shape().size() == 2 && input_ids.shape()[0] == cache.batch(), "paged request batch differs");
-    auto shape = cache.shape();
+    PagedKVShape shape = cache.shape();
     require(shape.layers == config_.layers && shape.heads == config_.kv_heads && shape.dimension == config_.head_dim() &&
             cache.backend() == backend_ && cache.dtype() == dtype_ && cache.max_length() <= config_.max_positions,
             "paged request geometry, backend, dtype or context differs");
-    auto append = cache.append(input_ids.shape()[1]);
-    const auto& structural = append->padding_mask();
+    std::unique_ptr<PagedKVAppend> append = cache.append(input_ids.shape()[1]);
+    const std::vector<int32_t>& structural = append->padding_mask();
     // Account for the copied mask and Int64 conversion/download temporaries.
     MemoryReservation batch_mask(Backend::CPU, checked_memory_mul(structural.size(), 16));
-    auto mask = structural;
+    std::vector<int32_t> mask = structural;
     if (attention_mask.defined()) {
         require(attention_mask.shape() == Shape{cache.batch(), append->total()}, "batched attention mask shape differs");
         mask = integers(attention_mask, true);
         for (size_t i = 0; i < mask.size(); ++i)
             require((mask[i] == 0 || mask[i] == 1) && (structural[i] || !mask[i]), "batch mask exposes padding or contains an invalid value");
     }
-    auto explicit_mask = Tensor::from_int_data({cache.batch(), append->total()}, mask);
-    auto result = forward_impl(input_ids, explicit_mask, position_ids, nullptr, append.get(), capture_hidden, logits, trace);
+    Tensor explicit_mask = Tensor::from_int_data({cache.batch(), append->total()}, mask);
+    Qwen2Output result = forward_impl(input_ids, explicit_mask, position_ids, nullptr, append.get(), capture_hidden, logits, trace);
     append->commit();
     return result;
 }
@@ -259,9 +260,9 @@ Qwen2Output Qwen2::forward_impl(const Tensor& input_ids, const Tensor& attention
                                bool capture_hidden, Qwen2Logits logits,
                                const std::function<void(const std::string&, const Tensor&)>& trace, GraphInputs* graph_inputs,
                                const PagedGraphInputs* graph_paged) const {
-    auto input_device = placement_.enter_input();
+    DeviceStage input_device = placement_.enter_input();
     graph::RecordingGuard guard;
-    const auto& c = config_;
+    const Qwen2Config& c = config_;
     require(logits == Qwen2Logits::All || logits == Qwen2Logits::Last || logits == Qwen2Logits::None, "invalid logits selection");
     require(input_ids.shape().size() == 2, "input IDs must have rank two");
     int batch = input_ids.shape()[0], sequence = input_ids.shape()[1], previous = append ? append->previous() : past ? past->length : 0;
@@ -276,8 +277,8 @@ Qwen2Output Qwen2::forward_impl(const Tensor& input_ids, const Tensor& attention
     int total = previous + sequence, dim = c.head_dim();
     if (past) {
         require(past->layers.size() == layers_.size(), "cache layer count differs");
-        for (const auto& layer : past->layers) {
-            for (const auto* tensor : {&layer.key, &layer.value})
+        for (const DecoderLayerCache& layer : past->layers) {
+            for (const Tensor* tensor : {&layer.key, &layer.value})
                 require(tensor->defined() && tensor->shape() == Shape{batch, parallel_heads_.kv_heads, previous, dim} &&
                         tensor->backend() == backend_ && tensor->dtype() == dtype_, "cache shape, backend or dtype differs");
         }
@@ -286,7 +287,7 @@ Qwen2Output Qwen2::forward_impl(const Tensor& input_ids, const Tensor& attention
         tiled_attention_ && !trace, backend_ == Backend::CPU);
     if (tiled_attention_ && trace) host_bytes = checked_memory_add(host_bytes, checked_memory_mul(size_t(batch) * total, 8));
     MemoryReservation host_workspace(Backend::CPU, host_bytes);
-    auto ids = integers(input_ids);
+    std::vector<int32_t> ids = integers(input_ids);
     for (int id : ids) require(id >= 0 && id < c.vocabulary, "token ID is outside the vocabulary");
     std::vector<int32_t> mask(size_t(batch) * total, 1);
     if (attention_mask.defined()) {
@@ -329,55 +330,55 @@ Qwen2Output Qwen2::forward_impl(const Tensor& input_ids, const Tensor& attention
         for (size_t i = 0; i < mask.size(); ++i) padding[i] = mask[i] ? 0 : minimum;
         padding_mask = Tensor::from_data({batch, 1, 1, total}, padding, backend_, false, dtype_);
     }
-    auto tables = rotary_values(positions);
-    auto cosine = Tensor::from_data({batch, 1, sequence, dim}, tables.first, backend_, false, dtype_);
-    auto sine = Tensor::from_data({batch, 1, sequence, dim}, tables.second, backend_, false, dtype_);
+    std::pair<std::vector<float>, std::vector<float>> tables = rotary_values(positions);
+    Tensor cosine = Tensor::from_data({batch, 1, sequence, dim}, tables.first, backend_, false, dtype_);
+    Tensor sine = Tensor::from_data({batch, 1, sequence, dim}, tables.second, backend_, false, dtype_);
     if (trace) { trace("rope.cos", cosine); trace("rope.sin", sine); }
-    auto indices = Tensor::from_int_data({batch * sequence}, ids, backend_);
+    Tensor indices = Tensor::from_int_data({batch * sequence}, ids, backend_);
     if (graph_inputs) *graph_inputs = {indices, cosine, sine, padding_mask, causal_mask};
-    auto hidden = reshape(embedding_.embedding(indices, dtype_), {batch, sequence, c.hidden});
+    Tensor hidden = reshape(embedding_.embedding(indices, dtype_), {batch, sequence, c.hidden});
     DeviceTensorCopies cosine_copies(cosine), sine_copies(sine), padding_copies(padding_mask), causal_copies(causal_mask);
     std::map<int, Tensor> weight_workspaces;
     const size_t workspace_count = std::max(quantized_layer_count_, logits == Qwen2Logits::None ? size_t(0) : quantized_head_count_);
-    auto workspace_for = [&](int device, size_t count) {
-        auto& workspace = weight_workspaces[device];
+    LocalFunction workspace_for{[&](int device, size_t count) {
+        Tensor& workspace = weight_workspaces[device];
         if (count && (!workspace.defined() || workspace.numel() < count)) {
             require(count <= size_t(std::numeric_limits<int>::max()), "weight workspace exceeds indexing limits");
             workspace = Tensor::zeros({int(count)}, backend_, false, dtype_);
         }
         return workspace;
-    };
+    }};
     Qwen2Output result;
     result.cache.length = total;
     for (size_t i = 0; i < layers_.size(); ++i) {
         const int ordinal = placement_.layer_device(int(i));
-        auto layer_device = placement_.enter_layer(int(i));
+        DeviceStage layer_device = placement_.enter_layer(int(i));
         hidden = placement_.transfer_to_layer(hidden, int(i));
-        const auto& cosine = cosine_copies.get(ordinal);
-        const auto& sine = sine_copies.get(ordinal);
-        const auto& padding_mask = padding_copies.get(ordinal);
-        const auto& causal_mask = causal_copies.get(ordinal);
-        auto weight_workspace = workspace_for(ordinal, placement_.distributed() ? quantized_layer_count_ : workspace_count);
+        const Tensor& cosine = cosine_copies.get(ordinal);
+        const Tensor& sine = sine_copies.get(ordinal);
+        const Tensor& padding_mask = padding_copies.get(ordinal);
+        const Tensor& causal_mask = causal_copies.get(ordinal);
+        Tensor weight_workspace = workspace_for(ordinal, placement_.distributed() ? quantized_layer_count_ : workspace_count);
         if (past) require(past->layers[i].key.device() == ordinal && past->layers[i].value.device() == ordinal,
                           "cache layer belongs to a different device");
-        const auto& layer = layers_[i];
-        auto emit = [&](const std::string& name, const Tensor& tensor) {
+        const Qwen2::Layer& layer = layers_[i];
+        LocalFunction emit{[&](const std::string& name, const Tensor& tensor) {
             if (trace) trace("layer." + std::to_string(i) + "." + name, tensor);
-        };
+        }};
         if (capture_hidden) result.hidden_states.push_back(hidden);
-        auto normalized = normalize(hidden, layer.input_norm, c.rms_epsilon, fused_normalization_);
+        Tensor normalized = normalize(hidden, layer.input_norm, c.rms_epsilon, fused_normalization_);
         emit("input_norm", normalized);
-        auto project = [&](const Tensor& projected, int heads) {
+        LocalFunction project{[&](const Tensor& projected, int heads) {
             if (sequence == 1) return reshape(projected, {batch, heads, 1, dim});
             return transpose(reshape(projected, {batch, sequence, heads, dim}), 1, 2);
-        };
+        }};
         Tensor query, key, value;
         const int query_heads = parallel_heads_.query_heads, kv_heads = parallel_heads_.kv_heads;
         const int query_width = query_heads * dim;
         if (packed_projections_) {
             int kv_width = kv_heads * dim;
             size_t rows = size_t(batch) * sequence;
-            auto projections = layer.qkv.packed_linear(normalized, {query_width, kv_width, kv_width}, layer.qkv_bias, weight_workspace);
+            Tensor projections = layer.qkv.packed_linear(normalized, {query_width, kv_width, kv_width}, layer.qkv_bias, weight_workspace);
             query = project(contiguous_view(projections, {batch, sequence, query_width}), query_heads);
             key = project(contiguous_view(projections, {batch, sequence, kv_width}, rows * query_width), kv_heads);
             value = project(contiguous_view(projections, {batch, sequence, kv_width}, rows * (query_width + kv_width)), kv_heads);
@@ -391,14 +392,14 @@ Qwen2Output Qwen2::forward_impl(const Tensor& input_ids, const Tensor& attention
         if (!packed_projections_) value = project(layer.value.linear(normalized, layer.value_bias, weight_workspace), kv_heads);
         emit("rotary_query", query); emit("rotary_key", key); emit("value", value);
         if (graph_paged) {
-            auto physical = graph_paged->storage.at(i);
+            PagedKVLayer physical = graph_paged->storage.at(i);
             const int width = kv_heads * dim;
             physical.key.assign_indexed(0, graph_paged->destinations, reshape(transpose(key, 1, 2), {batch, width}));
             physical.value.assign_indexed(0, graph_paged->destinations, reshape(transpose(value, 1, 2), {batch, width}));
             key = std::move(physical.key);
             value = std::move(physical.value);
         } else if (append) {
-            auto cached = append->write(int(i), key, value, !direct);
+            PagedKVLayer cached = append->write(int(i), key, value, !direct);
             key = std::move(cached.key);
             value = std::move(cached.value);
         } else if (previous) {
@@ -412,7 +413,7 @@ Qwen2Output Qwen2::forward_impl(const Tensor& input_ids, const Tensor& attention
         float divisor = std::sqrt(float(dim));
         Tensor attended;
         if (direct) {
-            const auto& map = graph_paged ? graph_paged->map : *paged_map;
+            const PagedAttentionMap& map = graph_paged ? graph_paged->map : *paged_map;
             attended = elman::paged_attention(query, key, value, map, kv_heads, divisor,
                 backend_ == Backend::CPU ? std::min(sequence, 1024) : kQwenAttentionQueryTile, !graph_paged, graph_paged ? 0 : previous);
         }
@@ -422,13 +423,13 @@ Qwen2Output Qwen2::forward_impl(const Tensor& input_ids, const Tensor& attention
         if ((!tiled_attention_ && !direct) || trace) {
             // Scores/probabilities remain eager trace diagnostics. The attended
             // output still comes from the selected native tiled path.
-            auto unscaled = matmul_transposed(query, repeat_kv(logical.key, query_heads));
+            Tensor unscaled = matmul_transposed(query, repeat_kv(logical.key, query_heads));
             Tensor probability;
             if (fused_attention_softmax_) {
                 if (trace) emit("scores", div(unscaled, divisor));
                 probability = attention_softmax(unscaled, causal_mask, divisor);
             } else {
-                auto scores = div(unscaled, divisor);
+                Tensor scores = div(unscaled, divisor);
                 emit("scores", scores);
                 probability = cast(softmax(cast(add(scores, causal_mask), DType::Float32), -1), dtype_);
             }
@@ -436,9 +437,9 @@ Qwen2Output Qwen2::forward_impl(const Tensor& input_ids, const Tensor& attention
             if (!tiled_attention_ && !direct) attended = matmul(probability, repeat_kv(logical.value, query_heads));
         }
         emit("attended", attended);
-        auto merged = reshape(sequence == 1 ? attended : transpose(attended, 1, 2), {batch, sequence, query_width});
+        Tensor merged = reshape(sequence == 1 ? attended : transpose(attended, 1, 2), {batch, sequence, query_width});
         {
-            auto projected = layer.output.linear(merged, {}, weight_workspace);
+            Tensor projected = layer.output.linear(merged, {}, weight_workspace);
             if (parallel_) projected = reduce_tensor_parallel(projected, *parallel_);
             hidden = add(hidden, projected);
         }
@@ -449,7 +450,7 @@ Qwen2Output Qwen2::forward_impl(const Tensor& input_ids, const Tensor& attention
         emit("post_norm", normalized);
         Tensor gate, up;
         if (packed_projections_) {
-            auto projections = layer.gate_up.packed_linear(normalized, {local_intermediate_, local_intermediate_}, {}, weight_workspace);
+            Tensor projections = layer.gate_up.packed_linear(normalized, {local_intermediate_, local_intermediate_}, {}, weight_workspace);
             gate = contiguous_view(projections, {batch, sequence, local_intermediate_});
             up = contiguous_view(projections, {batch, sequence, local_intermediate_}, size_t(batch) * sequence * local_intermediate_);
         } else {
@@ -457,17 +458,17 @@ Qwen2Output Qwen2::forward_impl(const Tensor& input_ids, const Tensor& attention
             up = layer.up.linear(normalized, {}, weight_workspace);
         }
         emit("gate", gate); emit("up", up);
-        auto activated = fused_pointwise_ ? silu_mul(gate, up) : mul(silu(gate), up);
+        Tensor activated = fused_pointwise_ ? silu_mul(gate, up) : mul(silu(gate), up);
         emit("activated", activated);
-        auto down = layer.down.linear(activated, {}, weight_workspace);
+        Tensor down = layer.down.linear(activated, {}, weight_workspace);
         if (parallel_) down = reduce_tensor_parallel(down, *parallel_);
         emit("down", down);
         hidden = add(hidden, down);
         emit("output", hidden);
     }
-    auto output_device = placement_.enter_output();
+    DeviceStage output_device = placement_.enter_output();
     hidden = hidden.to_device(placement_.output_device());
-    auto weight_workspace = workspace_for(placement_.output_device(), logits == Qwen2Logits::None ? 0 : quantized_head_count_);
+    Tensor weight_workspace = workspace_for(placement_.output_device(), logits == Qwen2Logits::None ? 0 : quantized_head_count_);
     if (capture_hidden || logits != Qwen2Logits::None)
         hidden = normalize(hidden, norm_, c.rms_epsilon, fused_normalization_);
     if (capture_hidden) result.hidden_states.push_back(hidden);
@@ -490,9 +491,9 @@ std::pair<std::vector<float>, std::vector<float>> Qwen2::rotary_values(const std
     }
     // Build FP32 tables with the same CPU math path for eager and graph decode.
     if (!try_unary_math_cpu(cosines.data(), cosines.data(), int(cosines.size()), CpuMathOperation::Cos))
-        for (auto& value : cosines) value = std::cos(value);
+        for (float& value : cosines) value = std::cos(value);
     if (!try_unary_math_cpu(sines.data(), sines.data(), int(sines.size()), CpuMathOperation::Sin))
-        for (auto& value : sines) value = std::sin(value);
+        for (float& value : sines) value = std::sin(value);
     return {std::move(cosines), std::move(sines)};
 }
 } // namespace elman

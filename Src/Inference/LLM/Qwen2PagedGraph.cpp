@@ -27,16 +27,16 @@ Qwen2PagedGraph::Qwen2PagedGraph(const Qwen2& model, PagedKVBatch& batch, int ca
           current_device(Backend::CUDA) == model.input_device(), "Paged decode graph requires a single CUDA Qwen decoder");
   require(capacity_ >= 1 && capacity_ <= model.config().max_positions, "Invalid paged decode graph context capacity");
   validate_tokens(model_, batch_, tokens);
-  auto append = batch.append(1);
-  auto bindings = append->prepare_graph(capacity_);
+  std::unique_ptr<PagedKVAppend> append = batch.append(1);
+  PagedDecodeBindings bindings = append->prepare_graph(capacity_);
   std::vector<int32_t> visible(bindings.slots.size());
   for (size_t i = 0; i < visible.size(); ++i) visible[i] = bindings.slots[i] >= 0;
   map_ = std::make_unique<PagedAttentionMap>(batch_, bindings.physical_slots, bindings.slots,
                                             visible, Backend::CUDA, false);
   destinations_ = Tensor::from_int_data({batch_}, bindings.destinations, Backend::CUDA);
   storage_ = std::move(bindings.layers);
-  const auto input = Tensor::from_int_data({batch_, 1}, tokens);
-  const auto positions = Tensor::from_int_data({batch_, 1}, bindings.positions);
+  const Tensor input = Tensor::from_int_data({batch_, 1}, tokens);
+  const Tensor positions = Tensor::from_int_data({batch_, 1}, bindings.positions);
   const Qwen2::PagedGraphInputs page_bindings{*map_, destinations_, storage_};
   graph_.record([&] {
     logits_ = model_.forward_impl(input, {}, positions, nullptr, nullptr, false, DecoderLogits::Last, {},
@@ -50,15 +50,15 @@ Tensor Qwen2PagedGraph::decode(PagedKVBatch& batch, const std::vector<int32_t>& 
   require(batch.batch() == batch_, "Paged decode graph batch width differs");
   validate_tokens(model_, batch_, tokens);
   DeviceScope owner(Backend::CUDA, model_.input_device());
-  auto append = batch.append(1);
-  const auto bindings = append->prepare_graph(capacity_);
+  std::unique_ptr<PagedKVAppend> append = batch.append(1);
+  const PagedDecodeBindings bindings = append->prepare_graph(capacity_);
   require(bindings.layers.size() == storage_.size(), "Paged decode graph layer storage differs");
   for (size_t i = 0; i < storage_.size(); ++i) {
     require(bindings.layers[i].key.node() == storage_[i].key.node() &&
             bindings.layers[i].value.node() == storage_[i].value.node(), "Paged decode graph cache pool changed");
   }
   inputs_.indices.assign_int(tokens);
-  const auto rotary = model_.rotary_values(bindings.positions);
+  const std::pair<std::vector<float>, std::vector<float>> rotary = model_.rotary_values(bindings.positions);
   inputs_.cosine.assign(rotary.first);
   inputs_.sine.assign(rotary.second);
   destinations_.assign_int(bindings.destinations);

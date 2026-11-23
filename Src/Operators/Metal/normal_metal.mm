@@ -14,9 +14,9 @@ MPSMatrixRandomDistributionDescriptor* normal_distribution(const KernelParams& p
 }
 
 Tensor lower_normal(Graph m, const Operands&, const KernelParams& p) {
-  auto dims = shape(p);
-  const auto dtype = DType(p.output_dtype());
-  auto type = is_compute_float(dtype) ? storage_type(dtype) : MPSDataTypeFloat32;
+  Shape dims = shape(p);
+  const DType dtype = DType(p.output_dtype());
+  MPSDataType type = is_compute_float(dtype) ? storage_type(dtype) : MPSDataTypeFloat32;
   const double first = float64_random_parameter(p, 0);
   if (!m.random_samples) {
     return m.spread(m.number(first, type), dims);

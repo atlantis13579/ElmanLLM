@@ -33,7 +33,7 @@ __global__ void log_softmax_float4(float4* out, const float4* a, int row_vectors
   #pragma unroll
   for (int j = 0; j < Vectors; ++j) {
     const int col = threadIdx.x + j * blockDim.x;
-    auto v = col < row_vectors ? a[base + col] : make_float4(-EL_INF,-EL_INF,-EL_INF,-EL_INF);
+    float4 v = col < row_vectors ? a[base + col] : make_float4(-EL_INF,-EL_INF,-EL_INF,-EL_INF);
     values[j] = v;
     maximum = fmaxf(maximum, fmaxf(fmaxf(v.x,v.y), fmaxf(v.z,v.w)));
   }
@@ -41,7 +41,7 @@ __global__ void log_softmax_float4(float4* out, const float4* a, int row_vectors
   float sum = 0;
   #pragma unroll
   for (int j = 0; j < Vectors; ++j) {
-    auto& v = values[j];
+    float4& v = values[j];
     v.x -= maximum; v.y -= maximum; v.z -= maximum; v.w -= maximum;
     sum += expf(v.x) + expf(v.y) + expf(v.z) + expf(v.w);
   }
@@ -49,7 +49,7 @@ __global__ void log_softmax_float4(float4* out, const float4* a, int row_vectors
   #pragma unroll
   for (int j = 0; j < Vectors; ++j) {
     const int col = threadIdx.x + j * blockDim.x;
-    const auto v = values[j];
+    const float4 v = values[j];
     if (col < row_vectors)
       out[base + col] = make_float4(v.x-normalizer,v.y-normalizer,v.z-normalizer,v.w-normalizer);
   }
@@ -99,12 +99,12 @@ void launch_log_softmax_cuda(uint32_t* out, const uint32_t* a,
   const int inner = rank ? p.input_stride(KernelInput::A, axis) : 1;
   const int length = rank ? p.input_shape(KernelInput::A, axis) : 1;
   const int rows = p.output_count() / length;
-  const auto stream = current_cuda_stream();
+  const cudaStream_t stream = current_cuda_stream();
   if (inner == 1 && length >= 128 && length <= 4096 && length % 4 == 0 &&
       p.input_dtype(KernelInput::A) == int(DType::Float32) && p.output_dtype() == int(DType::Float32) &&
       (reinterpret_cast<uintptr_t>(a) | reinterpret_cast<uintptr_t>(out)) % alignof(float4) == 0) {
-    auto dst = reinterpret_cast<float4*>(out);
-    auto src = reinterpret_cast<const float4*>(a);
+    float4* dst = reinterpret_cast<float4*>(out);
+    const float4* src = reinterpret_cast<const float4*>(a);
     if (length <= 1024)
       log_softmax_float4<1><<<rows, ((length / 4 + 31) / 32) * 32, 0, stream>>>(dst, src, length / 4);
     else

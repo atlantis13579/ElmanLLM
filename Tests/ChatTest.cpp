@@ -1,4 +1,5 @@
-#include "ChatService.h"
+#include "Serving/Http/ChatService.h"
+#include "Core/LocalFunction.h"
 #include <filesystem>
 #include <iostream>
 #include <thread>
@@ -15,14 +16,14 @@ int main(int argc, char** argv) {
     try {
         if (argc != 2) throw std::invalid_argument("Usage: elman_chat_tests TOKENIZER");
         HuggingFaceTokenizer tokenizer(argv[1]);
-        auto definition = Json::read((std::filesystem::path(argv[1]) / "tokenizer.json").string());
-        auto byte_id = [&](int byte) {
-            auto visible = [](int b) { return (b >= 33 && b <= 126) || (b >= 161 && b <= 172) || b >= 174; };
+        Json definition = Json::read((std::filesystem::path(argv[1]) / "tokenizer.json").string());
+        LocalFunction byte_id{[&](int byte) {
+            bool (*const visible)(int) = [](int b) { return (b >= 33 && b <= 126) || (b >= 161 && b <= 172) || b >= 174; };
             int code = byte;
             if (!visible(byte)) { code = 256; for (int b = 0; b < byte; ++b) if (!visible(b)) ++code; }
             return definition.at("model").at("vocab").at(utf8(std::u16string(1, char16_t(code)))).integer();
-        };
-        auto baseline = memory_stats(Backend::CPU).workspace_bytes;
+        }};
+        size_t baseline = memory_stats(Backend::CPU).workspace_bytes;
         ChatServiceOptions settings; settings.output_bytes = 64; settings.stream_bytes = 16; settings.stream_chunks = 4;
         ChatInput input; input.stream = true;
         GenerationResult complete; complete.finish_reason = "length";
@@ -30,37 +31,37 @@ int main(int argc, char** argv) {
             ChatOutput output(tokenizer, input, settings);
             check(output.accept(byte_id(0xf0)) && output.accept(byte_id(0x9f)));
             check(output.pop(std::chrono::milliseconds(0)).empty());
-            std::string tail; auto result = output.finish(complete, tail);
+            std::string tail; GenerationResult result = output.finish(complete, tail);
             check(tail == u8"�" && result.text == tail && result.finish_reason == "length");
         }
         {
-            auto stopped = input; stopped.stops = {u8"�"};
+            ChatInput stopped = input; stopped.stops = {u8"�"};
             ChatOutput output(tokenizer, stopped, settings);
             check(output.accept(byte_id(0xf0)) && output.accept(byte_id(0x9f)));
-            std::string tail; auto result = output.finish(complete, tail);
+            std::string tail; GenerationResult result = output.finish(complete, tail);
             check(tail.empty() && result.text.empty() && result.finish_reason == "stop" && result.matched_stop == u8"�");
         }
         {
-            auto stopped = input; stopped.stops = {u8"🚀"};
+            ChatInput stopped = input; stopped.stops = {u8"🚀"};
             ChatOutput output(tokenizer, stopped, settings);
             check(output.accept(byte_id('a')));
             for (int byte : {0xf0, 0x9f, 0x9a}) check(output.accept(byte_id(byte)));
             check(!output.accept(byte_id(0x80)));
             check(output.pop(std::chrono::milliseconds(0)) == "a");
             check(output.pop(std::chrono::milliseconds(0)).empty());
-            std::string tail; auto result = output.finish(complete, tail);
+            std::string tail; GenerationResult result = output.finish(complete, tail);
             check(tail.empty() && result.text == "a" && result.finish_reason == "stop" && result.matched_stop == u8"🚀");
         }
         {
-            auto stopped = input; stopped.stops = {"STOP"};
+            ChatInput stopped = input; stopped.stops = {"STOP"};
             ChatOutput output(tokenizer, stopped, settings);
             for (int byte : {'a', 'S', 'T'}) check(output.accept(byte_id(byte)));
             check(output.pop(std::chrono::milliseconds(0)) == "a");
-            std::string tail; auto result = output.finish(complete, tail);
+            std::string tail; GenerationResult result = output.finish(complete, tail);
             check(tail == "ST" && result.text == "aST" && result.finish_reason == "length");
         }
         {
-            auto bounded = settings; bounded.stream_chunks = 1;
+            ChatServiceOptions bounded = settings; bounded.stream_chunks = 1;
             ChatOutput slow(tokenizer, input, bounded), other(tokenizer, input, bounded);
             check(slow.accept(byte_id('a')));
             rejects([&] { slow.accept(byte_id('b')); }, "output_backpressure");
@@ -69,14 +70,14 @@ int main(int argc, char** argv) {
             rejects([&] { slow.accept(byte_id('d')); }, "client_closed");
         }
         {
-            auto bounded = settings; bounded.stream_bytes = 1;
+            ChatServiceOptions bounded = settings; bounded.stream_bytes = 1;
             ChatOutput output(tokenizer, input, bounded);
             check(output.accept(byte_id('a')));
             rejects([&] { output.accept(byte_id('b')); }, "output_backpressure");
         }
         {
-            auto bounded = settings; bounded.output_bytes = 1;
-            auto plain = input; plain.stream = false;
+            ChatServiceOptions bounded = settings; bounded.output_bytes = 1;
+            ChatInput plain = input; plain.stream = false;
             ChatOutput output(tokenizer, plain, bounded);
             check(output.accept(byte_id('a')));
             rejects([&] { output.accept(byte_id('b')); }, "output_limit");

@@ -7,8 +7,8 @@ namespace elman::io {
 namespace {
 
 std::string weight_path(const std::filesystem::path& directory, const std::string& stem, DType dtype) {
-  const auto regular = directory / (stem + ".safetensors");
-  const auto half = directory / (stem + ".fp16.safetensors");
+  const std::filesystem::path regular = directory / (stem + ".safetensors");
+  const std::filesystem::path half = directory / (stem + ".fp16.safetensors");
   if (dtype == DType::Float16 && std::filesystem::exists(half)) return half.string();
   if (std::filesystem::exists(regular)) return regular.string();
   if (std::filesystem::exists(half)) return half.string();
@@ -27,9 +27,9 @@ Tensor ComponentWeights::get(const std::string& name, const Shape& shape) const 
 }
 
 Tensor ComponentWeights::get(const std::string& name, const Shape& shape, DType dtype) const {
-  const auto& info = file_.info(name);
+  const SafetensorInfo& info = file_.info(name);
   if (info.shape != shape || !is_compute_float(info.dtype)) throw std::invalid_argument("Incompatible checkpoint weight " + name);
-  auto tensor = file_.load(name, backend_);
+  Tensor tensor = file_.load(name, backend_);
   return tensor.dtype() == dtype ? tensor : cast(tensor, dtype);
 }
 

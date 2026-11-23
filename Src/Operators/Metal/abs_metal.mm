@@ -2,7 +2,7 @@
 
 namespace elman::metal {
 Tensor lower_abs(Graph m, const Operands& inputs, const KernelParams&) {
-  auto a = inputs[0];
+  Tensor a = inputs[0];
   return [m.g absoluteWithTensor:m.float_work(a) name:nil];
 }
 }  // namespace elman::metal

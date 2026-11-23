@@ -16,7 +16,7 @@ std::string HuggingFaceTokenizer::render_chat(const Json::Array& messages, bool 
         throw std::invalid_argument("Unsupported chat template; expected pinned DeepSeek-R1-Distill-Qwen template");
     if (messages.empty()) throw std::invalid_argument("Chat requires at least one message");
     std::string system;
-    for (const auto& message : messages) {
+    for (const Json& message : messages) {
         std::string role = message.at("role").string();
         if (role != "system" && role != "user" && role != "assistant" && role != "tool")
             throw std::invalid_argument("Unsupported chat role: " + role);
@@ -24,16 +24,16 @@ std::string HuggingFaceTokenizer::render_chat(const Json::Array& messages, bool 
     }
     std::string result = bos_token_ + system;
     bool is_first = false, is_tool = false, is_output_first = true;
-    for (const auto& message : messages) {
+    for (const Json& message : messages) {
         std::string role = message.at("role").string();
-        const auto& content = message.at("content");
+        const Json& content = message.at("content");
         if (role == "user") {
             is_tool = false;
             result += u8"<\uff5cUser\uff5c>" + content.string();
         } else if (role == "assistant" && content.is_null()) {
             is_tool = false;
-            for (const auto& tool : message.at("tool_calls").array()) {
-                const auto& function = tool.at("function");
+            for (const Json& tool : message.at("tool_calls").array()) {
+                const Json& function = tool.at("function");
                 bool first = !is_first;
                 if (first) result += std::string(assistant) + u8"<\uff5ctool\u2581calls\u2581begin\uff5c>";
                 else result += "\n";

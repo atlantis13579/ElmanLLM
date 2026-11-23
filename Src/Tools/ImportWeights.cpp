@@ -5,6 +5,7 @@
 #include <stdexcept>
 
 #include "IO/AtomicFile.h"
+#include "Core/LocalFunction.h"
 #include "IO/Gguf.h"
 #include "IO/Json.h"
 #include "IO/TensorArchive.h"
@@ -18,16 +19,20 @@ using Names = std::map<std::string, std::string>;
 
 void save_gguf(const GgufFile& file, const Names& names, const fs::path& output) {
     std::vector<SafetensorSpec> specs;
-    for (const auto& [name, source] : names) {
-        const auto& info = file.tensors().at(source);
+    for (const std::pair<const std::string, std::string>& entry : names) {
+        const std::string& name = entry.first;
+        const std::string& source = entry.second;
+        const SafetensorInfo& info = file.tensors().at(source);
         specs.push_back({name, info.dtype, info.shape});
     }
     write_file_atomically(output, [&](const fs::path& path) {
         std::ofstream stream(path, std::ios::binary);
         if (!stream) throw std::runtime_error("Cannot open Safetensors output");
         write_safetensors_header(stream, specs);
-        for (const auto& [name, source] : names) {
-            const auto data = file.read(source);
+        for (const std::pair<const std::string, std::string>& entry : names) {
+            const std::string& name = entry.first;
+            const std::string& source = entry.second;
+            const std::vector<uint8_t> data = file.read(source);
             if (data.size() > size_t(std::numeric_limits<std::streamsize>::max()))
                 throw std::runtime_error("Safetensors payload is too large to write");
             stream.write(reinterpret_cast<const char*>(data.data()), std::streamsize(data.size()));
@@ -44,14 +49,16 @@ double number(const GgufFile& file, const std::string& key, double fallback = 0)
 }
 
 void save_pytorch_directory(const fs::path& input, const fs::path& output) {
-    const auto source = fs::canonical(input);
-    const auto index = source / "pytorch_model.bin.index.json";
+    const std::filesystem::path source = fs::canonical(input);
+    const std::filesystem::path index = source / "pytorch_model.bin.index.json";
     std::map<std::string, std::vector<std::string>> shards;
     if (fs::exists(index)) {
-        const auto contents = Json::read(index);
-        for (const auto& [tensor, entry] : contents.at("weight_map").object()) {
-            const auto filename = entry.string();
-            const auto path = fs::u8path(filename);
+        const Json contents = Json::read(index);
+        for (const std::pair<const std::string, Json>& item : contents.at("weight_map").object()) {
+            const std::string& tensor = item.first;
+            const Json& entry = item.second;
+            const std::string filename = entry.string();
+            const std::filesystem::path path = fs::u8path(filename);
             if (path.has_root_path() || path.filename() != path || filename.find_first_of(":/\\") != std::string::npos ||
                 model_file_extension(path) != ".bin" || fs::canonical(source / path).parent_path() != source)
                 throw std::invalid_argument("Invalid PyTorch index shard " + filename);
@@ -64,7 +71,7 @@ void save_pytorch_directory(const fs::path& input, const fs::path& output) {
     if (!fs::create_directories(output)) throw std::invalid_argument("Model output directory must be new");
     std::vector<fs::path> files;
     try {
-        for (const auto* name : {"config.json", "generation_config.json", "tokenizer.json", "tokenizer_config.json",
+        for (const char* name : {"config.json", "generation_config.json", "tokenizer.json", "tokenizer_config.json",
                                  "chat_template.jinja", "special_tokens_map.json"}) {
             if (!fs::is_regular_file(source / name)) continue;
             files.push_back(output / name);
@@ -76,12 +83,14 @@ void save_pytorch_directory(const fs::path& input, const fs::path& output) {
         } else {
             Json::Object map;
             size_t shard = 0;
-            for (const auto& [filename, expected] : shards) {
-                const auto tensors = load_tensor_archive(source / fs::u8path(filename), Backend::CPU);
+            for (const std::pair<const std::string, std::vector<std::string>>& entry : shards) {
+                const std::string& filename = entry.first;
+                const std::vector<std::string>& expected = entry.second;
+                const TensorArchive tensors = load_tensor_archive(source / fs::u8path(filename), Backend::CPU);
                 if (tensors.size() != expected.size())
                     throw std::invalid_argument("PyTorch index does not account for every tensor in " + filename);
-                const auto name = "model-" + std::to_string(++shard) + ".safetensors";
-                for (const auto& tensor : expected) {
+                const std::string name = "model-" + std::to_string(++shard) + ".safetensors";
+                for (const std::string& tensor : expected) {
                     if (!tensors.count(tensor)) throw std::invalid_argument("PyTorch shard is missing tensor " + tensor);
                     map.emplace(tensor, name);
                 }
@@ -98,7 +107,7 @@ void save_pytorch_directory(const fs::path& input, const fs::path& output) {
         }
     } catch (...) {
         std::error_code ignored;
-        for (const auto& file : files) fs::remove(file, ignored);
+        for (const std::filesystem::path& file : files) fs::remove(file, ignored);
         fs::remove(output, ignored);
         throw;
     }
@@ -114,10 +123,10 @@ void save_qwen2(const GgufFile& file, const fs::path& directory, const fs::path&
         throw std::invalid_argument("Qwen2 import requires ordinary Qwen2 attention and unscaled rotary embeddings");
     if (number(file, "split.count", 1) != 1)
         throw std::invalid_argument("Split GGUF checkpoints require merging before Qwen2 import");
-    const auto& tensors = file.tensors();
-    const auto& embedding = tensors.at("token_embd.weight").shape;
+    const std::map<std::string, SafetensorInfo>& tensors = file.tensors();
+    const Shape& embedding = tensors.at("token_embd.weight").shape;
     if (embedding.size() != 2) throw std::invalid_argument("Invalid GGUF Qwen2 token embeddings");
-    const auto heads = number(file, "qwen2.attention.head_count");
+    const double heads = number(file, "qwen2.attention.head_count");
     const bool tied = !tensors.count("output.weight");
     Json::Object config{{"model_type", "qwen2"}, {"vocab_size", embedding.front()},
                         {"hidden_size", number(file, "qwen2.embedding_length")},
@@ -129,29 +138,29 @@ void save_qwen2(const GgufFile& file, const fs::path& directory, const fs::path&
                         {"rope_theta", number(file, "qwen2.rope.freq_base", 10000)}, {"tie_word_embeddings", tied}};
     if (file.numbers().count("tokenizer.ggml.eos_token_id"))
         config.emplace("eos_token_id", number(file, "tokenizer.ggml.eos_token_id"));
-    const auto layout = Qwen2Config::from_json(config);
+    const Qwen2Config layout = Qwen2Config::from_json(config);
     if (tensors.size() != 2 + size_t(layout.layers) * 12 + size_t(!tied))
         throw std::invalid_argument("GGUF Qwen2 tensor count differs from the configuration");
     Names names;
-    auto map = [&](const std::string& target, const std::string& source, const Shape& expected) {
+    LocalFunction map{[&](const std::string& target, const std::string& source, const Shape& expected) {
         const auto found = tensors.find(source);
         if (found == tensors.end() || found->second.shape != expected || !is_compute_float(found->second.dtype))
             throw std::invalid_argument("Missing or incompatible Qwen2 GGUF tensor " + source);
         names.emplace(target, source);
-    };
+    }};
     map("model.embed_tokens.weight", "token_embd.weight", {layout.vocabulary, layout.hidden});
     map("model.norm.weight", "output_norm.weight", {layout.hidden});
     if (!tied) map("lm_head.weight", "output.weight", {layout.vocabulary, layout.hidden});
     for (int i = 0; i < layout.layers; ++i) {
-        const auto source = "blk." + std::to_string(i) + '.';
-        const auto target = "model.layers." + std::to_string(i) + '.';
-        const auto kv_width = layout.head_dim() * layout.kv_heads;
+        const std::string source = "blk." + std::to_string(i) + '.';
+        const std::string target = "model.layers." + std::to_string(i) + '.';
+        const int kv_width = layout.head_dim() * layout.kv_heads;
         map(target + "input_layernorm.weight", source + "attn_norm.weight", {layout.hidden});
         map(target + "post_attention_layernorm.weight", source + "ffn_norm.weight", {layout.hidden});
-        for (const auto* kind : {"q", "k", "v"}) {
-            const auto width = *kind == 'q' ? layout.hidden : kv_width;
-            const auto projection = target + "self_attn." + kind + "_proj.";
-            const auto weight = source + "attn_" + kind + '.';
+        for (const char* kind : {"q", "k", "v"}) {
+            const int width = *kind == 'q' ? layout.hidden : kv_width;
+            const std::string projection = target + "self_attn." + kind + "_proj.";
+            const std::string weight = source + "attn_" + kind + '.';
             map(projection + "weight", weight + "weight", {width, layout.hidden});
             map(projection + "bias", weight + "bias", {width});
         }
@@ -174,7 +183,7 @@ void save_qwen2(const GgufFile& file, const fs::path& directory, const fs::path&
         });
     } catch (...) {
         std::error_code ignored;
-        for (const auto* name : {"model.safetensors", "tokenizer.json", "config.json"}) fs::remove(directory / name, ignored);
+        for (const char* name : {"model.safetensors", "tokenizer.json", "config.json"}) fs::remove(directory / name, ignored);
         fs::remove(directory, ignored);
         throw;
     }
@@ -192,7 +201,7 @@ int main(int argc, char** argv) {
         }
         if (argc != 3 && argc != 4 && argc != 6)
             throw std::invalid_argument("Use --help for supported weight import arguments");
-        const auto input = fs::u8path(argv[1]), output = fs::u8path(argv[2]);
+        const std::filesystem::path input = fs::u8path(argv[1]), output = fs::u8path(argv[2]);
         if (argc > 3) {
             if (model_file_extension(input) != ".gguf" || std::string(argv[3]) != "--qwen2" ||
                 (argc == 6 && std::string(argv[4]) != "--tokenizer"))
@@ -206,7 +215,7 @@ int main(int argc, char** argv) {
             if (model_file_extension(input) == ".gguf") {
                 const GgufFile file(input);
                 Names names;
-                for (const auto& entry : file.tensors()) names.emplace(entry.first, entry.first);
+                for (const std::pair<const std::string, SafetensorInfo>& entry : file.tensors()) names.emplace(entry.first, entry.first);
                 save_gguf(file, names, output);
             } else save_safetensors(output, load_tensor_archive(input, Backend::CPU));
         }

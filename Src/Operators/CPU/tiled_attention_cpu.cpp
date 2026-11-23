@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "Core/LocalFunction.h"
 #include "Core/AllocationPool.h"
 #include "Operators/attention_params.h"
 #include "row_reduction.h"
@@ -12,9 +13,9 @@ void attention_gemm_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b, con
         for (int row = 0; row < s.rows; ++row)
             for (int column = 0; column < s.columns; ++column) {
                 float value = 0;
-                auto left = [&](int k) { return cpu_read(a, batch * s.a_stride + row * s.shared + k, int(s.dtype)); };
-                auto right = [&](int k) { return cpu_read(b, (batch / s.groups) * s.b_stride +
-                    (s.transpose_b ? column * s.shared + k : k * s.columns + column), int(s.dtype)); };
+                LocalFunction left{[&](int k) { return cpu_read(a, batch * s.a_stride + row * s.shared + k, int(s.dtype)); }};
+                LocalFunction right{[&](int k) { return cpu_read(b, (batch / s.groups) * s.b_stride +
+                    (s.transpose_b ? column * s.shared + k : k * s.columns + column), int(s.dtype)); }};
                 // Retain the public batched matrix primitive's fallback order.
                 if (s.dtype == DType::Float32 && (s.transpose_b || s.columns == 1) &&
                     int64_t(s.rows) * s.columns * s.shared >= 400)
@@ -30,12 +31,12 @@ void launch_tiled_attention_cpu(uint32_t* out, const uint32_t* q, const uint32_t
     TiledAttentionShape s(p);
     size_t bytes = dtype_storage_bytes(s.dtype, 1);
     if (p.attribute(operator_attr::tiled_attention::kTiling) == 1) {
-        auto workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(s.queries) * s.keys, bytes));
-        auto scores = static_cast<uint32_t*>(workspace->raw_pointer());
-        auto qk = s.scores(s.queries), pv = s.attended(s.queries);
+        BufferPtr workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(s.queries) * s.keys, bytes));
+        uint32_t* scores = static_cast<uint32_t*>(workspace->raw_pointer());
+        AttentionGemm qk = s.scores(s.queries), pv = s.attended(s.queries);
         qk.batches = pv.batches = qk.groups = pv.groups = 1;
         qk.serial_cpu = pv.serial_cpu = s.batch * s.heads > 1;
-        auto probabilities = s.probabilities(p, s.queries, 0, true);
+        KernelParams probabilities = s.probabilities(p, s.queries, 0, true);
         for (int head = 0; head < s.batch * s.heads; ++head) {
             size_t kv_head = size_t(head / s.groups);
             attention_gemm_cpu(scores, attention_offset(q, size_t(head) * s.queries * s.dimension, bytes),
@@ -46,8 +47,8 @@ void launch_tiled_attention_cpu(uint32_t* out, const uint32_t* q, const uint32_t
         }
         return;
     }
-    auto workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(s.batch) * s.heads * s.tile * s.keys, bytes));
-    auto scores = static_cast<uint32_t*>(workspace->raw_pointer());
+    BufferPtr workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(s.batch) * s.heads * s.tile * s.keys, bytes));
+    uint32_t* scores = static_cast<uint32_t*>(workspace->raw_pointer());
     for (int start = 0; start < s.queries;) {
         int rows = std::min(s.tile, s.queries - start);
         attention_gemm_cpu(scores, attention_offset(q, size_t(start) * s.dimension, bytes), k, s.scores(rows));

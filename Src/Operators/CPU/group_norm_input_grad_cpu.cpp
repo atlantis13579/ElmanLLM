@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "Core/LocalFunction.h"
 #include "Operators/group_norm_params.h"
 
 namespace elman {
@@ -23,12 +24,12 @@ void launch_group_norm_input_grad_cpu(uint32_t* out, const uint32_t* a,
     float epsilon = float_attribute(p, operator_attr::group_norm::kEpsilon);
     float inverse = p.input_dtype(KernelInput::A) == int(DType::Float32) ?
         float(1.0 / std::sqrt(double(variance) + group_norm_epsilon(p))) : 1.0f / EL_SQRT(variance + epsilon);
-    const auto dtype = static_cast<DType>(p.input_dtype(KernelInput::B));
+    const DType dtype = static_cast<DType>(p.input_dtype(KernelInput::B));
     if (is_narrow_float(dtype)) {
-      auto round = [dtype](float v) {
+      LocalFunction round{[dtype](float v) {
         return dtype == DType::Float16 ? numeric::half_to_float(numeric::float_to_half(v)) :
                                         numeric::bfloat_to_float(numeric::float_to_bfloat(v));
-      };
+      }};
       average = round(average);
       inverse = round(inverse);
     }

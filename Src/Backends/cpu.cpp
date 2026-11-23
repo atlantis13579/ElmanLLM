@@ -43,7 +43,7 @@ struct CPUBuffer final : Buffer {
   const void* raw_pointer() const override { return storage.data(); }
 };
 Buffer& cpu_buffer(const BufferPtr& value) {
-  auto* result = value ? dynamic_cast<CPUBuffer*>(&value->allocation()) : nullptr;
+  CPUBuffer* result = value ? dynamic_cast<CPUBuffer*>(&value->allocation()) : nullptr;
   if (!result) throw std::invalid_argument("Expected a CPU buffer");
   return *value;
 }
@@ -60,16 +60,16 @@ struct CPUKernel { CPULaunch launch; int inputs; };
 
 BufferPtr allocate_cpu(size_t count, DType dtype) { return std::make_shared<CPUBuffer>(count, dtype); }
 void clear_cpu(const BufferPtr& buffer) {
-  auto& destination = cpu_buffer(buffer);
+  Buffer& destination = cpu_buffer(buffer);
   if (destination.bytes) std::memset(destination.raw_pointer(), 0, destination.bytes);
 }
 void upload_raw_cpu(const BufferPtr& buffer, const std::vector<uint8_t>& bytes) {
-  auto& destination = cpu_buffer(buffer);
+  Buffer& destination = cpu_buffer(buffer);
   if (bytes.size() != destination.bytes) throw std::invalid_argument("CPU raw upload size mismatch");
   if (!bytes.empty()) std::memcpy(destination.raw_pointer(), bytes.data(), bytes.size());
 }
 std::vector<uint8_t> download_raw_cpu(const BufferPtr& buffer) {
-  const auto& source = cpu_buffer(buffer);
+  const Buffer& source = cpu_buffer(buffer);
   std::vector<uint8_t> bytes(source.bytes);
   if (!bytes.empty()) std::memcpy(bytes.data(), source.raw_pointer(), bytes.size());
   return bytes;
@@ -97,15 +97,15 @@ void dispatch_cpu(const std::string& operation, const BufferPtr& output,
 #undef ELMAN_CPU_KERNEL
 #undef ELMAN_CPU_KERNEL4
   };
-  const auto complex_operation = complex_pointwise_operation(operation, params);
-  const auto low_operation = low_precision_pointwise_operation(operation, params);
-  const auto double_operation = low_operation == LowPrecisionPointwise::None ? float64_pointwise_operation(operation, params) : Float64Pointwise::None;
+  const ComplexPointwise complex_operation = complex_pointwise_operation(operation, params);
+  const LowPrecisionPointwise low_operation = low_precision_pointwise_operation(operation, params);
+  const Float64Pointwise double_operation = low_operation == LowPrecisionPointwise::None ? float64_pointwise_operation(operation, params) : Float64Pointwise::None;
   auto found = kernels.find(operation);
   if (found == kernels.end() && double_operation == Float64Pointwise::None && complex_operation == ComplexPointwise::None)
     throw std::invalid_argument("Unknown CPU operator: " + operation);
   const int arity = complex_operation != ComplexPointwise::None ? complex_pointwise_arity(complex_operation) :
       found == kernels.end() ? float64_pointwise_arity(double_operation) : found->second.inputs;
-  auto& destination = cpu_buffer(output);
+  Buffer& destination = cpu_buffer(output);
   if (params.v[0] < 0 || size_t(params.v[0]) != destination.count)
     throw std::invalid_argument("CPU dispatch size mismatch");
   const uint32_t* sources[4] = {nullptr, nullptr, nullptr, nullptr};
@@ -114,19 +114,19 @@ void dispatch_cpu(const std::string& operation, const BufferPtr& output,
     if (inputs[j] && int(j) >= arity) throw std::invalid_argument("Unexpected CPU kernel input");
     if (inputs[j]) sources[j] = static_cast<const uint32_t*>(cpu_buffer(inputs[j]).raw_pointer());
   }
-  const auto double_reduction = float64_reduction_operation(operation, params);
-  const auto double_matrix = float64_matrix_operation(operation, params);
-  const auto double_softmax = float64_softmax_operation(operation, params);
-  const auto double_indexing = float64_indexing_operation(operation, params);
-  const auto double_spatial = float64_spatial_operation(operation, params);
-  const auto double_loss = float64_loss_operation(operation, params);
-  const auto double_attention = float64_attention_operation(operation, params);
-  const auto double_random = float64_random_operation(operation, params);
+  const Float64Reduction double_reduction = float64_reduction_operation(operation, params);
+  const Float64Matrix double_matrix = float64_matrix_operation(operation, params);
+  const Float64Softmax double_softmax = float64_softmax_operation(operation, params);
+  const Float64Indexing double_indexing = float64_indexing_operation(operation, params);
+  const Float64Spatial double_spatial = float64_spatial_operation(operation, params);
+  const Float64Loss double_loss = float64_loss_operation(operation, params);
+  const Float64Attention double_attention = float64_attention_operation(operation, params);
+  const Float64Random double_random = float64_random_operation(operation, params);
   const bool double_categorical = float64_categorical_operation(operation, params);
-  const auto double_normalization = float64_normalization_operation(operation, params);
-  const auto integer_operation = integer_pointwise_operation(operation, params);
-  const auto integer_matrix = integer_matrix_operation(operation, params);
-  const auto storage_layout = storage_layout_operation(operation, output->dtype);
+  const Float64Normalization double_normalization = float64_normalization_operation(operation, params);
+  const IntegerPointwise integer_operation = integer_pointwise_operation(operation, params);
+  const IntegerMatrix integer_matrix = integer_matrix_operation(operation, params);
+  const StorageLayout storage_layout = storage_layout_operation(operation, output->dtype);
   if (complex_operation != ComplexPointwise::None)
       launch_complex_pointwise_cpu(complex_operation, static_cast<uint32_t*>(destination.raw_pointer()), sources[0], sources[1], sources[2], params);
     else if (packed_integer_cast_operation(operation, params))

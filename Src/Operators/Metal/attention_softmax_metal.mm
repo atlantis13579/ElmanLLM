@@ -7,14 +7,14 @@
 
 namespace elman::metal {
 Tensor lower_attention_softmax(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto input = inputs[0];
-  auto stored = inputs[1];
+  Tensor input = inputs[0];
+  Tensor stored = inputs[1];
   const int axis = p.attribute(operator_attr::reduction::kAxis);
   const int rank = input.shape.count, selected = std::max(axis, 0);
-  auto work = m.float_work(input);
+  Tensor work = m.float_work(input);
   switch (p.attribute(8)) {
     case 1: {
-      auto product = m.mul(work, stored);
+      Tensor product = m.mul(work, stored);
       return m.mul(work, m.sub(stored, m.sum(product, @[ @(selected) ])));
     }
     case 2:
@@ -22,7 +22,7 @@ Tensor lower_attention_softmax(Graph m, const Operands& inputs, const KernelPara
     case 3:
     case 5: {
       const int mask = p.attribute(8) == 3 ? 2 : axis;
-      auto* reduced = [NSMutableArray<NSNumber*> array];
+      NSMutableArray<NSNumber*>* reduced = [NSMutableArray<NSNumber*> array];
       for (int dim = 0; dim < rank; ++dim) {
         if (mask & (1 << dim)) {
           [reduced addObject:@(dim)];
@@ -48,8 +48,8 @@ Tensor lower_attention_softmax(Graph m, const Operands& inputs, const KernelPara
         std::memcpy(&encoded, &bits, sizeof(encoded));
         divisor = float(encoded);
       }
-      auto scaled = m.div(work, m.number(divisor));
-      auto masked = m.add(m.float_work(m.cast(scaled, input.dataType)), m.float_work(stored));
+      Tensor scaled = m.div(work, m.number(divisor));
+      Tensor masked = m.add(m.float_work(m.cast(scaled, input.dataType)), m.float_work(stored));
       work = m.float_work(m.cast(masked, input.dataType));
       break;
     }

@@ -4,7 +4,7 @@
 
 namespace elman {
 void validate_low_precision_optimizer(const BufferPtr& output,const std::vector<BufferPtr>& inputs,const KernelParams& p){
-    auto require=[](bool valid,const char* message){if(!valid)throw std::invalid_argument(message);};
+    void (*const require)(bool, const char*)=[](bool valid,const char* message){if(!valid)throw std::invalid_argument(message);};
     require(inputs.size()==4&&inputs[0]&&inputs[1]&&inputs[2]&&inputs[3],"Optimizer step requires four operands");
     const bool resident_float32 = inputs[0]->backend == Backend::CUDA && inputs[0]->dtype == DType::Float32;
     require((is_low_precision_float(inputs[0]->dtype)||resident_float32)&&inputs[1]->dtype==inputs[0]->dtype&&
@@ -27,7 +27,7 @@ void validate_low_precision_optimizer(const BufferPtr& output,const std::vector<
     }
     require(output->count==forward&&p.output_count()==int(forward),"Optimizer step output count differs");
     for(int i=0;i<4;++i){require(inputs[i]->count==forward,"Optimizer step input count differs");
-        if(output->bytes&&inputs[i]->bytes){const auto a=reinterpret_cast<uintptr_t>(output->raw_pointer()),b=reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
+        if(output->bytes&&inputs[i]->bytes){const uintptr_t a=reinterpret_cast<uintptr_t>(output->raw_pointer()),b=reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
             require(!(a<=b?b-a<output->bytes:a-b<inputs[i]->bytes),"Overlapping optimizer step buffers");}}
     double values[optimizer_attr::kScalarCount];
     for(int i=0;i<optimizer_attr::kScalarCount;++i){values[i]=optimizer_parameter(p,i);require(std::isfinite(values[i]),"Nonfinite optimizer step scalar");}

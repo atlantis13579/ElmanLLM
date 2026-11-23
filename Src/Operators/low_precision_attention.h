@@ -27,6 +27,6 @@ Tensor low_attention_softmax_derivative(const Tensor& scores, const Tensor& mask
 std::vector<Tensor> low_tiled_attention_derivatives(const Tensor& query, const Tensor& key, const Tensor& value,
     const Tensor& mask, double divisor, bool causal, int offset, const Tensor& gradient);
 inline KernelParams low_attention_softmax_parameters(const KernelParams& p, LowPrecisionAttention op) {
-    auto result = p; result.v[KernelParams::kAttributeSlot + 1] = op == LowPrecisionAttention::Gradient ? 2 : 1; return result;
+    KernelParams result = p; result.v[KernelParams::kAttributeSlot + 1] = op == LowPrecisionAttention::Gradient ? 2 : 1; return result;
 }
 } // namespace elman

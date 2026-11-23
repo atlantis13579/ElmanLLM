@@ -2,6 +2,7 @@
 #include <cstring>
 
 #include "Backends/MPSGraph.h"
+#include "Core/LocalFunction.h"
 
 #include "Operators/attributes.h"
 
@@ -14,18 +15,18 @@ Tensor causal_mask(Graph m, Tensor mask, int queries, int keys, int64_t offset, 
   const float lowest = type == MPSDataTypeFloat16    ? -65504.f
                        : type == MPSDataTypeBFloat16 ? -3.3895313892515355e38f
                                                      : -3.402823466e38f;
-  auto blocked = m.number(lowest, mask.dataType);
+  Tensor blocked = m.number(lowest, mask.dataType);
   if (offset <= -int64_t(queries)) {
     return blocked;
   }
-  auto dims = @[ @1, @1, @(queries), @(keys) ];
-  auto distance = m.sub(m.index(dims, 3), m.index(dims, 2));
+  NSArray<NSNumber*>* dims = @[ @1, @1, @(queries), @(keys) ];
+  Tensor distance = m.sub(m.index(dims, 3), m.index(dims, 2));
   return m.select(m.less(m.integer(offset), distance), blocked, mask);
 }
 }  // namespace
 
 Tensor lower_paged_attention(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto q = inputs[0], k = inputs[1], v = inputs[2], mask = inputs[3];
+  Tensor q = inputs[0], k = inputs[1], v = inputs[2], mask = inputs[3];
   const int batch = p.input_shape(KernelInput::A, 0);
   const int dimension = p.input_shape(KernelInput::A, 3);
   const int key_count = p.input_shape(KernelInput::D, 1), kv_heads = p.attribute(4);
@@ -35,17 +36,17 @@ Tensor lower_paged_attention(Graph m, const Operands& inputs, const KernelParams
   const float minimum = q.dataType == MPSDataTypeFloat16    ? -65504.f
                         : q.dataType == MPSDataTypeBFloat16 ? -3.3895313892515355e38f
                                                             : -3.402823466e38f;
-  auto inactive = m.less(mask, m.integer(0));
-  auto unbound = m.equal(mask, m.integer(INT_MIN));
-  auto indices = m.select(inactive, m.sub(m.integer(-1), mask), mask);
+  Tensor inactive = m.less(mask, m.integer(0));
+  Tensor unbound = m.equal(mask, m.integer(INT_MIN));
+  Tensor indices = m.select(inactive, m.sub(m.integer(-1), mask), mask);
   indices = m.select(unbound, m.integer(0), indices);
-  auto lookup = [&](Tensor x) {
-    auto data = m.gather(x, indices, 0);
+  LocalFunction lookup{[&](Tensor x) {
+    Tensor data = m.gather(x, indices, 0);
     data = m.select(m.reshape(unbound, @[ @(batch), @(key_count), @1 ]), m.number(0, x.dataType), data);
     return [m.g transposeTensor:m.reshape(data, @[ @(batch), @(key_count), @(kv_heads), @(dimension) ])
                     permutation:@[ @0, @2, @1, @3 ]
                            name:nil];
-  };
+  }};
   k = lookup(k);
   v = lookup(v);
   mask = m.reshape(m.select(inactive, m.number(minimum, q.dataType), m.number(0, q.dataType)),
@@ -63,11 +64,11 @@ Tensor lower_paged_attention(Graph m, const Operands& inputs, const KernelParams
     // Query heads in a group share the same keys, values, and single-position mask.
     q = m.reshape(q, @[ @(batch), @(kv_heads), @(heads / kv_heads), @(dimension) ]);
   } else if (heads != kv_heads) {
-    auto* repeat = [NSMutableArray<NSNumber*> arrayWithCapacity:heads];
+    NSMutableArray<NSNumber*>* repeat = [NSMutableArray<NSNumber*> arrayWithCapacity:heads];
     for (int i = 0; i < heads; ++i) {
       [repeat addObject:@(i / (heads / kv_heads))];
     }
-    auto ids = m.int_vector(repeat);
+    Tensor ids = m.int_vector(repeat);
     k = m.gather(k, ids, 1);
     v = m.gather(v, ids, 1);
   }
@@ -85,11 +86,11 @@ Tensor lower_paged_attention(Graph m, const Operands& inputs, const KernelParams
   if (!fused) {
     // A finite additive mask on a fully blocked row still participates in
     // softmax. Fused SDPA is allowed to suppress such rows entirely.
-    auto logits = m.matmul(q, m.transpose(k, 2, 3));
+    Tensor logits = m.matmul(q, m.transpose(k, 2, 3));
     logits = m.add(m.mul(logits, m.number(scale, logits.dataType)), mask);
     return m.matmul([m.g softMaxWithTensor:logits axis:3 name:nil], v);
   }
-  auto result = [m.g scaledDotProductAttentionWithQueryTensor:q
+  Tensor result = [m.g scaledDotProductAttentionWithQueryTensor:q
                                                     keyTensor:k
                                                   valueTensor:v
                                                    maskTensor:mask

@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "Core/LocalFunction.h"
 #include "Operators/low_precision_softmax.h"
 #include "Operators/low_precision_pointwise_math.h"
 #include <vector>
@@ -36,7 +37,7 @@ void launch_low_precision_softmax_cpu(LowPrecisionSoftmax op, uint32_t* output, 
     for (int row = 0; row < count / length; ++row) {
         const int base = row / inner * length * inner + row % inner;
         const bool vector = last || row % inner < inner / 8 * 8;
-        auto exponential = [vector](float x) { return vector ? low_softmax_vector_exp(x) : std::exp(x); };
+        LocalFunction exponential{[vector](float x) { return vector ? low_softmax_vector_exp(x) : std::exp(x); }};
         for (int j = 0; j < length; ++j)
             values[j] = low_precision_value(input, base + j * inner, DType(p.input_dtype(KernelInput::A)));
         if (mode == 2) {
@@ -61,7 +62,7 @@ void launch_low_precision_softmax_cpu(LowPrecisionSoftmax op, uint32_t* output, 
         }
     }
     if (p.output_dtype() == int(DType::Float32)) { std::memcpy(output, result.data(), size_t(count) * sizeof(float)); return; }
-    auto* bytes = reinterpret_cast<uint8_t*>(output);
+    uint8_t* bytes = reinterpret_cast<uint8_t*>(output);
     const DType dtype = DType(p.output_dtype());
     if (dtype == DType::Float4E2M1FN) {
         for (int i = 0; i < count; i += 2)

@@ -100,13 +100,13 @@ void launch_rms_norm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
        axis < p.output_rank(); ++axis) length *= p.output_shape(axis);
   int rows = p.output_count() / length;
   if (length <= 128) {
-    auto block = short_row_block(length, rows);
+    dim3 block = short_row_block(length, rows);
     rms_norm_short_rows_cuda<<<(rows + block.y - 1) / block.y, block, 0, current_cuda_stream()>>>(
         out, a, b, c, p, length, rows, 1.0f / float(length));
     return;
   }
   if (length > 128 && length <= 8192 && length % 4 == 0) {
-    auto power = [](int value) { int result = 1; while (result <= value / 2 && result < 512) result *= 2; return result; };
+    int (*const power)(int) = [](int value) { int result = 1; while (result <= value / 2 && result < 512) result *= 2; return result; };
     int columns = power(length / 4), row_power = power(rows);
     int width = columns < 32 ? columns : 32;
     int height = row_power < 512 / width ? row_power : 512 / width;

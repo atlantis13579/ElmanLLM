@@ -1,4 +1,5 @@
 #include "Core/Execution.h"
+#include "Core/LocalFunction.h"
 #include "Core/Memory.h"
 #include "Backends/CudaStream.h"
 #include <chrono>
@@ -33,16 +34,16 @@ KernelParams copy_bytes() {
 }
 int cuda_staging_ordering_checks() {
     int checks = 0;
-    auto check = [&](bool valid, const char* message) {
+    LocalFunction check{[&](bool valid, const char* message) {
         ++checks;
         if (!valid) throw std::runtime_error(message);
-    };
-    auto before = memory_stats(Backend::CPU).live_bytes();
+    }};
+    size_t before = memory_stats(Backend::CPU).live_bytes();
     {
         ExecutionStream first(Backend::CUDA, {4096, 1}), second(Backend::CUDA, {4096, 1});
         ExecutionStream reader(Backend::CUDA);
-        auto buffer = backend_allocate(Backend::CUDA, 16, DType::Int32);
-        auto observed = backend_allocate(Backend::CUDA, 16, DType::Int32);
+        BufferPtr buffer = backend_allocate(Backend::CUDA, 16, DType::Int32);
+        BufferPtr observed = backend_allocate(Backend::CUDA, 16, DType::Int32);
         warm(first, buffer); warm(second, buffer);
         backend_dispatch("copy", observed, {buffer}, copy_bytes());
         Gate gate(first);
@@ -77,7 +78,7 @@ int cuda_staging_ordering_checks() {
             StreamScope scope(first, true, true);
             gate.enqueue();
             backend_upload_raw(buffer, std::vector<uint8_t>(64, 31));
-            auto uploaded = first.record();
+            ExecutionEvent uploaded = first.record();
             check(!uploaded.ready(), "Prewarmed upload lost asynchronous behavior");
             // One slot forces bounded backpressure before reusing pending storage.
             backend_upload_raw(buffer, std::vector<uint8_t>(64, 37));
@@ -95,7 +96,7 @@ int cuda_staging_ordering_checks() {
             check(backend_download_raw(buffer) == std::vector<uint8_t>(64, 41), "Host-limit fallback changed bytes");
         }
         check(first.host_staging_stats().fallbacks >= 2, "Host-limit fallback was not counted");
-        auto large = backend_allocate(Backend::CUDA, 8192, DType::UInt8);
+        BufferPtr large = backend_allocate(Backend::CUDA, 8192, DType::UInt8);
         {
             StreamScope scope(first, true, true);
             gate.enqueue();
@@ -125,7 +126,7 @@ int cuda_staging_ordering_checks() {
     }
     check(memory_stats(Backend::CPU).live_bytes() == before, "Stream destruction leaked staging");
     {
-        auto buffer = backend_allocate(Backend::CUDA, 64, DType::UInt8);
+        BufferPtr buffer = backend_allocate(Backend::CUDA, 64, DType::UInt8);
         {
             ExecutionStream stream(Backend::CUDA, {4096, 1});
             warm(stream, buffer);
@@ -136,35 +137,35 @@ int cuda_staging_ordering_checks() {
         check(backend_download_raw(buffer) == std::vector<uint8_t>(64, 53), "Stream destruction released an in-flight upload");
     }
     check(memory_stats(Backend::CPU).live_bytes() == before, "Pending destruction leaked staging");
-    for (auto bounds : {HostStagingOptions{4096, 4}, HostStagingOptions{16384, 1}}) {
+    for (elman::HostStagingOptions bounds : {HostStagingOptions{4096, 4}, HostStagingOptions{16384, 1}}) {
         ExecutionStream stream(Backend::CUDA, bounds);
-        auto buffer = backend_allocate(Backend::CUDA, 64, DType::UInt8);
+        BufferPtr buffer = backend_allocate(Backend::CUDA, 64, DType::UInt8);
         warm(stream, buffer);
         Gate gate(stream);
         StreamScope scope(stream, true, true);
         gate.enqueue();
         backend_upload_raw(buffer, std::vector<uint8_t>(64, 59));
-        auto first_copy = stream.record();
+        ExecutionEvent first_copy = stream.record();
         backend_upload_raw(buffer, std::vector<uint8_t>(64, 61));
-        auto stats = stream.host_staging_stats();
+        HostStagingStats stats = stream.host_staging_stats();
         check(first_copy.ready() && stats.waits > 0, "Independent byte/slot bounds did not apply backpressure");
         check(stats.allocated_bytes <= bounds.capacity_bytes && stats.buffers <= bounds.max_buffers, "Pool exceeded its independent bounds");
         check(backend_download_raw(buffer) == std::vector<uint8_t>(64, 61), "Bounded pool changed caller bytes");
     }
-    for (auto bounds : {HostStagingOptions{0, 0}, HostStagingOptions{4095, 1}, HostStagingOptions{12288, 1}}) {
+    for (elman::HostStagingOptions bounds : {HostStagingOptions{0, 0}, HostStagingOptions{4095, 1}, HostStagingOptions{12288, 1}}) {
         ExecutionStream stream(Backend::CUDA, bounds);
         StreamScope scope(stream, true, true);
-        auto buffer = backend_allocate(Backend::CUDA, 8193, DType::UInt8);
+        BufferPtr buffer = backend_allocate(Backend::CUDA, 8193, DType::UInt8);
         backend_upload_raw(buffer, std::vector<uint8_t>(8193, 67));
         check(backend_download_raw(buffer) == std::vector<uint8_t>(8193, 67), "Non-power-of-two capacity changed bytes");
         stream.synchronize();
-        auto stats = stream.host_staging_stats();
+        HostStagingStats stats = stream.host_staging_stats();
         if (bounds.capacity_bytes == 12288) check(stats.allocated_bytes == 12288 && stats.uploads == 1, "Page rounding rejected fitting capacity");
         else check(stats.fallbacks == 2 && stats.allocated_bytes == 0, "Disabled/small capacity did not fall back");
     }
     {
         ExecutionStream stream(Backend::CUDA, {4096, 1});
-        auto buffer = backend_allocate(Backend::CUDA, 64, DType::UInt8);
+        BufferPtr buffer = backend_allocate(Backend::CUDA, 64, DType::UInt8);
         {
             MemoryLimit metadata_only(Backend::CPU, before + 128);
             StreamScope scope(stream, true, true);

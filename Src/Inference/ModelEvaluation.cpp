@@ -45,10 +45,10 @@ int infer(const std::string& configuration, const RunOptions& options) {
   size_t count = 0;
   double total_loss = 0;
   for (size_t sample = 0; sample < order.size(); ++sample) {
-    auto batch = data.batch(order, sample, 1, config.backend);
-    auto logits = config.model->forward(batch.first, false, config.seed);
-    auto values = logits.data();
-    auto targets = batch.second.data();
+    TensorBatch batch = data.batch(order, sample, 1, config.backend);
+    Tensor logits = config.model->forward(batch.first, false, config.seed);
+    std::vector<float> values = logits.data();
+    std::vector<float> targets = batch.second.data();
     float loss = data.loss(logits, batch.second).data().at(0);
     require(std::isfinite(loss), "Non-finite inference loss");
     total_loss += loss;

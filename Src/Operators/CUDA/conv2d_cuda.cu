@@ -88,7 +88,7 @@ __global__ void finish_conv2d(uint32_t* out, const uint32_t* a, const uint32_t* 
 
 bool try_unfold_conv2d(uint32_t* out, const uint32_t* a, const uint32_t* b,
                        const uint32_t* c, const KernelParams& p) {
-  const auto dtype = DType(p.output_dtype());
+  const DType dtype = DType(p.output_dtype());
   const int groups = p.attribute(kGroups);
   if (!is_compute_float(dtype) || groups <= 0 ||
       p.input_dtype(KernelInput::A) != p.output_dtype() || p.input_dtype(KernelInput::B) != p.output_dtype())
@@ -132,16 +132,16 @@ bool try_unfold_conv2d(uint32_t* out, const uint32_t* a, const uint32_t* b,
     const size_t product_offset = (columns_size + alignof(float) - 1) & ~(alignof(float) - 1);
     const size_t workspace_size = biased ? product_offset + size_t(tile) * channels * sizeof(float) : columns_size;
     workspace = backend_workspace(Backend::CUDA, workspace_size);
-    auto* storage = static_cast<uint8_t*>(workspace->raw_pointer());
+    uint8_t* storage = static_cast<uint8_t*>(workspace->raw_pointer());
     columns = unfold ? storage : nullptr;
     product = biased ? reinterpret_cast<float*>(storage + product_offset) : nullptr;
   }
 
-  const auto stream = current_cuda_stream();
-  const auto* input = reinterpret_cast<const uint8_t*>(a);
-  auto* output = reinterpret_cast<uint8_t*>(out);
+  const cudaStream_t stream = current_cuda_stream();
+  const uint8_t* input = reinterpret_cast<const uint8_t*>(a);
+  uint8_t* output = reinterpret_cast<uint8_t*>(out);
   for (int batch = 0; batch < batches; batch += batch_step) {
-    const auto* input_batch = input + size_t(batch) * input_channels * input_spatial * word_bytes;
+    const uint8_t* input_batch = input + size_t(batch) * input_channels * input_spatial * word_bytes;
     const int batch_offset = batch * channels * spatial;
     for (int start = 0; start < positions;) {
       const int count = std::min(tile, positions - start);

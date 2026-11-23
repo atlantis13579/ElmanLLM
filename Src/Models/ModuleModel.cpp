@@ -14,7 +14,7 @@ ModuleModel::ModuleModel(std::string name, std::string architecture, Backend bac
       outputs_(outputs), module_(std::move(module)) {
   if (!module_ || outputs_ <= 0) throw std::invalid_argument("Invalid module model");
   shape_element_count(input_shape_);
-  for (auto& parameter : module_->named_parameters()) {
+  for (nn::NamedTensor& parameter : module_->named_parameters()) {
     if (parameter.value.backend() != backend) throw std::invalid_argument("Module parameter backend mismatch");
     if (parameter.value.requires_grad()) parameters_.push_back({std::move(parameter.name), std::move(parameter.value)});
   }
@@ -29,10 +29,10 @@ Tensor ModuleModel::forward(const Tensor& input, bool training, uint32_t seed) {
 
 std::vector<Parameter> ModuleModel::checkpoint_buffers() const {
   std::vector<Parameter> state;
-  for (auto& parameter : module_->named_parameters()) {
+  for (nn::NamedTensor& parameter : module_->named_parameters()) {
     if (!parameter.value.requires_grad()) state.push_back({std::move(parameter.name), std::move(parameter.value)});
   }
-  for (auto& buffer : module_->named_buffers(true)) {
+  for (nn::NamedTensor& buffer : module_->named_buffers(true)) {
     state.push_back({std::move(buffer.name), std::move(buffer.value)});
   }
   return state;

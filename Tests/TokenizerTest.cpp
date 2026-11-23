@@ -29,16 +29,16 @@ int main() {
             "hello world! hello world! hello world!\n",
             u8"\u4f60\u597d\u4e16\u754c \u4f60\u597d\u4e16\u754c \U0001f642\U0001f642",
             "<begin>hello world!<end><begin>banana banana<end>"};
-        auto model = BytePairTokenizer::train(corpus, options);
+        BytePairTokenizer model = BytePairTokenizer::train(corpus, options);
         check(model.vocabulary_size() > 259 && model.vocabulary_size() <= 310, "training vocabulary size");
         check(model.merge_count() > 0, "no BPE merges were learned");
         check(model.encode(corpus[0]).size() < corpus[0].size() / 2, "training did not compress repeated text");
-        auto loaded = BytePairTokenizer::from_json(Json::parse(model.to_json().dump()));
+        BytePairTokenizer loaded = BytePairTokenizer::from_json(Json::parse(model.to_json().dump()));
         check(model.to_json().dump() == loaded.to_json().dump(), "serialization changed the model");
-        auto repeated = BytePairTokenizer::train(corpus, options);
+        BytePairTokenizer repeated = BytePairTokenizer::train(corpus, options);
         check(model.to_json().dump() == repeated.to_json().dump(), "training is not deterministic");
-        for (const auto& document : corpus) {
-            auto ids = model.encode(document);
+        for (const std::string& document : corpus) {
+            std::vector<int32_t> ids = model.encode(document);
             check(model.decode(ids) == document, "training text did not round trip");
             check(ids == loaded.encode(document), "reload changed token IDs");
         }
@@ -61,15 +61,15 @@ int main() {
         TokenizerTrainingOptions overlap;
         overlap.vocabulary_size = 280;
         overlap.minimum_frequency = 1;
-        auto overlapping = BytePairTokenizer::train({"aaaaaaaaaaaaaaaaa", "abababababab", "abcabcabcabc"}, overlap);
-        for (const auto& text : {"a", "aa", "aaa", "aaaaaaa", "abababa", "abcabcab"})
+        BytePairTokenizer overlapping = BytePairTokenizer::train({"aaaaaaaaaaaaaaaaa", "abababababab", "abcabcabcabc"}, overlap);
+        for (const char* const& text : {"a", "aa", "aaa", "aaaaaaa", "abababa", "abcabcab"})
             check(overlapping.decode(overlapping.encode(text)) == text, "overlap round trip");
-        auto empty = BytePairTokenizer::train({""});
+        BytePairTokenizer empty = BytePairTokenizer::train({""});
         check(empty.vocabulary_size() == 256 && empty.merge_count() == 0, "empty training corpus");
         rejects([&] { model.decode({-1}); });
         rejects([&] { model.decode({model.vocabulary_size()}); });
         rejects([&] { BytePairTokenizer().encode("x"); });
-        auto invalid = options;
+        TokenizerTrainingOptions invalid = options;
         invalid.vocabulary_size = 255;
         rejects([&] { BytePairTokenizer::train(corpus, invalid); });
         invalid = options;
@@ -80,19 +80,19 @@ int main() {
         invalid = options;
         invalid.minimum_frequency = 0;
         rejects([&] { BytePairTokenizer::train(corpus, invalid); });
-        auto object = model.to_json().object();
-        auto merges = object.at("merges").array();
+        elman::Json::Object object = model.to_json().object();
+        elman::Json::Array merges = object.at("merges").array();
         merges.push_back(merges.front());
         object["merges"] = merges;
         rejects([&] { BytePairTokenizer::from_json(object); });
         object = model.to_json().object();
-        auto vocabulary = object.at("vocabulary_hex").array();
+        elman::Json::Array vocabulary = object.at("vocabulary_hex").array();
         vocabulary[0] = "gg";
         object["vocabulary_hex"] = vocabulary;
         rejects([&] { BytePairTokenizer::from_json(object); });
         object = model.to_json().object();
         merges = object.at("merges").array();
-        auto merge = merges[0].array();
+        elman::Json::Array merge = merges[0].array();
         merge[2] = 0;
         merges[0] = merge;
         object["merges"] = merges;

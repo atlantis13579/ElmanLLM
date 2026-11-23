@@ -28,9 +28,9 @@ ELMAN_SPATIAL_HD inline LowSpatialImage low_spatial_image(const KernelParams& p,
 ELMAN_SPATIAL_HD inline float low_convolution_value(LowPrecisionSpatial op, int i, LowSpatialValues a,
                                                          LowSpatialValues b, LowSpatialValues bias, const KernelParams& p) {
     const bool forward = op == LowPrecisionSpatial::Convolution, input_gradient = op == LowPrecisionSpatial::InputGradient;
-    const auto x = low_spatial_image(p, input_gradient ? -1 : 0);
-    const auto w = low_spatial_image(p, op == LowPrecisionSpatial::WeightGradient ? -1 : 1);
-    const auto y = low_spatial_image(p, forward ? -1 : input_gradient ? 0 : 1);
+    const LowSpatialImage x = low_spatial_image(p, input_gradient ? -1 : 0);
+    const LowSpatialImage w = low_spatial_image(p, op == LowPrecisionSpatial::WeightGradient ? -1 : 1);
+    const LowSpatialImage y = low_spatial_image(p, forward ? -1 : input_gradient ? 0 : 1);
     const int sh = p.attribute(0), sw = p.attribute(1), ph = p.attribute(2), pw = p.attribute(3);
     const int dh = p.attribute(4), dw = p.attribute(5), outputs_per_group = w.n / p.attribute(6);
 #ifndef __CUDACC__
@@ -113,9 +113,9 @@ ELMAN_SPATIAL_HD inline float low_precision_spatial_value(LowPrecisionSpatial op
     if (op <= LowPrecisionSpatial::WeightGradient) return low_convolution_value(op, i, a, b, c, p);
     const bool gradient = op == LowPrecisionSpatial::MaximumPoolGradient || op == LowPrecisionSpatial::AveragePoolGradient;
     const bool maximum = op == LowPrecisionSpatial::MaximumPool || op == LowPrecisionSpatial::MaximumPoolGradient;
-    const auto x = low_spatial_image(p, 0), y = low_spatial_image(p, gradient ? 1 : -1);
+    const LowSpatialImage x = low_spatial_image(p, 0), y = low_spatial_image(p, gradient ? 1 : -1);
     if (!gradient) {
-        const auto window = low_pool_window(a, x, i / (y.h * y.w), i / y.w % y.h, i % y.w, p);
+        const LowPoolWindow window = low_pool_window(a, x, i / (y.h * y.w), i / y.w % y.h, i % y.w, p);
         return maximum ? window.maximum : window.sum / float(window.count);
     }
     const int ix = i % x.w, iy = i / x.w % x.h, plane = i / (x.h * x.w);
@@ -123,7 +123,7 @@ ELMAN_SPATIAL_HD inline float low_precision_spatial_value(LowPrecisionSpatial op
     for (int oy = 0; oy < y.h; ++oy) for (int ox = 0; ox < y.w; ++ox) {
         const int64_t sy = int64_t(oy) * p.attribute(2) - p.attribute(4), sx = int64_t(ox) * p.attribute(3) - p.attribute(5);
         if (iy < sy || iy >= sy + p.attribute(0) || ix < sx || ix >= sx + p.attribute(1)) continue;
-        const auto window = low_pool_window(a, x, plane, oy, ox, p);
+        const LowPoolWindow window = low_pool_window(a, x, plane, oy, ox, p);
         const float upstream = b[(plane * y.h + oy) * y.w + ox];
         if (maximum) { if (window.selected == i) value += upstream; }
         else value += upstream / float(window.count);

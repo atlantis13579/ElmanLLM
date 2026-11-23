@@ -14,7 +14,7 @@ void sequence(const std::vector<std::string>& stops, const std::vector<std::stri
     elman::TextStopFilter filter(stops);
     check(chunks.size() == expected.size());
     for (size_t i = 0; i < chunks.size(); ++i) {
-        auto value = filter.push(chunks[i]);
+        std::string value = filter.push(chunks[i]);
         elman::utf16(value);
         check(value == expected[i]);
     }
@@ -52,7 +52,7 @@ int main() {
             for (size_t i = 0; i < scalars.size(); ++i) {
                 chunk += scalars[i];
                 if (i + 1 == scalars.size() || (mask & (1u << i))) {
-                    auto value = filter.push(chunk);
+                    std::string value = filter.push(chunk);
                     elman::utf16(value);
                     output += value;
                     chunk.clear();
@@ -61,7 +61,7 @@ int main() {
             output += filter.finish();
             check(output == u8"x🚀" && filter.matched_stop() == u8"结束");
         }
-        for (const auto& stop : {std::string(), std::string("\xff", 1)}) {
+        for (const std::string& stop : {std::string(), std::string("\xff", 1)}) {
             bool rejected = false;
             try { elman::TextStopFilter filter({stop}); } catch (const std::exception&) { rejected = true; }
             check(rejected);

@@ -3,7 +3,7 @@
 
 namespace elman {
 void validate_float64_softmax(const BufferPtr& output, const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool value, const char* message) { if (!value) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool value, const char* message) { if (!value) throw std::invalid_argument(message); };
     require(inputs.size() >= 1 && inputs.size() <= 4 && inputs[0], "Double softmax requires one input");
     for (size_t i = 1; i < inputs.size(); ++i) require(!inputs[i], "Unexpected Double softmax operand");
     require(output->dtype == DType::Float64 && inputs[0]->dtype == DType::Float64, "Double softmax requires matching dtypes");
@@ -25,7 +25,7 @@ void validate_float64_softmax(const BufferPtr& output, const std::vector<BufferP
     }
     require(count == inputs[0]->count && count == output->count && p.output_count() == int(count), "Double softmax element counts differ");
     if (output->bytes && inputs[0]->bytes) {
-        const auto a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[0]->raw_pointer());
+        const uintptr_t a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[0]->raw_pointer());
         const bool overlap = a <= b ? b - a < output->bytes : a - b < inputs[0]->bytes;
         require(!overlap || a == b, "Partially overlapping Double softmax buffers");
     }

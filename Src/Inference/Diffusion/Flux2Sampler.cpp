@@ -1,4 +1,5 @@
 #include "Inference/Diffusion/Flux2Sampler.h"
+#include "Core/LocalFunction.h"
 
 #include <cmath>
 #include <stdexcept>
@@ -68,11 +69,11 @@ Tensor text_positions(int length, Backend backend) {
 
 Tensor sample(const Transformer& model, const Tensor& noise, const Tensor& prompt, const Tensor& empty_prompt,
               const std::vector<Tensor>& references, const SamplingOptions& options) {
-  const auto& s = noise.shape();
+  const Shape& s = noise.shape();
   if (s.size() != 4 || s[0] < 1 || s[1] != 128 || prompt.shape().size() != 3 || prompt.shape()[0] != s[0]) {
     throw std::invalid_argument("Invalid FLUX.2 noise or prompt batch");
   }
-  const auto variant = model.variant();
+  const Variant variant = model.variant();
   const bool cfg = variant == Variant::Base4B || variant == Variant::Base9B, dev = variant == Variant::Dev;
   if (cfg && (!empty_prompt.defined() || empty_prompt.shape() != prompt.shape())) {
     throw std::invalid_argument("Base checkpoint CFG requires empty-prompt conditioning for each image");
@@ -84,12 +85,12 @@ Tensor sample(const Transformer& model, const Tensor& noise, const Tensor& promp
   }
 
   DeviceScope owner(noise.backend(), noise.device());
-  auto img = image_tokens(noise);
-  auto grid = [&](int h, int w, int index) { return rotary_table(image_positions(h, w, index, noise.backend())); };
-  auto ip = grid(s[2], s[3], 0), tp = rotary_table(text_positions(prompt.shape()[1], noise.backend()));
+  Tensor img = image_tokens(noise);
+  LocalFunction grid{[&](int h, int w, int index) { return rotary_table(image_positions(h, w, index, noise.backend())); }};
+  Tensor ip = grid(s[2], s[3], 0), tp = rotary_table(text_positions(prompt.shape()[1], noise.backend()));
   std::vector<Tensor> tokens, tables;
-  for (const auto& ref : references) {
-    const auto& r = ref.shape();
+  for (const Tensor& ref : references) {
+    const Shape& r = ref.shape();
     if (r.size() != 4 || r[0] != s[0] || r[1] != 128 || ref.dtype() != noise.dtype()) {
       throw std::invalid_argument("Invalid FLUX.2 reference latent");
     }
@@ -101,18 +102,18 @@ Tensor sample(const Transformer& model, const Tensor& noise, const Tensor& promp
     ref = concat(tokens, 1);
     rp = concat(tables, 1);
   }
-  const auto schedule = flow_schedule(steps, img.shape()[1]);
-  auto scalar_batch = [&](float x) {
+  const std::vector<float> schedule = flow_schedule(steps, img.shape()[1]);
+  LocalFunction scalar_batch{[&](float x) {
     return Tensor::from_data({s[0]}, std::vector<float>(s[0], x), noise.backend(), false, noise.dtype());
-  };
+  }};
   Tensor g = dev ? scalar_batch(guidance) : Tensor{};
   const bool cached = variant == Variant::Klein9BKV && ref.defined();
   ReferenceCache cache;
   for (int i = 0; i < steps; ++i) {
     if (options.before_step) options.before_step(i + 1);
-    auto time = scalar_batch(schedule[i]);
+    Tensor time = scalar_batch(schedule[i]);
     const bool omit = cached && i > 0;
-    auto velocity = model.predict(img, prompt, time, ip, tp, g, omit ? Tensor{} : ref, omit ? Tensor{} : rp,
+    Tensor velocity = model.predict(img, prompt, time, ip, tp, g, omit ? Tensor{} : ref, omit ? Tensor{} : rp,
                                   cached ? &cache : nullptr);
     if (cfg) {
       velocity = guided_velocity(model.predict(img, empty_prompt, time, ip, tp, {}, ref, rp), velocity, guidance);

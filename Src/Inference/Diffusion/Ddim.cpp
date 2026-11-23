@@ -11,11 +11,11 @@ namespace {
 std::vector<float> betas(const Json& config, int count) {
   if (config.contains("trained_betas") && !config.at("trained_betas").is_null()) {
     std::vector<float> values;
-    for (const auto& value : config.at("trained_betas").array()) values.push_back(static_cast<float>(value.number()));
+    for (const Json& value : config.at("trained_betas").array()) values.push_back(static_cast<float>(value.number()));
     if (values.size() != size_t(count)) throw std::invalid_argument("DDIM beta count differs from training timesteps");
     return values;
   }
-  const auto schedule = config.string_or("beta_schedule", "linear");
+  const std::string schedule = config.string_or("beta_schedule", "linear");
   if (schedule != "linear" && schedule != "scaled_linear") throw std::invalid_argument("Unsupported DDIM beta schedule");
   const double start = config.number_or("beta_start", 0.0001);
   const double end = config.number_or("beta_end", 0.02);
@@ -34,9 +34,9 @@ std::vector<float> betas(const Json& config, int count) {
 }
 
 Tensor scale_latent(const Tensor& value, float factor, bool inverse = false) {
-  const auto dtype = value.dtype();
-  const auto wide = dtype == DType::Float32 ? value : cast(value, DType::Float32);
-  auto result = inverse ? div(wide, factor) : mul(wide, factor);
+  const DType dtype = value.dtype();
+  const Tensor wide = dtype == DType::Float32 ? value : cast(value, DType::Float32);
+  Tensor result = inverse ? div(wide, factor) : mul(wide, factor);
   return result.dtype() == dtype ? result : cast(result, dtype);
 }
 
@@ -83,10 +83,10 @@ DdimStep DdimScheduler::step(size_t index, const Tensor& noise, const Tensor& la
   const int previous = timestep - ratio_;
   const float alpha = alpha_products_[timestep];
   const float previous_alpha = previous >= 0 ? alpha_products_[previous] : final_alpha_;
-  auto original = scale_latent(sub(latent, scale_latent(noise, std::sqrt(1.0f - alpha))), std::sqrt(alpha), true);
+  Tensor original = scale_latent(sub(latent, scale_latent(noise, std::sqrt(1.0f - alpha))), std::sqrt(alpha), true);
   if (clip_range_ > 0.0f) {
-    auto high = Tensor::from_data({}, {clip_range_}, latent.backend(), false, latent.dtype());
-    auto low = Tensor::from_data({}, {-clip_range_}, latent.backend(), false, latent.dtype());
+    Tensor high = Tensor::from_data({}, {clip_range_}, latent.backend(), false, latent.dtype());
+    Tensor low = Tensor::from_data({}, {-clip_range_}, latent.backend(), false, latent.dtype());
     original = maximum(low, minimum(original, high));
   }
   return {add(scale_latent(original, std::sqrt(previous_alpha)), scale_latent(noise, std::sqrt(1.0f - previous_alpha))), original};

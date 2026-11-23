@@ -1,19 +1,20 @@
 #include "Operators/float64_normalization_math.h"
+#include "Core/LocalFunction.h"
 #include <stdexcept>
 
 namespace elman {
 void validate_float64_normalization(Float64Normalization op, const BufferPtr& output,
         const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     const bool layer = op == Float64Normalization::Layer || op == Float64Normalization::Rms;
     const bool batch = op == Float64Normalization::Batch;
     const bool dx = op == Float64Normalization::GroupInputGradient, dw = op == Float64Normalization::GroupWeightGradient;
     require(inputs.size() >= 1 && inputs.size() <= 4 && inputs[0], "Double normalization requires an input");
-    auto present = [&](int i) { return size_t(i) < inputs.size() && bool(inputs[i]); };
-    auto shape = [&](int input) {
+    LocalFunction present{[&](int i) { return size_t(i) < inputs.size() && bool(inputs[i]); }};
+    LocalFunction shape{[&](int input) {
         const bool out = input < 0;
-        const auto id = KernelInput(out ? 0 : input);
-        const auto buffer = out ? output : inputs[input];
+        const KernelInput id = KernelInput(out ? 0 : input);
+        const BufferPtr buffer = out ? output : inputs[input];
         const int rank = out ? p.output_rank() : p.input_rank(id);
         require(rank >= 0 && rank <= 8, "Invalid Double normalization rank");
         require(buffer->dtype == DType::Float64, "Double normalization requires matching Double operands");
@@ -29,8 +30,8 @@ void validate_float64_normalization(Float64Normalization op, const BufferPtr& ou
         }
         require(count == buffer->count && (!out || p.output_count() == int(count)), "Double normalization shape differs from storage");
         return result;
-    };
-    const auto output_shape = shape(-1), input_shape = shape(0);
+    }};
+    const std::vector<int> output_shape = shape(-1), input_shape = shape(0);
     for (int i = 0; i < 4; ++i) {
         const bool needed = i == 0 || ((batch || dx) && i < 3) || (dw && i == 1);
         require(!needed || present(i), "Missing Double normalization operand");
@@ -39,7 +40,7 @@ void validate_float64_normalization(Float64Normalization op, const BufferPtr& ou
             require(i < 3 && (!dw || i < 2), "Unexpected Double normalization operand");
             shape(i);
             if (output->bytes && inputs[i]->bytes) {
-                const auto a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
+                const uintptr_t a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
                 require(!(a <= b ? b - a < output->bytes : a - b < inputs[i]->bytes), "Overlapping Double normalization buffers");
             }
         }

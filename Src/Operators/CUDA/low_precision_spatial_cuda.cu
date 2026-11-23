@@ -6,7 +6,7 @@ namespace {
 __global__ void low_spatial_kernel(LowPrecisionSpatial op, uint32_t* out, const uint32_t* a, const uint32_t* b, const uint32_t* c, KernelParams p, unsigned bytes) {
     const unsigned byte = blockIdx.x * blockDim.x + threadIdx.x;
     if (byte < bytes) {
-        const auto dtype = DType(p.output_dtype());
+        const DType dtype = DType(p.output_dtype());
         const LowSpatialValues x{a, dtype}, y{b, dtype}, z{c, dtype};
         const bool packed = dtype == DType::Float4E2M1FN;
         const int i = packed ? byte * 2 : byte;

@@ -11,7 +11,7 @@
 #endif
 namespace elman {
 ELMAN_LOW_RANDOM_HD inline uint8_t low_precision_random_code(LowPrecisionRandom op, int index, const uint32_t* input, const KernelParams& p) {
-    const auto dtype = DType(p.output_dtype());
+    const DType dtype = DType(p.output_dtype());
     const double first = float64_random_parameter(p, 0), second = float64_random_parameter(p, 1);
     float value;
     if (op == LowPrecisionRandom::Dropout) {

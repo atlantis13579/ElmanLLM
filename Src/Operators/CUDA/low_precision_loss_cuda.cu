@@ -7,7 +7,7 @@
 namespace elman {
 namespace {
 __global__ void low_mse_forward(uint32_t* output, const uint32_t* a, const uint32_t* b, KernelParams p, int count) {
-    const auto dtype = DType(p.output_dtype());
+    const DType dtype = DType(p.output_dtype());
     float total = 0;
     for (int i = 0; i < count; ++i) {
         const float delta = low_precision_value(a, i, dtype) - low_precision_value(b, i, dtype);
@@ -29,7 +29,7 @@ __global__ void low_ce_forward(uint32_t* output, const float* values, const int3
 }
 __global__ void low_loss_gradient(uint32_t* output, const uint32_t* a, const uint32_t* b, const uint32_t* c,
                                    const float* values, KernelParams p, int count, bool mse) {
-    const auto dtype = DType(p.input_dtype(KernelInput::A));
+    const DType dtype = DType(p.input_dtype(KernelInput::A));
     const bool wide = p.output_dtype() == int(DType::Float32), packed = !wide && dtype == DType::Float4E2M1FN;
     const unsigned byte = blockIdx.x * blockDim.x + threadIdx.x;
     const int first = packed ? int(byte * 2) : int(byte);
@@ -60,8 +60,8 @@ void launch_low_precision_loss_cuda(LowPrecisionLoss op, uint32_t* output, const
     }
     const bool mse = op == LowPrecisionLoss::MeanSquaredErrorGradient;
     if (mse && !count) return;
-    auto workspace = mse ? BufferPtr{} : backend_workspace(Backend::CUDA, checked_memory_mul(size_t(count), sizeof(float)));
-    auto* values = workspace ? static_cast<float*>(workspace->raw_pointer()) : nullptr;
+    BufferPtr workspace = mse ? BufferPtr{} : backend_workspace(Backend::CUDA, checked_memory_mul(size_t(count), sizeof(float)));
+    float* values = workspace ? static_cast<float*>(workspace->raw_pointer()) : nullptr;
     if (!mse) launch_low_precision_softmax_cuda(LowPrecisionSoftmax::LogSoftmax, reinterpret_cast<uint32_t*>(values), a, nullptr, low_loss_softmax_params(p));
     if (op == LowPrecisionLoss::CrossEntropy) {
         const int rows = p.input_shape(KernelInput::A, 0);

@@ -5,7 +5,7 @@
 namespace elman {
 void validate_low_precision_fused(LowPrecisionFused op, const BufferPtr& output,
                                       const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     const int arity = op == LowPrecisionFused::Rotary ? 3 : 2;
     require(inputs.size() >= size_t(arity) && inputs.size() <= 4, "Invalid low precision fused operand count");
     for (size_t i = arity; i < inputs.size(); ++i) require(!inputs[i], "Unexpected low precision fused operand");
@@ -15,7 +15,7 @@ void validate_low_precision_fused(LowPrecisionFused op, const BufferPtr& output,
     std::vector<int> shape;
     for (int i = 0; i < arity; ++i) {
         require(bool(inputs[i]), "Missing low precision fused operand");
-        const auto input = KernelInput(i);
+        const KernelInput input = KernelInput(i);
         const int rank = p.input_rank(input);
         require(rank >= 0 && rank <= 8, "Invalid low precision fused input rank");
         require(inputs[i]->dtype == dtype, "Low precision fused operands must match");
@@ -58,8 +58,8 @@ void validate_low_precision_fused(LowPrecisionFused op, const BufferPtr& output,
     }
     for (int i = 0; i < arity; ++i) {
         if (!output->bytes || !inputs[i]->bytes) continue;
-        const auto a = reinterpret_cast<uintptr_t>(output->raw_pointer());
-        const auto b = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
+        const uintptr_t a = reinterpret_cast<uintptr_t>(output->raw_pointer());
+        const uintptr_t b = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
         const bool overlap = a <= b ? b - a < output->bytes : a - b < inputs[i]->bytes;
         if (!overlap) continue;
         require(op != LowPrecisionFused::Rotary, "Rotary output overlaps an operand");

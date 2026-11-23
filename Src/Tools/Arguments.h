@@ -16,8 +16,8 @@ namespace elman::tools {
 
 inline int integer_argument(std::string_view text, std::string_view option) {
     int value = 0;
-    const auto end = text.data() + text.size();
-    const auto result = std::from_chars(text.data(), end, value);
+    const char* const end = text.data() + text.size();
+    const std::from_chars_result result = std::from_chars(text.data(), end, value);
     if (result.ec != std::errc{} || result.ptr != end)
         throw std::invalid_argument("Invalid integer for " + std::string(option));
     return value;

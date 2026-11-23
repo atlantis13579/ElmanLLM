@@ -41,13 +41,13 @@ void launch_mse_loss_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
   for (int axis = 0; axis < p.input_rank(KernelInput::A); ++axis)
     count *= p.input_shape(KernelInput::A, axis);
   const int blocks = std::clamp((count / (threads * 4)) + 1, 1, 256);
-  const auto stream = current_cuda_stream();
+  const cudaStream_t stream = current_cuda_stream();
   if (blocks == 1) {
     squared_error<<<1, threads, 0, stream>>>(a, b, nullptr, out, count, p);
     return;
   }
-  auto workspace = backend_workspace(Backend::CUDA, size_t(blocks) * sizeof(float));
-  auto* partial = static_cast<float*>(workspace->raw_pointer());
+  BufferPtr workspace = backend_workspace(Backend::CUDA, size_t(blocks) * sizeof(float));
+  float* partial = static_cast<float*>(workspace->raw_pointer());
   squared_error<<<blocks, threads, 0, stream>>>(a, b, partial, nullptr, count, p);
   finish_squared_error<<<1, threads, 0, stream>>>(out, partial, blocks, count, p);
 }

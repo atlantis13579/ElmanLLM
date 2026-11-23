@@ -1,4 +1,5 @@
 #include "Operators/low_precision_attention.h"
+#include "Core/LocalFunction.h"
 #include "Core/TensorDispatch.h"
 #include "Core/Graph.h"
 #include <algorithm>
@@ -8,7 +9,7 @@
 namespace elman {
 namespace {
 Tensor wrap(const BufferPtr& buffer, Shape shape) {
-    auto node = std::make_shared<TensorNode>();
+    std::shared_ptr<TensorNode> node = std::make_shared<TensorNode>();
     node->shape = std::move(shape); node->value = buffer;
     return Tensor(node);
 }
@@ -37,12 +38,12 @@ Tensor native_matrix(const Tensor& a, const Tensor& b, bool transpose_a = false,
     return dispatch_tensor("attention_softmax", {a.shape()[0], a.shape()[1], a.shape()[transpose_a ? 3 : 2], b.shape()[transpose_b ? 2 : 3]}, {a, b}, attributes, DType::Float32);
 }
 Tensor expand_heads(const Tensor& input, int heads) {
-    const auto& s = input.shape();
+    const Shape& s = input.shape();
     const int groups = heads / s[1];
     return reshape(expand(reshape(input, {s[0], s[1], 1, s[2], s[3]}), {s[0], s[1], groups, s[2], s[3]}), {s[0], heads, s[2], s[3]});
 }
 Tensor reduce_heads(const Tensor& gradient, const Shape& shape, int heads) {
-    auto grouped = reshape(gradient, {shape[0], shape[1], heads / shape[1], shape[2], shape[3]});
+    Tensor grouped = reshape(gradient, {shape[0], shape[1], heads / shape[1], shape[2], shape[3]});
     if (heads == shape[1]) return reshape(grouped, shape);
     std::vector<int> attrs(9); attrs[0] = 4; attrs[8] = 5;
     return reshape(dispatch_tensor("attention_softmax", {shape[0], shape[1], 1, shape[2], shape[3]}, {grouped}, attrs, DType::Float32), shape);
@@ -76,16 +77,16 @@ Tensor select_mask(Tensor mask, int start, int rows, int batch = -1, int head = 
     return mask;
 }
 Tensor tiled_forward(const Tensor& query, const Tensor& key, const Tensor& value, const Tensor& mask, const KernelParams& p) {
-    const auto& q = query.shape(); const auto& v = value.shape();
+    const Shape& q = query.shape(); const Shape& v = value.shape();
     const Shape shape{q[0], q[1], q[2], v[3]};
     if (!shape_element_count(shape)) return Tensor::zeros(shape, query.backend());
-    const auto keys = expand_heads(key, q[1]), values = expand_heads(value, q[1]);
+    const Tensor keys = expand_heads(key, q[1]), values = expand_heads(value, q[1]);
     const double scale = divisor(p, 0);
     if (!p.attribute(4)) {
         std::vector<Tensor> tiles;
         for (int start = 0; start < q[2];) {
             const int rows = std::min(p.attribute(1), q[2] - start);
-            auto probability = probabilities(slice(query, 2, start, start + rows), keys, select_mask(mask, start, rows), scale,
+            Tensor probability = probabilities(slice(query, 2, start, start + rows), keys, select_mask(mask, start, rows), scale,
                                              p.attribute(2) != 0, int64_t(p.attribute(3)) + start);
             tiles.push_back(native_matrix(probability, values)); start += rows;
         }
@@ -93,8 +94,8 @@ Tensor tiled_forward(const Tensor& query, const Tensor& key, const Tensor& value
     }
     std::vector<Tensor> heads;
     for (int batch = 0; batch < q[0]; ++batch) for (int head = 0; head < q[1]; ++head) {
-        auto select = [&](const Tensor& input) { return slice(slice(input, 0, batch, batch + 1), 1, head, head + 1); };
-        auto probability = probabilities(select(query), select(keys), select_mask(mask, 0, q[2], batch, head), scale,
+        LocalFunction select{[&](const Tensor& input) { return slice(slice(input, 0, batch, batch + 1), 1, head, head + 1); }};
+        Tensor probability = probabilities(select(query), select(keys), select_mask(mask, 0, q[2], batch, head), scale,
                                          p.attribute(2) != 0, p.attribute(3));
         heads.push_back(native_matrix(probability, select(values)));
     }
@@ -105,7 +106,7 @@ void execute_low_precision_attention(LowPrecisionAttention op, const BufferPtr& 
                                       const std::vector<BufferPtr>& inputs, const KernelParams& p) {
     // Tensor orchestration stays on the selected backend and preserves its
     // stream/event dependencies. Only the final result returns to FP8/FP4.
-    const auto a = cast(operand(inputs, 0, p), DType::Float32), b = cast(operand(inputs, 1, p), DType::Float32);
+    const Tensor a = cast(operand(inputs, 0, p), DType::Float32), b = cast(operand(inputs, 1, p), DType::Float32);
     Tensor result;
     if (op == LowPrecisionAttention::Softmax) result = native_softmax(add(div(a, divisor(p, 1)), b), p.attribute(0));
     else result = tiled_forward(a, b, cast(operand(inputs, 2, p), DType::Float32), cast(operand(inputs, 3, p), DType::Float32), p);
@@ -113,21 +114,21 @@ void execute_low_precision_attention(LowPrecisionAttention op, const BufferPtr& 
 }
 Tensor low_attention_reduce_shape(const Tensor& gradient, const Shape& shape) { return reduce_shape(gradient, shape); }
 Tensor low_attention_softmax_derivative(const Tensor& scores, const Tensor& mask, double scale, int axis, const Tensor& gradient) {
-    const auto input = add(div(cast(scores.detach(), DType::Float32), scale), cast(mask.detach(), DType::Float32));
+    const Tensor input = add(div(cast(scores.detach(), DType::Float32), scale), cast(mask.detach(), DType::Float32));
     return native_softmax(native_softmax(input, axis), axis, cast(gradient, DType::Float32));
 }
 std::vector<Tensor> low_tiled_attention_derivatives(const Tensor& query, const Tensor& key, const Tensor& value,
     const Tensor& mask, double scale, bool causal, int offset, const Tensor& gradient) {
-    const auto q = cast(query.detach(), DType::Float32), k = cast(key.detach(), DType::Float32),
+    const Tensor q = cast(query.detach(), DType::Float32), k = cast(key.detach(), DType::Float32),
                v = cast(value.detach(), DType::Float32), m = cast(mask.detach(), DType::Float32), g = cast(gradient, DType::Float32);
     const int heads = q.shape()[1];
-    const auto keys = expand_heads(k, heads), values = expand_heads(v, heads);
+    const Tensor keys = expand_heads(k, heads), values = expand_heads(v, heads);
     Tensor upper;
-    const auto probability = probabilities(q, keys, m, scale, causal, offset, &upper);
+    const Tensor probability = probabilities(q, keys, m, scale, causal, offset, &upper);
     std::vector<Tensor> result(4);
     if (value.requires_grad()) result[2] = reduce_heads(native_matrix(probability, g, true), value.shape(), heads);
     if (query.requires_grad() || key.requires_grad() || mask.requires_grad()) {
-        const auto dz = native_softmax(probability, 3, native_matrix(g, values, false, true));
+        const Tensor dz = native_softmax(probability, 3, native_matrix(g, values, false, true));
         if (mask.requires_grad()) result[3] = reduce_shape(upper.defined() ? where(upper, Tensor::zeros({}, query.backend()), dz) : dz, mask.shape());
         if (query.requires_grad()) result[0] = native_matrix(div(dz, scale), keys);
         if (key.requires_grad()) result[1] = reduce_heads(native_matrix(div(dz, scale), q, true), key.shape(), heads);

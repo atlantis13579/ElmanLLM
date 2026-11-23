@@ -1,4 +1,5 @@
 #include "Inference/LLM/Sampling.h"
+#include "Core/LocalFunction.h"
 #include "Core/Graph.h"
 #include "Core/Memory.h"
 #include "Core/TensorDispatch.h"
@@ -46,7 +47,7 @@ int32_t greedy_token(const Tensor& logits) {
     }
 #endif
     MemoryReservation host_logits(Backend::CPU, checked_memory_mul(logits.numel(), 8));
-    auto values = logits.data();
+    std::vector<float> values = logits.data();
     auto best = values.begin();
     for (auto it = values.begin(); it != values.end(); ++it) {
         require(std::isfinite(*it), "model produced nonfinite logits");
@@ -69,35 +70,35 @@ Tensor sampling_scores(const Tensor& logits, const Tensor& history, const Sampli
     require(history.defined() && history.dtype() == DType::Int32 && history.backend() == logits.backend() &&
             history.shape().size() == 2 && history.shape()[0] == rows, "invalid history shape, dtype or backend");
     const bool wide = logits.dtype() == DType::Float64;
-    const auto dtype = wide ? DType::Float64 : DType::Float32;
-    auto scalar = [&](double value) { return wide ? Tensor::from_double_data({}, {value}, logits.backend()) :
-                                                   Tensor::from_data({}, {float(value)}, logits.backend()); };
-    auto scores = cast(logits.detach(), dtype);
+    const DType dtype = wide ? DType::Float64 : DType::Float32;
+    LocalFunction scalar{[&](double value) { return wide ? Tensor::from_double_data({}, {value}, logits.backend()) :
+                                                   Tensor::from_data({}, {float(value)}, logits.backend()); }};
+    Tensor scores = cast(logits.detach(), dtype);
     if (history.shape()[1]) {
         // The extra column records invalid IDs without an out-of-bounds write.
-        auto present = dispatch_tensor("token_presence", {rows, width + 1}, {history}, {}, DType::Int32);
-        for (auto invalid : slice(present, 1, width, width + 1).int_data())
+        Tensor present = dispatch_tensor("token_presence", {rows, width + 1}, {history}, {}, DType::Int32);
+        for (int invalid : slice(present, 1, width, width + 1).int_data())
             require(!invalid, "history ID outside vocabulary");
         if (options.repetition_penalty != 1) {
-            auto zero = scalar(0.);
-            auto penalty = wide ? options.repetition_penalty : double(float(options.repetition_penalty));
-            auto penalized = where(lt(scores, zero), mul(scores, penalty), div(scores, penalty));
+            Tensor zero = scalar(0.);
+            double penalty = wide ? options.repetition_penalty : double(float(options.repetition_penalty));
+            Tensor penalized = where(lt(scores, zero), mul(scores, penalty), div(scores, penalty));
             scores = where(cast(slice(present, 1, 0, width), DType::Bool), penalized, scores);
         }
     }
     if (options.temperature != 1) scores = div(scores, wide ? options.temperature : double(float(options.temperature)));
     if ((!options.top_k || options.top_k >= width) && options.top_p == 1) return scores;
-    auto ordered = sort(scores, 1);
-    auto filtered = ordered.first;
-    auto negative_infinity = scalar(-std::numeric_limits<double>::infinity());
+    std::pair<Tensor, Tensor> ordered = sort(scores, 1);
+    Tensor filtered = ordered.first;
+    Tensor negative_infinity = scalar(-std::numeric_limits<double>::infinity());
     if (options.top_k && options.top_k < width) {
-        auto cutoff = slice(filtered, 1, width - options.top_k, width - options.top_k + 1);
+        Tensor cutoff = slice(filtered, 1, width - options.top_k, width - options.top_k + 1);
         filtered = where(lt(filtered, cutoff), negative_infinity, filtered);
     }
     if (options.top_p < 1) {
-        auto cumulative = cumsum(softmax(filtered, 1), 1);
-        auto cutoff = scalar(1 - options.top_p);
-        auto masked = where(le(cumulative, cutoff), negative_infinity, filtered);
+        Tensor cumulative = cumsum(softmax(filtered, 1), 1);
+        Tensor cutoff = scalar(1 - options.top_p);
+        Tensor masked = where(le(cumulative, cutoff), negative_infinity, filtered);
         // Keep at least one token, including top_p=0 and a one-token vocabulary.
         filtered = concat({slice(masked, 1, 0, width - 1), slice(filtered, 1, width - 1, width)}, 1);
     }
@@ -108,11 +109,11 @@ std::vector<int32_t> categorical_sample(const Tensor& weights, const std::vector
     if (weights.dtype() == DType::Float64) return categorical_sample_double(weights, std::vector<double>(uniforms.begin(), uniforms.end()));
     require(uniforms.size() == size_t(weights.shape()[0]), "one uniform is required per row");
     for (float value : uniforms) require(std::isfinite(value) && value >= 0 && value < 1, "uniform must be in [0, 1)");
-    auto values = is_low_precision_float(weights.dtype()) ? cast(weights.detach(), DType::Float32) : weights.detach();
-    auto cumulative = cumsum(values, 1);
-    auto random = Tensor::from_data({weights.shape()[0]}, uniforms, weights.backend());
-    auto ids = dispatch_tensor("categorical", {weights.shape()[0]}, {values, cumulative, random}, {}, DType::Int32).int_data();
-    for (auto id : ids) require(id >= 0, "invalid probability distribution");
+    Tensor values = is_low_precision_float(weights.dtype()) ? cast(weights.detach(), DType::Float32) : weights.detach();
+    Tensor cumulative = cumsum(values, 1);
+    Tensor random = Tensor::from_data({weights.shape()[0]}, uniforms, weights.backend());
+    std::vector<int32_t> ids = dispatch_tensor("categorical", {weights.shape()[0]}, {values, cumulative, random}, {}, DType::Int32).int_data();
+    for (int id : ids) require(id >= 0, "invalid probability distribution");
     return ids;
 }
 std::vector<int32_t> categorical_sample_double(const Tensor& weights, const std::vector<double>& uniforms) {
@@ -120,23 +121,23 @@ std::vector<int32_t> categorical_sample_double(const Tensor& weights, const std:
     require(weights.dtype() == DType::Float64, "Double uniforms require Double weights");
     require(uniforms.size() == size_t(weights.shape()[0]), "one uniform is required per row");
     for (double value : uniforms) require(std::isfinite(value) && value >= 0. && value < 1., "uniform must be in [0, 1)");
-    auto values = weights.detach();
-    auto cumulative = cumsum(values, 1);
-    auto random = Tensor::from_double_data({weights.shape()[0]}, uniforms, weights.backend());
-    auto ids = dispatch_tensor("categorical", {weights.shape()[0]}, {values, cumulative, random}, {}, DType::Int32).int_data();
-    for (auto id : ids) require(id >= 0, "invalid probability distribution");
+    Tensor values = weights.detach();
+    Tensor cumulative = cumsum(values, 1);
+    Tensor random = Tensor::from_double_data({weights.shape()[0]}, uniforms, weights.backend());
+    std::vector<int32_t> ids = dispatch_tensor("categorical", {weights.shape()[0]}, {values, cumulative, random}, {}, DType::Int32).int_data();
+    for (int id : ids) require(id >= 0, "invalid probability distribution");
     return ids;
 }
 std::vector<int32_t> sample_tokens(const Tensor& logits, const Tensor& history,
                                  const SamplingOptions& options, SamplingRng& rng) {
-    auto probabilities = softmax(sampling_scores(logits, history, options), 1);
+    Tensor probabilities = softmax(sampling_scores(logits, history, options), 1);
     if (probabilities.dtype() == DType::Float64) {
         std::vector<double> uniforms(probabilities.shape()[0]);
-        for (auto& value : uniforms) value = rng.next_double();
+        for (double& value : uniforms) value = rng.next_double();
         return categorical_sample_double(probabilities, uniforms);
     }
     std::vector<float> uniforms(probabilities.shape()[0]);
-    for (auto& value : uniforms) value = rng.next();
+    for (float& value : uniforms) value = rng.next();
     return categorical_sample(probabilities, uniforms);
 }
 } // namespace elman

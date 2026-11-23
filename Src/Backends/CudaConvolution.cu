@@ -25,7 +25,8 @@ void check(cudnnStatus_t status, const char* action) {
     throw std::runtime_error(std::string(action) + ": " + cudnnGetErrorString(status));
 }
 
-template <class Descriptor, auto Create, auto Destroy>
+template <class Descriptor, cudnnStatus_t (CUDNNWINAPI *Create)(Descriptor*),
+          cudnnStatus_t (CUDNNWINAPI *Destroy)(Descriptor)>
 struct OwnedDescriptor {
   Descriptor value = nullptr;
   OwnedDescriptor() { check(Create(&value), "Create cuDNN descriptor"); }
@@ -52,7 +53,7 @@ struct Plan {
     if (status == CUDNN_STATUS_NOT_SUPPORTED) return;
     check(status, "Select cuDNN convolution algorithm");
     for (int i = 0; i < count; ++i) {
-      const auto& candidate = results[i];
+      const Perf& candidate = results[i];
       if (candidate.status != CUDNN_STATUS_SUCCESS || candidate.determinism != CUDNN_DETERMINISTIC ||
           candidate.memory > workspace_limit || candidate.mathType == CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) continue;
       check(cudnnSetConvolutionMathType(convolution, candidate.mathType), "Set cuDNN convolution math type");
@@ -64,7 +65,7 @@ struct Plan {
 
   Plan(cudnnHandle_t handle, CudaConvolution operation, const Shape4& x, const Shape4& w,
        const Shape4& y, const std::array<int, 7>& geometry) {
-    auto tensor = [](const TensorDescriptor& d, const Shape4& s) {
+    void (*const tensor)(const TensorDescriptor&, const Shape4&) = [](const TensorDescriptor& d, const Shape4& s) {
       check(cudnnSetTensor4dDescriptor(d, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, s[0], s[1], s[2], s[3]),
             "Set cuDNN tensor shape");
     };
@@ -81,21 +82,21 @@ struct Plan {
     switch (operation) {
       case CudaConvolution::Forward: {
         std::array<cudnnConvolutionFwdAlgoPerf_t, CUDNN_CONVOLUTION_FWD_ALGO_COUNT> results{};
-        auto status = cudnnGetConvolutionForwardAlgorithm_v7(handle, input, weight, convolution, output,
+        cudnnStatus_t status = cudnnGetConvolutionForwardAlgorithm_v7(handle, input, weight, convolution, output,
                                                              int(results.size()), &count, results.data());
         select(status, results, count);
         break;
       }
       case CudaConvolution::InputGradient: {
         std::array<cudnnConvolutionBwdDataAlgoPerf_t, CUDNN_CONVOLUTION_BWD_DATA_ALGO_COUNT> results{};
-        auto status = cudnnGetConvolutionBackwardDataAlgorithm_v7(handle, weight, output, convolution, input,
+        cudnnStatus_t status = cudnnGetConvolutionBackwardDataAlgorithm_v7(handle, weight, output, convolution, input,
                                                                   int(results.size()), &count, results.data());
         select(status, results, count);
         break;
       }
       case CudaConvolution::WeightGradient: {
         std::array<cudnnConvolutionBwdFilterAlgoPerf_t, CUDNN_CONVOLUTION_BWD_FILTER_ALGO_COUNT> results{};
-        auto status = cudnnGetConvolutionBackwardFilterAlgorithm_v7(handle, input, output, convolution, weight,
+        cudnnStatus_t status = cudnnGetConvolutionBackwardFilterAlgorithm_v7(handle, input, output, convolution, weight,
                                                                     int(results.size()), &count, results.data());
         select(status, results, count);
         break;
@@ -147,23 +148,23 @@ bool try_convolution_cuda(CudaConvolution operation, uint32_t* out, const uint32
   const int64_t work = int64_t(y[0]) * y[1] * y[2] * y[3] * w[1] * w[2] * w[3];
   if (work < minimum_work) return false;
 
-  const auto stream = current_cuda_stream();
+  const cudaStream_t stream = current_cuda_stream();
   cudaStreamCaptureStatus capturing;
   check_cuda_execution(cudaStreamIsCapturing(stream, &capturing), "Query CUDA convolution stream");
   if (capturing != cudaStreamCaptureStatusNone) return false;
   int device = 0;
   check_cuda_execution(cudaGetDevice(&device), "Get CUDA convolution device");
   static thread_local std::map<int, std::unique_ptr<Context>> contexts;
-  auto& owner = contexts[device];
+  std::unique_ptr<Context>& owner = contexts[device];
   if (!owner) owner = std::make_unique<Context>(device);
-  auto& context = *owner;
+  Context& context = *owner;
   check(cudnnSetStream(context.handle, stream), "Set cuDNN stream");
 
   std::array<int, 7> geometry{};
   Key key{};
   int position = 0;
   key[position++] = static_cast<int>(operation);
-  for (const auto& shape : {x, w, y}) for (int extent : shape) key[position++] = extent;
+  for (const std::array<int, 4>& shape : {x, w, y}) for (int extent : shape) key[position++] = extent;
   for (size_t i = 0; i < geometry.size(); ++i) key[position++] = geometry[i] = p.attribute(int(i));
   auto entry = context.plans.find(key);
   if (entry == context.plans.end()) {
@@ -178,7 +179,7 @@ bool try_convolution_cuda(CudaConvolution operation, uint32_t* out, const uint32
     catch (const MemoryLimitExceeded&) { return false; }
     catch (const AllocationFailure&) { return false; }
   }
-  auto* scratch = workspace ? workspace->raw_pointer() : nullptr;
+  void* scratch = workspace ? workspace->raw_pointer() : nullptr;
   const float one = 1.f, zero = 0.f;
   cudnnStatus_t status;
   switch (operation) {

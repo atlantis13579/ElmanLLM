@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "Core/LocalFunction.h"
 #include "Operators/group_norm_params.h"
 #include <limits>
 
@@ -8,11 +9,11 @@ void launch_group_norm_weight_grad_cpu(uint32_t* out, const uint32_t* a,
     int batch = p.input_shape(KernelInput::A, 0), channels = p.input_shape(KernelInput::A, 1);
     int spatial = p.input_stride(KernelInput::A, 1), width = channels / p.attribute(0);
     int length = width * spatial;
-    auto rounded = [&](float value) {
+    LocalFunction rounded{[&](float value) {
         if (p.output_dtype() == int(DType::Float16)) return numeric::half_to_float(numeric::float_to_half(value));
         if (p.output_dtype() == int(DType::BFloat16)) return numeric::bfloat_to_float(numeric::float_to_bfloat(value));
         return value;
-    };
+    }};
     for (int channel = 0; channel < channels; ++channel) {
         if (!spatial) { WRITE_OUTPUT(channel, batch ? std::numeric_limits<float>::quiet_NaN() : 0.0f); continue; }
         float result = 0;

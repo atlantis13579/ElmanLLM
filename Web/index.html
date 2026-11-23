@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Elman</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <div class="brand"><span class="mark" aria-hidden="true">E</span>Elman</div>
+    <div class="server-status" id="server-status" role="status">Connecting</div>
+  </aside>
+  <main>
+    <section id="chat" class="panel chat-panel" aria-labelledby="chat-title" hidden>
+      <header class="panel-header">
+        <div><h1 id="chat-title">Chat</h1><p id="chat-model" class="model"></p></div>
+        <button type="button" id="new-chat" class="secondary" disabled>New chat</button>
+      </header>
+      <div id="conversation" class="conversation">
+        <p class="empty-note" id="chat-empty">Send a message to start a conversation.</p>
+        <div id="messages" role="log" aria-label="Chat messages" aria-live="off"></div>
+      </div>
+      <form id="chat-form" class="composer">
+        <label for="message" class="visually-hidden">Message</label>
+        <textarea id="message" rows="3" placeholder="Write a message" required disabled></textarea>
+        <div class="form-footer">
+          <span id="chat-status" class="form-status" role="status"></span>
+          <button id="stop-chat" class="secondary" type="button" hidden>Stop</button>
+          <button id="send" class="primary" type="submit" disabled>Send</button>
+        </div>
+        <p id="chat-error" class="error" role="alert" hidden></p>
+      </form>
+    </section>
+    <section id="image" class="panel image-panel" aria-labelledby="image-title" hidden>
+      <header class="panel-header">
+        <div><h1 id="image-title">Create image</h1><p id="image-model" class="model"></p></div>
+      </header>
+      <div class="image-workspace">
+        <form id="image-form" class="image-settings">
+          <fieldset id="image-fields" disabled>
+            <label for="prompt">Prompt</label>
+            <textarea id="prompt" rows="4" placeholder="Describe the image you want to create" required maxlength="4096"></textarea>
+            <label id="negative-label" for="negative-prompt">Negative prompt <span class="optional">Optional</span></label>
+            <textarea id="negative-prompt" rows="2" placeholder="Describe what to leave out" maxlength="4096"></textarea>
+            <div class="number-fields">
+              <label>Width
+                <select id="width">
+                  <option value="512" selected>512</option>
+                  <option value="768">768</option>
+                  <option value="1024">1024</option>
+                  <option value="1280">1280</option>
+                  <option value="1536">1536</option>
+                  <option value="1792">1792</option>
+                  <option value="2048">2048</option>
+                </select>
+              </label>
+              <label>Height
+                <select id="height">
+                  <option value="512" selected>512</option>
+                  <option value="768">768</option>
+                  <option value="1024">1024</option>
+                  <option value="1280">1280</option>
+                  <option value="1536">1536</option>
+                  <option value="1792">1792</option>
+                  <option value="2048">2048</option>
+                </select>
+              </label>
+              <label>Steps <input id="steps" type="number" min="1" max="50" value="50" required></label>
+              <label id="guidance-label">Guidance <input id="guidance" type="number" min="0" max="30" step="0.1" value="7.5" required></label>
+            </div>
+            <label for="seed">Seed</label>
+            <input id="seed" type="number" min="-1" max="4294967295" required>
+            <button id="generate" type="submit" class="primary">Generate image</button>
+          </fieldset>
+          <button id="stop-image" class="secondary" type="button" hidden>Cancel generation</button>
+          <p id="image-error" class="error" role="alert" hidden></p>
+        </form>
+        <div class="result">
+          <div id="image-task-status" class="image-task-status" hidden>
+            <p id="image-status" role="status"></p>
+            <progress id="image-progress" aria-label="Denoising steps completed" hidden></progress>
+          </div>
+          <div id="preview" class="preview"><p id="image-placeholder">Your image will appear here.</p><img id="generated-image" alt="Generated image" hidden></div>
+          <p id="image-preview-label" class="image-preview-label" hidden></p>
+          <div id="image-download" class="image-download" hidden>
+            <label for="output-format">Save as</label>
+            <select id="output-format">
+              <option value="png">PNG</option>
+              <option value="jpg">JPG</option>
+              <option value="bmp">BMP</option>
+            </select>
+            <button id="download" type="button" class="secondary">Download image</button>
+          </div>
+          <p id="download-error" class="error" role="alert" hidden></p>
+        </div>
+      </div>
+    </section>
+  </main>
+</body>
+</html>

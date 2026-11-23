@@ -12,7 +12,7 @@ __global__ void indexed_write(uint32_t* out, const uint32_t* a, const uint32_t* 
   if (i >= unsigned(p.output_count())) return;
   constexpr bool gather = operation == IndexedWrite::GatherGradient;
   constexpr bool replace = operation == IndexedWrite::Scatter;
-  constexpr auto source = gather ? KernelInput::A : KernelInput::C;
+  constexpr KernelInput source = gather ? KernelInput::A : KernelInput::C;
   const int selected = (i / inner) % p.output_shape(axis);
   int flat = i, base = 0;
   int length = p.input_shape(source, axis);

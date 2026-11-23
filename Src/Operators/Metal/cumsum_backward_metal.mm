@@ -6,9 +6,9 @@
 
 namespace elman::metal {
 Tensor lower_cumsum_backward(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto a = inputs[0];
+  Tensor a = inputs[0];
   const int axis = p.attribute(operator_attr::reduction::kAxis);
-  auto work = m.float_work(a);
+  Tensor work = m.float_work(a);
   if (DType(p.output_dtype()) == DType::Int64) {
     work = m.cast(work, MPSDataTypeInt64);
   }

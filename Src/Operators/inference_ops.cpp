@@ -11,7 +11,7 @@ namespace elman {
 
 Tensor exact_gelu(const Tensor& value) {
   if (!is_compute_float(value.dtype())) throw std::invalid_argument("Exact GELU requires a compute floating dtype");
-  const auto input = cast(value, DType::Float32);
+  const Tensor input = cast(value, DType::Float32);
   std::vector<int> attributes(operator_attr::gelu::kExact + 1, 0);
   attributes[operator_attr::gelu::kExact] = 1;
   return cast(dispatch_tensor("gelu", input.shape(), {input}, attributes, input.dtype()), value.dtype());
@@ -19,10 +19,10 @@ Tensor exact_gelu(const Tensor& value) {
 
 Tensor quick_gelu(const Tensor& value) {
   if (!is_compute_float(value.dtype())) throw std::invalid_argument("Quick GELU requires a compute floating dtype");
-  auto scaled = mul(cast(value, DType::Float32), 1.702);
+  Tensor scaled = mul(cast(value, DType::Float32), 1.702);
   if (is_narrow_float(value.dtype())) scaled = cast(cast(scaled, value.dtype()), DType::Float32);
-  auto one = Tensor::ones({}, value.backend());
-  auto sigmoid = div(one, add(exp(mul(scaled, -1.0)), 1.0));
+  Tensor one = Tensor::ones({}, value.backend());
+  Tensor sigmoid = div(one, add(exp(mul(scaled, -1.0)), 1.0));
   return mul(value, cast(sigmoid, value.dtype()));
 }
 
@@ -30,10 +30,10 @@ Tensor scaled_dot_product_attention(const Tensor& query, const Tensor& key, cons
   if (query.shape().size() != 4 || query.shape().back() <= 0 ||
       query.dtype() != key.dtype() || query.dtype() != value.dtype())
     throw std::invalid_argument("Attention requires a valid head width and matching dtypes");
-  const auto dtype = query.dtype();
-  const auto accumulation = is_narrow_float(dtype) ? DType::Float32 : dtype;
-  auto zero = Tensor::zeros({}, query.backend(), false, accumulation);
-  auto output = tiled_attention(cast(query, accumulation), cast(key, accumulation), cast(value, accumulation),
+  const DType dtype = query.dtype();
+  const DType accumulation = is_narrow_float(dtype) ? DType::Float32 : dtype;
+  Tensor zero = Tensor::zeros({}, query.backend(), false, accumulation);
+  Tensor output = tiled_attention(cast(query, accumulation), cast(key, accumulation), cast(value, accumulation),
                                 zero, std::sqrt(query.shape().back()), kAttentionQueryTile, causal);
   return cast(output, dtype);
 }
@@ -43,21 +43,21 @@ Tensor conv2d_with_channel_bias(const Tensor& input, const Tensor& weight, const
     if (weight.shape().empty() || bias.shape() != Shape{weight.shape().front()} || bias.dtype() != input.dtype())
       throw std::invalid_argument("Convolution bias must match the output channels and input dtype");
     // Round the convolution result before adding the channel bias.
-    auto result = conv2d(input, weight, {}, stride, padding);
+    Tensor result = conv2d(input, weight, {}, stride, padding);
     return add(result, reshape(bias, {1, bias.shape()[0], 1, 1}));
   }
   return conv2d(input, weight, bias, stride, padding);
 }
 
 Tensor image_tokens(const Tensor& image) {
-  const auto& shape = image.shape();
+  const Shape& shape = image.shape();
   if (shape.size() != 4 || int64_t(shape[2]) * shape[3] > std::numeric_limits<int>::max())
     throw std::invalid_argument("Image tokenization requires NCHW input with a valid spatial extent");
   return transpose(reshape(image, {shape[0], shape[1], shape[2] * shape[3]}), 1, 2);
 }
 
 Tensor token_image(const Tensor& tokens, int height, int width) {
-  const auto& shape = tokens.shape();
+  const Shape& shape = tokens.shape();
   if (shape.size() != 3 || height < 0 || width < 0 || int64_t(height) * width != shape[1])
     throw std::invalid_argument("Token count must match the image extent");
   return reshape(transpose(tokens, 1, 2), {shape[0], shape[2], height, width});

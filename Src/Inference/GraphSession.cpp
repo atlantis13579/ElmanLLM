@@ -1,4 +1,5 @@
 #include "Inference/GraphSession.h"
+#include "Core/LocalFunction.h"
 
 #include <algorithm>
 #include <limits>
@@ -24,7 +25,7 @@ using Operation = Tensor (*)(const Operands&, const Json&);
 std::vector<int> integers(const Json& object, const char* key, std::vector<int> defaults = {}) {
   if (!object.contains(key)) return defaults;
   std::vector<int> result;
-  for (const auto& item : object.at(key).array()) result.push_back(item.integer());
+  for (const Json& item : object.at(key).array()) result.push_back(item.integer());
   return result;
 }
 
@@ -37,13 +38,13 @@ int axis(int dim, int rank) {
 std::vector<int64_t> indices(const Tensor& tensor) {
   if (tensor.dtype() == DType::Int64) return tensor.int64_data();
   if (tensor.dtype() != DType::Int32) throw std::invalid_argument("Graph index tensors require Int32 or Int64");
-  auto values = tensor.int_data();
+  std::vector<int32_t> values = tensor.int_data();
   return std::vector<int64_t>(values.begin(), values.end());
 }
 
 Tensor graph_reshape(const Operands& x, const Json& p) {
-  const auto requested = integers(p, "shape");
-  const auto dims = x.size() == 2 ? indices(x[1]) : std::vector<int64_t>(requested.begin(), requested.end());
+  const std::vector<int> requested = integers(p, "shape");
+  const std::vector<int64_t> dims = x.size() == 2 ? indices(x[1]) : std::vector<int64_t>(requested.begin(), requested.end());
   const bool allow_zero = p.int_or("allowzero", 0) != 0;
   Shape shape;
   for (size_t i = 0; i < dims.size(); ++i) {
@@ -54,7 +55,7 @@ Tensor graph_reshape(const Operands& x, const Json& p) {
 }
 
 Tensor flatten(const Operands& x, const Json& p) {
-  const auto& shape = x[0].shape();
+  const Shape& shape = x[0].shape();
   const int rank = static_cast<int>(shape.size());
   int dim = p.int_or("axis", 1);
   if (dim < 0) dim += rank;
@@ -66,7 +67,7 @@ Tensor flatten(const Operands& x, const Json& p) {
 Tensor graph_transpose(const Operands& x, const Json& p) {
   if (x.size() == 2) {
     std::vector<int> axes;
-    for (const auto value : indices(x[1])) {
+    for (const int64_t value : indices(x[1])) {
       if (value < 0 || value >= static_cast<int64_t>(x[0].shape().size()))
         throw std::invalid_argument("Graph permutation axis out of range");
       axes.push_back(int(value));
@@ -80,31 +81,35 @@ Tensor graph_transpose(const Operands& x, const Json& p) {
 }
 
 Tensor graph_gather(const Operands& x, const Json& p) {
-  const auto& shape = x[0].shape();
+  const Shape& shape = x[0].shape();
   const int dim = axis(p.int_or("axis", 0), static_cast<int>(shape.size()));
-  auto values = indices(x[1]);
-  for (auto& index : values) {
+  std::vector<int64_t> values = indices(x[1]);
+  for (int64_t& index : values) {
     if (index < 0) index += shape[dim];
     if (index < 0 || index >= shape[dim]) throw std::out_of_range("Graph gather index out of range");
   }
   Shape result(shape.begin(), shape.begin() + dim);
   result.insert(result.end(), x[1].shape().begin(), x[1].shape().end());
   result.insert(result.end(), shape.begin() + dim + 1, shape.end());
-  return reshape(index_select(x[0], dim, Tensor::from_int64_data({static_cast<int>(values.size())}, values, x[0].backend())), result);
+  // Native indexing kernels use Int32; range validation above makes narrowing safe.
+  std::vector<int32_t> native_indices;
+  native_indices.reserve(values.size());
+  for (int64_t value : values) native_indices.push_back(static_cast<int32_t>(value));
+  return reshape(index_select(x[0], dim, Tensor::from_int_data({static_cast<int>(values.size())}, native_indices, x[0].backend())), result);
 }
 
 Tensor gemm(const Operands& x, const Json& p) {
-  auto left = p.int_or("transA", 0) ? transpose(x[0], 0, 1) : x[0];
-  auto right = p.int_or("transB", 0) ? transpose(x[1], 0, 1) : x[1];
-  auto product = matmul(left, right);
+  Tensor left = p.int_or("transA", 0) ? transpose(x[0], 0, 1) : x[0];
+  Tensor right = p.int_or("transB", 0) ? transpose(x[1], 0, 1) : x[1];
+  Tensor product = matmul(left, right);
   const double alpha = p.number_or("alpha", 1), beta = p.number_or("beta", 1);
   if (alpha != 1) product = mul(product, alpha);
   return x.size() == 3 && x[2].defined() && beta != 0 ? add(product, beta == 1 ? x[2] : mul(x[2], beta)) : product;
 }
 
 std::pair<int, int> spatial_geometry(const Json& p, int default_stride = 1) {
-  const auto strides = integers(p, "strides", {default_stride, default_stride});
-  const auto pads = integers(p, "pads", {0, 0, 0, 0});
+  const std::vector<int> strides = integers(p, "strides", {default_stride, default_stride});
+  const std::vector<int> pads = integers(p, "pads", {0, 0, 0, 0});
   if (strides.size() != 2 || strides[0] <= 0 || strides[0] != strides[1] || pads.size() != 4 ||
       pads[0] < 0 || !std::all_of(pads.begin(), pads.end(), [&](int pad) { return pad == pads[0]; }) ||
       p.string_or("auto_pad", "NOTSET") != "NOTSET" || integers(p, "dilations", {1, 1}) != std::vector<int>{1, 1})
@@ -114,13 +119,15 @@ std::pair<int, int> spatial_geometry(const Json& p, int default_stride = 1) {
 
 Tensor convolution(const Operands& x, const Json& p) {
   if (p.int_or("group", 1) != 1) throw std::invalid_argument("Graph convolution requires one group");
-  const auto [stride, pad] = spatial_geometry(p);
+  const std::pair<int, int> geometry = spatial_geometry(p);
+  const int stride = geometry.first, pad = geometry.second;
   return conv2d(x[0], x[1], x.size() == 3 ? x[2] : Tensor{}, stride, pad);
 }
 
 Tensor pool(const Operands& x, const Json& p, bool maximum) {
-  const auto kernel = integers(p, "kernel_shape");
-  const auto [stride, pad] = spatial_geometry(p);
+  const std::vector<int> kernel = integers(p, "kernel_shape");
+  const std::pair<int, int> geometry = spatial_geometry(p);
+  const int stride = geometry.first, pad = geometry.second;
   if (kernel.size() != 2 || kernel[0] != kernel[1] || kernel[0] < 1 || p.int_or("ceil_mode", 0) ||
       (!maximum && pad && !p.int_or("count_include_pad", 0)))
     throw std::invalid_argument("Unsupported graph pooling geometry");
@@ -132,7 +139,7 @@ Tensor batch_normalization(const Operands& x, const Json& p) {
     throw std::invalid_argument("Graph batch normalization requires inference mode and a channel axis");
   Shape affine(x[0].shape().size(), 1);
   affine[1] = x[0].shape()[1];
-  auto scale = mul(x[1], rsqrt(add(x[4], p.number_or("epsilon", 1e-5))));
+  Tensor scale = mul(x[1], rsqrt(add(x[4], p.number_or("epsilon", 1e-5))));
   return add(mul(sub(x[0], reshape(x[3], affine)), reshape(scale, affine)), reshape(x[2], affine));
 }
 
@@ -142,12 +149,12 @@ Tensor scalar(const Tensor& like, double value) {
 
 Tensor fill_spatial(const Tensor& value, int dim, int before, int after, double fill) {
   if (!before && !after) return value;
-  auto shape = value.shape();
-  auto edge = [&](int count) {
+  Shape shape = value.shape();
+  LocalFunction edge{[&](int count) {
     shape[dim] = count;
     if (fill == 0) return Tensor::zeros(shape, value.backend(), false, value.dtype());
     return expand(scalar(value, fill), shape);
-  };
+  }};
   std::vector<Tensor> pieces;
   if (before) pieces.push_back(edge(before));
   pieces.push_back(value);
@@ -164,13 +171,13 @@ struct NhwcGeometry {
     if (stride_h <= 0 || stride_w <= 0 || h <= 0 || w <= 0 || chw.shape()[2] <= 0 || chw.shape()[3] <= 0)
       throw std::invalid_argument("Invalid NHWC spatial dimensions");
     if (attributes.bool_or("same", false)) {
-      const auto padding = [](int length, int kernel, int stride) {
+      int (*const padding)(int, int, int) = [](int length, int kernel, int stride) {
         const int64_t total = std::max<int64_t>(0, int64_t((length - 1) / stride) * stride + kernel - length);
         if (int64_t(length) + total > std::numeric_limits<int>::max())
           throw std::invalid_argument("NHWC padding exceeds the supported extent");
         return int(total);
       };
-      const auto height = padding(chw.shape()[2], h, stride_h), width = padding(chw.shape()[3], w, stride_w);
+      const int height = padding(chw.shape()[2], h, stride_h), width = padding(chw.shape()[3], w, stride_w);
       top = height / 2;
       bottom = height - top;
       left = width / 2;
@@ -184,7 +191,7 @@ struct NhwcGeometry {
   int kernel_stride() const { return stride_h == stride_w ? stride_h : 1; }
   Tensor output(const Tensor& nchw) const {
     if (stride_h == stride_w) return permute(nchw, {0, 2, 3, 1});
-    const auto rows = slice(nchw, 2, 0, nchw.shape()[2], stride_h);
+    const Tensor rows = slice(nchw, 2, 0, nchw.shape()[2], stride_h);
     return permute(slice(rows, 3, 0, rows.shape()[3], stride_w), {0, 2, 3, 1});
   }
 };
@@ -192,16 +199,16 @@ struct NhwcGeometry {
 Tensor nhwc_convolution(const Operands& x, const Json& p) {
   if (x[0].shape().size() != 4 || x[1].shape().size() != 4)
     throw std::invalid_argument("NHWC convolution requires rank-four tensors");
-  const auto nchw = permute(x[0], {0, 3, 1, 2});
-  const auto& filter = x[1].shape();
+  const Tensor nchw = permute(x[0], {0, 3, 1, 2});
+  const Shape& filter = x[1].shape();
   const NhwcGeometry geometry(nchw, filter[1], filter[2], p);
-  const auto input = geometry.pad(nchw);
-  const auto bias = x.size() == 3 ? x[2] : Tensor{};
+  const Tensor input = geometry.pad(nchw);
+  const Tensor bias = x.size() == 3 ? x[2] : Tensor{};
   if (!p.bool_or("depthwise", false)) {
-    const auto weights = permute(x[1], {0, 3, 1, 2});
+    const Tensor weights = permute(x[1], {0, 3, 1, 2});
     const int groups = p.int_or("group", 1);
     if (groups == 1) return geometry.output(conv2d(input, weights, bias, geometry.kernel_stride()));
-    const auto channels = input.shape()[1], outputs = filter[0];
+    const int channels = input.shape()[1], outputs = filter[0];
     if (groups <= 0 || channels % groups || outputs % groups || channels / groups != filter[3] ||
         (bias.defined() && bias.shape() != Shape{outputs}))
       throw std::invalid_argument("Invalid NHWC grouped convolution filter");
@@ -219,7 +226,7 @@ Tensor nhwc_convolution(const Operands& x, const Json& p) {
       (bias.defined() && bias.shape() != Shape{filter[3]}))
     throw std::invalid_argument("Invalid NHWC depthwise convolution filter");
   const int multiplier = filter[3] / channels;
-  const auto weights = permute(x[1], {3, 0, 1, 2});
+  const Tensor weights = permute(x[1], {3, 0, 1, 2});
   std::vector<Tensor> result;
   for (int channel = 0; channel < channels; ++channel) {
     const int start = channel * multiplier, end = start + multiplier;
@@ -231,51 +238,51 @@ Tensor nhwc_convolution(const Operands& x, const Json& p) {
 
 Tensor nhwc_pool(const Operands& x, const Json& p) {
   if (x[0].shape().size() != 4) throw std::invalid_argument("NHWC pooling requires a rank-four input");
-  const auto input = permute(x[0], {0, 3, 1, 2});
+  const Tensor input = permute(x[0], {0, 3, 1, 2});
   const int kernel = p.at("kernel").integer();
   const NhwcGeometry geometry(input, kernel, kernel, p);
   const int stride = geometry.kernel_stride();
   if (p.at("maximum").boolean())
     return geometry.output(max_pool2d(geometry.pad(input, -std::numeric_limits<double>::infinity()), kernel, stride));
-  auto result = avg_pool2d(geometry.pad(input), kernel, stride);
+  Tensor result = avg_pool2d(geometry.pad(input), kernel, stride);
   if (geometry.top || geometry.bottom || geometry.left || geometry.right) {
-    const auto& s = input.shape();
-    const auto ones = Tensor::ones({1, 1, s[2], s[3]}, input.backend(), false, input.dtype());
+    const Shape& s = input.shape();
+    const Tensor ones = Tensor::ones({1, 1, s[2], s[3]}, input.backend(), false, input.dtype());
     result = div(result, avg_pool2d(geometry.pad(ones), kernel, stride));
   }
   return geometry.output(result);
 }
 
 Tensor fully_connected(const Operands& x, const Json& p) {
-  const auto& weight = x[1].shape();
+  const Shape& weight = x[1].shape();
   if (weight.size() != 2 || weight[1] <= 0 || x[0].numel() % weight[1])
     throw std::invalid_argument("Invalid fully connected input size");
-  auto input = x[0];
+  Tensor input = x[0];
   if (!p.bool_or("keep_dims", false)) input = reshape(input, {-1, weight[1]});
   return linear(input, x[1], x.size() == 3 ? x[2] : Tensor{});
 }
 
 template<Tensor (*Function)(const Tensor&, int, bool)>
 Tensor graph_reduce(const Operands& x, const Json& p) {
-  auto input = x[0];
+  Tensor input = x[0];
   std::set<int, std::greater<int>> dimensions;
-  for (auto dim : indices(x[1])) {
+  for (int64_t dim : indices(x[1])) {
     if (dim < -int64_t(input.shape().size()) || dim >= int64_t(input.shape().size()))
       throw std::invalid_argument("Reduction axis out of range");
     dimensions.insert(axis(int(dim), int(input.shape().size())));
   }
-  for (auto dim : dimensions) input = Function(input, dim, p.bool_or("keep_dims", false));
+  for (int dim : dimensions) input = Function(input, dim, p.bool_or("keep_dims", false));
   if constexpr (Function == sum) if (input.dtype() != x[0].dtype()) input = cast(input, x[0].dtype());
   return input;
 }
 
 Tensor graph_matmul(const Operands& x, const Json& p) {
-  auto operand = [&](size_t index, const char* attribute) {
-    auto value = x[index];
+  LocalFunction operand{[&](size_t index, const char* attribute) {
+    Tensor value = x[index];
     if (!p.bool_or(attribute, false)) return value;
     value = transpose(value, -2, -1);
     return p.bool_or("adjoint", false) && is_complex(value.dtype()) ? conj(value) : value;
-  };
+  }};
   return matmul(operand(0, "transA"), operand(1, "transB"));
 }
 
@@ -286,19 +293,19 @@ Tensor true_divide(const Tensor& a, const Tensor& b) {
 }
 
 Tensor scalar_binary(const Operands& x, const Json& p) {
-  const auto backend = x[0].backend();
+  const Backend backend = x[0].backend();
   Tensor scalar_value;
   if (p.contains("integer")) {
-    const auto value = std::stoll(p.at("integer").string());
+    const long long value = std::stoll(p.at("integer").string());
     scalar_value = p.bool_or("boolean", false) ? Tensor::from_raw({}, DType::Bool, {uint8_t(value != 0)}, backend) :
                                                  Tensor::from_int64_data({}, {value}, backend);
   } else {
-    const auto value = p.at("value").number();
+    const double value = p.at("value").number();
     scalar_value = is_standard_integer(x[0].dtype()) ? Tensor::from_data({}, {float(value)}, backend) : scalar(x[0], value);
   }
-  const auto& left = p.bool_or("reverse", false) ? scalar_value : x[0];
-  const auto& right = p.bool_or("reverse", false) ? x[0] : scalar_value;
-  const auto op = p.at("op").string();
+  const Tensor& left = p.bool_or("reverse", false) ? scalar_value : x[0];
+  const Tensor& right = p.bool_or("reverse", false) ? x[0] : scalar_value;
+  const std::string op = p.at("op").string();
   if (op == "Add") return add(left, right);
   if (op == "Sub") return sub(left, right);
   if (op == "Mul") return mul(left, right);
@@ -314,8 +321,8 @@ Tensor scalar_binary(const Operands& x, const Json& p) {
 }
 
 Tensor graph_squeeze(const Operands& x, const Json& p) {
-  auto value = x[0];
-  const auto axes = integers(p, "axes");
+  Tensor value = x[0];
+  const std::vector<int> axes = integers(p, "axes");
   if (axes.empty()) return squeeze(value);
   std::set<int, std::greater<int>> dimensions;
   for (int dim : axes) dimensions.insert(axis(dim, int(value.shape().size())));
@@ -328,14 +335,14 @@ Tensor graph_squeeze(const Operands& x, const Json& p) {
 }
 
 Tensor graph_padding(const Operands& x, const Json& p) {
-  auto value = x[0];
-  const auto pads = x.size() > 1 ? indices(x[1]) : [&] {
-    const auto v = integers(p, "pads");
+  Tensor value = x[0];
+  const std::vector<int64_t> pads = x.size() > 1 ? indices(x[1]) : [&] {
+    const std::vector<int> v = integers(p, "pads");
     return std::vector<int64_t>(v.begin(), v.end());
   }();
   if (pads.size() != value.shape().size() * 2) throw std::invalid_argument("Graph padding rank mismatch");
   for (size_t dim = 0; dim < value.shape().size(); ++dim) {
-    const auto left = pads[2 * dim], right = pads[2 * dim + 1];
+    const int64_t left = pads[2 * dim], right = pads[2 * dim + 1];
     if (left < 0 || right < 0 || left > INT32_MAX || right > INT32_MAX ||
         left + right + value.shape()[dim] > INT32_MAX)
       throw std::invalid_argument("Invalid graph padding extent");
@@ -345,14 +352,14 @@ Tensor graph_padding(const Operands& x, const Json& p) {
 }
 
 Tensor adaptive_average_pool(const Operands& x, const Json& p) {
-  const auto& shape = x[0].shape();
+  const Shape& shape = x[0].shape();
   const int height = p.at("height").integer(), width = p.at("width").integer();
   if (shape.size() < 3 || shape.size() > 4 || height <= 0 || width <= 0 ||
       shape[shape.size() - 2] <= 0 || shape.back() <= 0)
     throw std::invalid_argument("Invalid graph adaptive pooling geometry");
-  const auto h = shape[shape.size() - 2], w = shape.back();
+  const int h = shape[shape.size() - 2], w = shape.back();
   if (h % height == 0 && w % width == 0) {
-    auto grouped = shape;
+    Shape grouped = shape;
     grouped.pop_back();
     grouped.back() = height;
     grouped.insert(grouped.end(), {h / height, width, w / width});
@@ -360,10 +367,10 @@ Tensor adaptive_average_pool(const Operands& x, const Json& p) {
   }
   std::vector<Tensor> rows;
   for (int i = 0; i < height; ++i) {
-    auto section = slice(x[0], -2, int(int64_t(i) * h / height), int((int64_t(i + 1) * h + height - 1) / height));
+    Tensor section = slice(x[0], -2, int(int64_t(i) * h / height), int((int64_t(i + 1) * h + height - 1) / height));
     std::vector<Tensor> cells;
     for (int j = 0; j < width; ++j) {
-      auto tile = slice(section, -1, int(int64_t(j) * w / width), int((int64_t(j + 1) * w + width - 1) / width));
+      Tensor tile = slice(section, -1, int(int64_t(j) * w / width), int((int64_t(j + 1) * w + width - 1) / width));
       cells.push_back(mean(mean(tile, -1, true), -2, true));
     }
     rows.push_back(concat(cells, -1));
@@ -372,8 +379,8 @@ Tensor adaptive_average_pool(const Operands& x, const Json& p) {
 }
 
 Tensor graph_strided_slice(const Operands& x, const Json& p) {
-  auto value = x[0];
-  const auto begin = indices(x[1]), end = indices(x[2]), stride = indices(x[3]);
+  Tensor value = x[0];
+  const std::vector<int64_t> begin = indices(x[1]), end = indices(x[2]), stride = indices(x[3]);
   if (begin.size() != end.size() || begin.size() != stride.size() || begin.size() > value.shape().size() ||
       p.int_or("new_axis_mask", 0) || p.int_or("ellipsis_mask", 0))
     throw std::invalid_argument("Unsupported graph strided slice index geometry");
@@ -383,9 +390,9 @@ Tensor graph_strided_slice(const Operands& x, const Json& p) {
     const int bit = 1 << index;
     if (!step || step > INT32_MAX || step < -INT32_MAX)
       throw std::invalid_argument("Invalid graph strided slice stride");
-    const auto normalize = [length](int64_t item) { return item < 0 ? length + item : item; };
-    auto start = p.int_or("begin_mask", 0) & bit ? (step > 0 ? 0 : length - 1) : normalize(begin[index]);
-    auto stop = p.int_or("end_mask", 0) & bit ? (step > 0 ? length : -1) : normalize(end[index]);
+    const LocalFunction normalize{[length](int64_t item) { return item < 0 ? length + item : item; }};
+    int64_t start = p.int_or("begin_mask", 0) & bit ? (step > 0 ? 0 : length - 1) : normalize(begin[index]);
+    int64_t stop = p.int_or("end_mask", 0) & bit ? (step > 0 ? length : -1) : normalize(end[index]);
     if (p.int_or("shrink_axis_mask", 0) & bit) {
       if (start < 0 || start >= length) throw std::invalid_argument("Graph strided slice index out of bounds");
       value = squeeze(slice(value, dim, int(start), int(start + 1)), dim);
@@ -418,6 +425,15 @@ struct OperationInfo { Operation run; size_t minimum, maximum; };
 const std::unordered_map<std::string, OperationInfo>& supported_operations() {
   static const std::unordered_map<std::string, OperationInfo> operations{
       {"Identity", {[](const Operands& x, const Json&) { return x[0]; }, 1, 1}},
+      {"CumSum", {[](const Operands& x, const Json& p) { return cumsum(x[0], p.int_or("axis", -1)); }, 1, 1}},
+      {"ArgSort", {[](const Operands& x, const Json& p) { return argsort(x[0], p.int_or("axis", -1), p.bool_or("descending", false)); }, 1, 1}},
+      {"IndexSelect", {[](const Operands& x, const Json& p) { return index_select(x[0], p.int_or("axis", 0), x[1]); }, 2, 2}},
+      {"Slice", {[](const Operands& x, const Json& p) { return slice(x[0], p.int_or("axis", 0), p.at("start").integer(), p.at("end").integer(), p.int_or("step", 1)); }, 1, 1}},
+      {"ReduceSum", {[](const Operands& x, const Json& p) { return sum(x[0], p.int_or("axis", -1), p.bool_or("keepdims", false)); }, 1, 1}},
+      {"ReduceMean", {[](const Operands& x, const Json& p) { return mean(x[0], p.int_or("axis", -1), p.bool_or("keepdims", false)); }, 1, 1}},
+      {"MeanAll", {unary<mean_all>, 1, 1}},
+      {"SumAll", {unary<sum_all>, 1, 1}},
+      {"MSELoss", {binary<mse_loss>, 2, 2}},
       {"Relu", {unary<relu>, 1, 1}}, {"Exp", {unary<exp>, 1, 1}}, {"Sqrt", {unary<sqrt>, 1, 1}},
       {"Tanh", {unary<tanh>, 1, 1}}, {"Abs", {unary<abs>, 1, 1}},
       {"Silu", {unary<silu>, 1, 1}}, {"Gelu", {unary<gelu>, 1, 1}}, {"ExactGelu", {unary<exact_gelu>, 1, 1}},
@@ -436,17 +452,17 @@ const std::unordered_map<std::string, OperationInfo>& supported_operations() {
       {"Lt", {binary<lt>, 2, 2}}, {"Le", {binary<le>, 2, 2}},
       {"ScalarBinary", {scalar_binary, 1, 1}},
       {"Sigmoid", {[](const Operands& x, const Json&) {
-          auto one = Tensor::ones({}, x[0].backend(), false, x[0].dtype());
+          Tensor one = Tensor::ones({}, x[0].backend(), false, x[0].dtype());
           return div(one, add(exp(mul(x[0], -1.0)), 1.0));
         }, 1, 1}},
       {"Gemm", {gemm, 2, 3}}, {"Reshape", {graph_reshape, 1, 2}}, {"Flatten", {flatten, 1, 1}},
       {"FlattenRange", {[](const Operands& x, const Json& p) {
-          const auto& previous = x[0].shape();
+          const Shape& previous = x[0].shape();
           if (previous.empty()) return reshape(x[0], {1});
           const int start = axis(p.int_or("start", 0), int(previous.size()));
           const int end = axis(p.int_or("end", -1), int(previous.size()));
           if (end < start) throw std::invalid_argument("Invalid graph flatten axis range");
-          const auto width = shape_element_count(Shape(previous.begin() + start, previous.begin() + end + 1));
+          const size_t width = shape_element_count(Shape(previous.begin() + start, previous.begin() + end + 1));
           if (width > INT32_MAX) throw std::invalid_argument("Graph flatten extent exceeds the tensor limit");
           Shape shape(previous.begin(), previous.begin() + start);
           shape.push_back(int(width));
@@ -457,7 +473,7 @@ const std::unordered_map<std::string, OperationInfo>& supported_operations() {
           return transpose(x[0], p.at("a").integer(), p.at("b").integer());
         }, 1, 1}},
       {"Size", {[](const Operands& x, const Json& p) {
-          const auto& shape = x[0].shape();
+          const Shape& shape = x[0].shape();
           return Tensor::from_int64_data({}, {shape.at(axis(p.at("axis").integer(), int(shape.size())))}, x[0].backend());
         }, 1, 1}},
       {"Rank", {[](const Operands& x, const Json&) {
@@ -470,7 +486,7 @@ const std::unordered_map<std::string, OperationInfo>& supported_operations() {
         }, 1, 1}},
       {"Transpose", {graph_transpose, 1, 2}}, {"Gather", {graph_gather, 2, 2}},
       {"Softmax", {[](const Operands& x, const Json& p) {
-          const auto beta = p.number_or("beta", 1);
+          const double beta = p.number_or("beta", 1);
           return softmax(beta == 1 ? x[0] : mul(x[0], beta), p.int_or("axis", -1));
         }, 1, 1}},
       {"LogSoftmax", {[](const Operands& x, const Json& p) { return log_softmax(x[0], p.int_or("axis", -1)); }, 1, 1}},
@@ -479,23 +495,23 @@ const std::unordered_map<std::string, OperationInfo>& supported_operations() {
       {"ReduceMax", {graph_reduce<amax>, 2, 2}},
       {"ExpandDims", {[](const Operands& x, const Json& p) {
           if (x.size() == 1) return unsqueeze(x[0], p.at("axis").integer());
-          const auto dims = indices(x[1]);
+          const std::vector<int64_t> dims = indices(x[1]);
           if (dims.size() != 1 || dims[0] < INT32_MIN || dims[0] > INT32_MAX)
             throw std::invalid_argument("Graph expand_dims requires one integer axis");
           return unsqueeze(x[0], int(dims[0]));
         }, 1, 2}},
       {"Squeeze", {graph_squeeze, 1, 1}},
       {"Stack", {[](const Operands& x, const Json& p) {
-          const auto dim = p.int_or("axis", 0);
+          const int dim = p.int_or("axis", 0);
           std::vector<Tensor> expanded;
-          for (const auto& value : x) expanded.push_back(unsqueeze(value, dim));
+          for (const Tensor& value : x) expanded.push_back(unsqueeze(value, dim));
           return concat(expanded, dim);
         }, 1, 1024}},
       {"StridedSlice", {graph_strided_slice, 4, 4}},
       {"Pad", {graph_padding, 1, 2}},
       {"AdaptiveAvgPool2d", {adaptive_average_pool, 1, 1}},
       {"ChannelsLast", {[](const Operands& x, const Json&) {
-          const auto rank = int(x[0].shape().size());
+          const int rank = int(x[0].shape().size());
           if (rank < 3) return x[0];
           std::vector<int> order{0};
           for (int dim = 2; dim < rank; ++dim) order.push_back(dim);
@@ -503,17 +519,17 @@ const std::unordered_map<std::string, OperationInfo>& supported_operations() {
           return permute(x[0], order);
         }, 1, 1}},
       {"BatchReshape", {[](const Operands& x, const Json& p) {
-          auto shape = integers(p, "shape");
+          std::vector<int> shape = integers(p, "shape");
           shape.insert(shape.begin(), x[0].shape().at(0));
           return reshape(x[0], shape);
         }, 1, 1}},
       {"Cast", {[](const Operands& x, const Json& p) { return cast(x[0], parse_dtype(p.at("to").string())); }, 1, 1}},
       {"Shape", {[](const Operands& x, const Json& p) {
-          const auto& shape = x[0].shape();
+          const Shape& shape = x[0].shape();
           const int rank = static_cast<int>(shape.size());
-          auto normalize = [rank](int dim) { return std::clamp(dim < 0 ? dim + rank : dim, 0, rank); };
+          LocalFunction normalize{[rank](int dim) { return std::clamp(dim < 0 ? dim + rank : dim, 0, rank); }};
           int start = normalize(p.int_or("start", 0)), end = std::max(start, normalize(p.int_or("end", rank)));
-          auto result = Tensor::from_int64_data({end - start}, std::vector<int64_t>(shape.begin() + start, shape.begin() + end), x[0].backend());
+          Tensor result = Tensor::from_int64_data({end - start}, std::vector<int64_t>(shape.begin() + start, shape.begin() + end), x[0].backend());
           return p.contains("to") ? cast(result, parse_dtype(p.at("to").string())) : result;
         }, 1, 1}},
       {"ChannelBias", {[](const Operands& x, const Json&) {
@@ -524,7 +540,7 @@ const std::unordered_map<std::string, OperationInfo>& supported_operations() {
           return add(x[0], reshape(x[1], shape));
         }, 2, 2}},
       {"DepthwiseFilter", {[](const Operands& x, const Json&) {
-          const auto& shape = x[0].shape();
+          const Shape& shape = x[0].shape();
           if (shape.size() != 4 || int64_t(shape[2]) * shape[3] > INT32_MAX)
             throw std::invalid_argument("Invalid graph depthwise filter");
           return reshape(x[0], {1, shape[0], shape[1], shape[2] * shape[3]});
@@ -536,7 +552,7 @@ const std::unordered_map<std::string, OperationInfo>& supported_operations() {
       {"MaxPool", {[](const Operands& x, const Json& p) { return pool(x, p, true); }, 1, 1}},
       {"AveragePool", {[](const Operands& x, const Json& p) { return pool(x, p, false); }, 1, 1}},
       {"GlobalAveragePool", {[](const Operands& x, const Json&) {
-          auto value = x[0];
+          Tensor value = x[0];
           for (int dim = int(value.shape().size()) - 1; dim >= 2; --dim) value = mean(value, dim, true);
           return value;
         }, 1, 1}},
@@ -546,21 +562,21 @@ const std::unordered_map<std::string, OperationInfo>& supported_operations() {
           const Shape channel{x[0].shape()[dim]};
           Shape broadcast(x[0].shape().size(), 1);
           broadcast[dim] = channel[0];
-          auto weights = [&](size_t index) {
+          LocalFunction weights{[&](size_t index) {
             if (x[index].shape() != channel) throw std::invalid_argument("Incompatible graph batch normalization weight");
             return reshape(x[index], broadcast);
-          };
-          auto scale = rsqrt(add(weights(2), p.number_or("epsilon", 1e-3)));
+          }};
+          Tensor scale = rsqrt(add(weights(2), p.number_or("epsilon", 1e-3)));
           if (x.size() > 3 && x[3].defined()) scale = mul(scale, weights(3));
-          auto result = mul(sub(x[0], weights(1)), scale);
+          Tensor result = mul(sub(x[0], weights(1)), scale);
           return x.size() > 4 && x[4].defined() ? add(result, weights(4)) : result;
         }, 3, 5}},
       {"LayerNormalization", {[](const Operands& x, const Json& p) {
           if (x[0].shape().empty()) throw std::invalid_argument("Layer normalization requires a feature axis");
           const Shape features{x[0].shape().back()};
-          const auto scale = x.size() > 1 && x[1].defined() ? x[1] :
+          const Tensor scale = x.size() > 1 && x[1].defined() ? x[1] :
             Tensor::ones(features, x[0].backend(), false, x[0].dtype());
-          const auto bias = x.size() > 2 && x[2].defined() ? x[2] :
+          const Tensor bias = x.size() > 2 && x[2].defined() ? x[2] :
             Tensor::zeros(features, x[0].backend(), false, x[0].dtype());
           return layer_norm(x[0], scale, bias, p.number_or("epsilon", 1e-3));
         }, 1, 3}},
@@ -570,7 +586,9 @@ const std::unordered_map<std::string, OperationInfo>& supported_operations() {
 
 TensorSignature signature(const Json& json) {
   TensorSignature result;
-  for (const auto& [name, desc] : json.object()) {
+  for (const std::pair<const std::string, Json>& entry : json.object()) {
+    const std::string& name = entry.first;
+    const Json& desc = entry.second;
     const bool has_type = desc.contains("dtype");
     result.emplace(name, TensorSpec{has_type ? parse_dtype(desc.at("dtype").string()) : DType::Float32,
                                    integers(desc, "shape"), !desc.contains("shape"), !has_type});
@@ -594,17 +612,25 @@ struct Graph {
   std::map<std::string, size_t> inputs, outputs;
   std::vector<std::pair<size_t, Tensor>> weights;
   size_t register_value(const std::string& name) {
-    const auto id = ids.size();
+    const size_t id = ids.size();
     if (name.empty() || !ids.emplace(name, id).second) throw std::invalid_argument("Duplicate or empty graph output " + name);
     return id;
   }
   NamedTensors operator()(const NamedTensors& arguments) const {
     AllocationPool allocations(arguments.begin()->second.backend());
     std::vector<Tensor> values(ids.size());
-    auto remaining = readers;
-    for (const auto& [name, id] : inputs) values[id] = arguments.at(name);
-    for (const auto& [id, tensor] : weights) values[id] = tensor;
-    for (const auto& node : nodes) {
+    std::vector<size_t> remaining = readers;
+    for (const std::pair<const std::string, size_t>& entry : inputs) {
+      const std::string& name = entry.first;
+      const size_t& id = entry.second;
+      values[id] = arguments.at(name);
+    }
+    for (const std::pair<size_t, Tensor>& entry : weights) {
+      const size_t& id = entry.first;
+      const Tensor& tensor = entry.second;
+      values[id] = tensor;
+    }
+    for (const GraphNode& node : nodes) {
       Operands operands;
       operands.reserve(node.reads.size());
       for (size_t id : node.reads) operands.push_back(id == omitted ? Tensor{} : values[id]);
@@ -617,7 +643,11 @@ struct Graph {
       if (!remaining[node.output]) values[node.output] = {};
     }
     NamedTensors result;
-    for (const auto& [name, id] : outputs) result.emplace(name, values[id]);
+    for (const std::pair<const std::string, size_t>& entry : outputs) {
+      const std::string& name = entry.first;
+      const size_t& id = entry.second;
+      result.emplace(name, values[id]);
+    }
     return result;
   }
 };
@@ -626,10 +656,10 @@ struct Graph {
 
 InferenceSession load_graph_session(const std::filesystem::path& path, Backend backend, int device) {
   DeviceScope owner(backend, device);
-  const auto definition = Json::read(path);
+  const Json definition = Json::read(path);
   if (definition.at("format").string() != "elman.graph" || definition.at("version").integer() != 1)
     throw std::invalid_argument("Unsupported Elman graph format");
-  const auto weights_file = std::filesystem::u8path(definition.string_or("initializers", ""));
+  const std::filesystem::path weights_file = std::filesystem::u8path(definition.string_or("initializers", ""));
   NamedTensors weights;
   if (!weights_file.empty()) {
     if (weights_file.has_root_path() || weights_file.filename() != weights_file || weights_file.extension() != ".safetensors")
@@ -640,27 +670,31 @@ InferenceSession load_graph_session(const std::filesystem::path& path, Backend b
 }
 
 InferenceSession make_graph_session(const Json& definition, NamedTensors weights, Backend backend, int device) {
-  auto inputs = signature(definition.at("inputs"));
-  auto outputs = signature(definition.at("outputs"));
-  auto graph = std::make_shared<Graph>();
-  for (const auto& input : inputs) {
-    const auto value = definition.at("inputs").at(input.first).string_or("value", input.first);
+  TensorSignature inputs = signature(definition.at("inputs"));
+  TensorSignature outputs = signature(definition.at("outputs"));
+  std::shared_ptr<Graph> graph = std::make_shared<Graph>();
+  for (const std::pair<const std::string, TensorSpec>& input : inputs) {
+    const std::string value = definition.at("inputs").at(input.first).string_or("value", input.first);
     graph->inputs.emplace(input.first, graph->register_value(value));
   }
-  for (auto& [name, tensor] : weights) graph->weights.emplace_back(graph->register_value(name), std::move(tensor));
-  for (const auto& value : definition.at("nodes").array()) {
-    const auto op = value.at("op").string();
+  for (std::pair<const std::string, Tensor>& entry : weights) {
+    const std::string& name = entry.first;
+    Tensor& tensor = entry.second;
+    graph->weights.emplace_back(graph->register_value(name), std::move(tensor));
+  }
+  for (const Json& value : definition.at("nodes").array()) {
+    const std::string op = value.at("op").string();
     const auto info = supported_operations().find(op);
     if (info == supported_operations().end()) throw std::invalid_argument("Unsupported graph operation " + op);
-    const auto output = value.at("output").string();
-    auto attributes = value.contains("attributes") ? value.at("attributes") : Json(Json::Object{});
+    const std::string output = value.at("output").string();
+    Json attributes = value.contains("attributes") ? value.at("attributes") : Json(Json::Object{});
     attributes.object();
     GraphNode node{value.string_or("name", output), info->second.run, {}, 0, std::move(attributes)};
-    const auto& read = value.at("inputs").array();
+    const Json::Array& read = value.at("inputs").array();
     if (read.size() < info->second.minimum || read.size() > info->second.maximum)
       throw std::invalid_argument("Wrong number of inputs for graph operation " + op);
     for (size_t i = 0; i < read.size(); ++i) {
-      const auto operand = read[i].string();
+      const std::string operand = read[i].string();
       if (operand.empty() && i >= info->second.minimum) node.reads.push_back(Graph::omitted);
       else node.reads.push_back(graph->ids.at(operand));
     }
@@ -668,10 +702,10 @@ InferenceSession make_graph_session(const Json& definition, NamedTensors weights
     graph->nodes.push_back(std::move(node));
   }
   graph->readers.resize(graph->ids.size());
-  for (const auto& node : graph->nodes)
+  for (const GraphNode& node : graph->nodes)
     for (size_t id : node.reads) if (id != Graph::omitted) ++graph->readers[id];
-  for (const auto& output : outputs) {
-    const auto value = definition.at("outputs").at(output.first).string_or("value", output.first);
+  for (const std::pair<const std::string, TensorSpec>& output : outputs) {
+    const std::string value = definition.at("outputs").at(output.first).string_or("value", output.first);
     const size_t id = graph->ids.at(value);
     graph->outputs.emplace(output.first, id);
     ++graph->readers[id];

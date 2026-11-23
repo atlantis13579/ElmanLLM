@@ -1,4 +1,5 @@
 #include "Inference/LLM/MemoryPlan.h"
+#include "Core/LocalFunction.h"
 #include "Inference/LLM/PagedKVCache.h"
 #include "IO/Safetensors.h"
 #include "IO/InferenceWeights.h"
@@ -13,12 +14,12 @@ namespace elman {
 namespace {
 size_t mul(std::initializer_list<size_t> values) {
     size_t result = 1;
-    for (auto value : values) result = checked_memory_mul(result, value);
+    for (uint64_t value : values) result = checked_memory_mul(result, value);
     return result;
 }
 size_t sum(std::initializer_list<size_t> values) {
     size_t result = 0;
-    for (auto value : values) result = checked_memory_add(result, value);
+    for (uint64_t value : values) result = checked_memory_add(result, value);
     return result;
 }
 void require(bool valid, const char* message) {
@@ -37,17 +38,17 @@ void validate(const DecoderConfig& c) {
             "invalid attention dimensions");
 }
 size_t elements(std::initializer_list<size_t> values) {
-    auto count = mul(values);
+    size_t count = mul(values);
     require(count <= size_t(std::numeric_limits<int>::max()), "tensor exceeds the Int32 element limit");
     return count;
 }
 size_t parameter_bytes(const DecoderConfig& c, Backend backend, DType dtype, bool packed) {
     require(!c.latent_cache_rank, "latent model parameters require a checkpoint catalog");
     size_t h = c.hidden, k = size_t(c.kv_heads) * c.head_dim(), i = c.intermediate;
-    auto bytes = [&](std::initializer_list<size_t> shape) {
+    LocalFunction bytes{[&](std::initializer_list<size_t> shape) {
         return memory_allocation_bytes(backend, dtype_storage_bytes(dtype, elements(shape)));
-    };
-    auto layer = sum({mul({2, bytes({h, h})}), mul({2, bytes({k, h})}), mul({3, bytes({h, i})}),
+    }};
+    size_t layer = sum({mul({2, bytes({h, h})}), mul({2, bytes({k, h})}), mul({3, bytes({h, i})}),
                       mul({3, bytes({h})}), mul({2, bytes({k})})});
     if (packed) layer = sum({bytes({h, h}), bytes({h + 2*k, h}), bytes({2*i, h}), bytes({h, i}),
                              mul({2, bytes({h})}), bytes({h + 2*k})});
@@ -120,8 +121,8 @@ DecoderMemoryPlan plan_decoder_generation(
     size_t chunk = prefill_chunk_size ? std::min(prompt, size_t(prefill_chunk_size)) : prompt;
     size_t logit_rows = full_logits ? chunk : 1;
     size_t h = c.hidden, v = c.vocabulary, heads = c.heads, dim = c.head_dim();
-    auto cache = [&](size_t t) { return mul({2, size_t(c.layers), t, size_t(c.kv_heads), dim, d}); };
-    auto forward = [&](size_t s, size_t t) {
+    LocalFunction cache{[&](size_t t) { return mul({2, size_t(c.layers), t, size_t(c.kv_heads), dim, d}); }};
+    LocalFunction forward{[&](size_t s, size_t t) {
         qwen_host_workspace(c, 1, s, t, full_logits, tiled_attention, backend == Backend::CPU);
         // Include full-expression temporaries, GQA materialization, residuals,
         // Float32 RMS/softmax paths, MLP activations and full-sequence logits.
@@ -132,7 +133,7 @@ DecoderMemoryPlan plan_decoder_generation(
             attention, mul({12 * d + 8, s, h}),
             mul({4, d, s, size_t(c.intermediate)}),
             mul({d + 4, full_logits ? s : size_t(1), v}), size_t(64 * 1024)});
-    };
+    }};
     result.kv_cache_bytes = cache(total);
     // An immutable previous cache coexists with the next chunk's result.
     result.prefill_bytes = sum({mul({chunk < prompt ? size_t(2) : size_t(1), cache(prompt)}), forward(chunk, prompt)});
@@ -210,20 +211,20 @@ DecoderMemoryPlan plan_decoder_weight_load(const std::string& directory, Backend
                                            bool packed_projections) {
     require(is_compute_float(dtype), "unsupported compute dtype");
     InferenceWeights catalog(directory);
-    const auto decoder = read_decoder_config(directory);
+    const DecoderConfig decoder = read_decoder_config(directory);
     if (decoder.latent_cache_rank) packed_projections = false;
-    auto routing_weight = [&](const std::string& name) {
+    LocalFunction routing_weight{[&](const std::string& name) {
         return decoder.latent_cache_rank && (name.find(".mlp.gate.weight") != std::string::npos ||
             name.find(".mlp.gate.e_score_correction_bias") != std::string::npos);
-    };
+    }};
     if (catalog.has_quantization()) {
         DecoderMemoryPlan result;
         result.parameter_bytes = catalog.resident_bytes(backend, dtype);
-        const auto& c = decoder;
-        for (const auto& entry : catalog.tensors()) if (routing_weight(entry.first)) {
-            const auto n = shape_element_count(entry.second.shape);
-            const auto narrow = memory_allocation_bytes(backend, dtype_storage_bytes(dtype, n));
-            const auto wide = memory_allocation_bytes(backend, dtype_storage_bytes(DType::Float32, n));
+        const DecoderConfig& c = decoder;
+        for (const std::pair<const std::string, SafetensorInfo>& entry : catalog.tensors()) if (routing_weight(entry.first)) {
+            const size_t n = shape_element_count(entry.second.shape);
+            const size_t narrow = memory_allocation_bytes(backend, dtype_storage_bytes(dtype, n));
+            const size_t wide = memory_allocation_bytes(backend, dtype_storage_bytes(DType::Float32, n));
             if (wide > narrow) result.parameter_bytes = checked_memory_add(result.parameter_bytes, wide - narrow);
         }
         size_t workspace = catalog.largest_quantized_weight();
@@ -235,7 +236,7 @@ DecoderMemoryPlan plan_decoder_weight_load(const std::string& directory, Backend
         result.weight_workspace_bytes = memory_allocation_bytes(backend, dtype_storage_bytes(dtype, workspace));
         // Loading validates metadata and may hold host payload copies. Packed
         // projections coexist with source partitions and intermediate concats.
-        const auto largest = memory_allocation_bytes(backend, catalog.largest_payload());
+        const size_t largest = memory_allocation_bytes(backend, catalog.largest_payload());
         result.host_additional_bytes = mul({4, catalog.largest_payload()});
         result.additional_bytes = sum({result.parameter_bytes, mul({4, largest})});
         if (backend == Backend::CPU) result.additional_bytes = checked_memory_add(result.additional_bytes, result.host_additional_bytes);
@@ -244,22 +245,22 @@ DecoderMemoryPlan plan_decoder_weight_load(const std::string& directory, Backend
     SafetensorsWeights weights(directory);
     DecoderMemoryPlan result;
     size_t conversion = 0;
-    for (const auto& entry : weights.tensors()) {
-        const auto& info = entry.second;
+    for (const std::pair<const std::string, SafetensorInfo>& entry : weights.tensors()) {
+        const SafetensorInfo& info = entry.second;
         require(is_compute_float(info.dtype), "unsupported checkpoint dtype");
-        const auto target_dtype = routing_weight(entry.first) ? DType::Float32 : dtype;
-        auto bytes = memory_allocation_bytes(backend, dtype_storage_bytes(target_dtype, shape_element_count(info.shape)));
+        const DType target_dtype = routing_weight(entry.first) ? DType::Float32 : dtype;
+        size_t bytes = memory_allocation_bytes(backend, dtype_storage_bytes(target_dtype, shape_element_count(info.shape)));
         result.parameter_bytes = sum({result.parameter_bytes, bytes});
         result.host_additional_bytes = std::max(result.host_additional_bytes, size_t(info.bytes));
         if (info.dtype != target_dtype) conversion = std::max(conversion, memory_allocation_bytes(backend, size_t(info.bytes)));
     }
     size_t packing = 0;
     if (packed_projections) {
-        const auto c = Qwen2Config::from_json(Json::read((std::filesystem::path(directory) / "config.json").string()));
+        const Qwen2Config c = Qwen2Config::from_json(Json::read((std::filesystem::path(directory) / "config.json").string()));
         size_t h = c.hidden, k = size_t(c.kv_heads) * c.head_dim(), i = c.intermediate;
-        auto bytes = [&](std::initializer_list<size_t> shape) {
+        LocalFunction bytes{[&](std::initializer_list<size_t> shape) {
             return memory_allocation_bytes(backend, dtype_storage_bytes(dtype, elements(shape)));
-        };
+        }};
         // Source partitions and concat's QK intermediate can coexist with the
         // final packed tensor. Retain a separate bound for dtype conversion.
         packing = std::max({sum({bytes({h, h}), mul({2, bytes({k, h})}), bytes({h + k, h}), bytes({h}), mul({2, bytes({k})})}),
@@ -274,8 +275,8 @@ DecoderMemoryPlan plan_decoder_weight_load(const std::string& directory, Backend
 DeviceLoadPlan plan_qwen_tensor_parallel_load(const std::string& directory, Backend backend, DType dtype,
     bool packed_projections, int rank, int ranks) {
     require(is_compute_float(dtype), "unsupported tensor parallel compute dtype");
-    const auto model = Qwen2Config::from_json(Json::read((std::filesystem::path(directory) / "config.json").string()));
-    const auto heads = partition_attention_heads(model.heads, model.kv_heads, rank, ranks);
+    const Qwen2Config model = Qwen2Config::from_json(Json::read((std::filesystem::path(directory) / "config.json").string()));
+    const TensorParallelHeads heads = partition_attention_heads(model.heads, model.kv_heads, rank, ranks);
     require(model.intermediate % ranks == 0, "tensor parallel ranks must divide the MLP width");
     InferenceWeights weights(directory);
     require(!weights.has_quantization(), "tensor parallel Qwen2 requires dense weights");
@@ -283,10 +284,12 @@ DeviceLoadPlan plan_qwen_tensor_parallel_load(const std::string& directory, Back
     const int intermediate = model.intermediate / ranks;
     DecoderMemoryPlan result;
     size_t conversion = 0;
-    for (const auto& [name, info] : weights.tensors()) {
+    for (const std::pair<const std::string, SafetensorInfo>& entry : weights.tensors()) {
+        const std::string& name = entry.first;
+        const SafetensorInfo& info = entry.second;
         require(is_compute_float(info.dtype), "unsupported tensor parallel weight dtype");
-        auto shape = info.shape;
-        const auto has = [&](const char* component) { return name.find(component) != std::string::npos; };
+        Shape shape = info.shape;
+        const LocalFunction has{[&](const char* component) { return name.find(component) != std::string::npos; }};
         if (has(".q_proj.")) shape.at(0) = query;
         else if (has(".k_proj.") || has(".v_proj.")) shape.at(0) = kv;
         else if (has(".o_proj.")) shape.at(1) = query;
@@ -300,9 +303,9 @@ DeviceLoadPlan plan_qwen_tensor_parallel_load(const std::string& directory, Back
     }
     size_t packing = 0;
     if (packed_projections) {
-        auto bytes = [&](size_t rows, size_t cols) {
+        LocalFunction bytes{[&](size_t rows, size_t cols) {
             return memory_allocation_bytes(backend, dtype_storage_bytes(dtype, elements({rows, cols})));
-        };
+        }};
         const size_t width = model.hidden, qkv = size_t(query) + 2 * kv;
         packing = std::max(sum({bytes(qkv, width), bytes(qkv, width), bytes(qkv, 1), bytes(qkv, 1)}),
                            bytes(2 * size_t(intermediate), width));
@@ -314,19 +317,19 @@ DeviceLoadPlan plan_qwen_tensor_parallel_load(const std::string& directory, Back
 
 std::vector<DeviceLoadPlan> plan_decoder_load(const std::string& directory, Backend backend, DType dtype,
     bool packed_projections, const std::vector<int>& devices) {
-    const auto config = read_decoder_config(directory);
+    const DecoderConfig config = read_decoder_config(directory);
     DecoderPlacement placement(backend, config.layers, devices);
-    const auto total = plan_decoder_weight_load(directory, backend, dtype, packed_projections);
+    const DecoderMemoryPlan total = plan_decoder_weight_load(directory, backend, dtype, packed_projections);
     if (!placement.distributed()) return {{placement.input_device(), total}};
     InferenceWeights catalog(directory);
     std::map<int, size_t> residents;
-    for (const auto& item : catalog.tensors()) {
+    for (const std::pair<const std::string, SafetensorInfo>& item : catalog.tensors()) {
         int ordinal = placement.output_device();
         if (item.first == "model.embed_tokens.weight") ordinal = placement.input_device();
         else if (item.first.compare(0, 13, "model.layers.") == 0) {
-            const auto end = item.first.find('.', 13);
+            const size_t end = item.first.find('.', 13);
             require(end != std::string::npos && end > 13, "invalid layer weight name");
-            const auto index = item.first.substr(13, end - 13);
+            const std::string index = item.first.substr(13, end - 13);
             require(std::all_of(index.begin(), index.end(), [](char c) { return c >= '0' && c <= '9'; }), "invalid layer index");
             ordinal = placement.layer_device(std::stoi(index));
         }
@@ -339,7 +342,7 @@ std::vector<DeviceLoadPlan> plan_decoder_load(const std::string& directory, Back
             catalog.resident_bytes("model.embed_tokens.weight", backend, dtype));
     std::vector<DeviceLoadPlan> result;
     for (int ordinal : placement.ordinals()) {
-        auto local = total;
+        DecoderMemoryPlan local = total;
         // Packing changes allocation alignment; retain a conservative allowance.
         local.parameter_bytes = checked_memory_add(residents[ordinal], packed_projections ? 1024 * 1024 : 0);
         local.additional_bytes = checked_memory_add(local.parameter_bytes, total.additional_bytes - total.parameter_bytes);
@@ -351,7 +354,7 @@ std::vector<DeviceLoadPlan> plan_decoder_load(const std::string& directory, Back
 DecoderMemoryAdmission::DecoderMemoryAdmission(Backend backend, const MemoryBudget& budget,
     const std::vector<DeviceLoadPlan>& plans, bool loading) : backend_(backend) {
     require(!plans.empty(), "empty device memory plan");
-    for (const auto& plan : plans) {
+    for (const DeviceLoadPlan& plan : plans) {
         DeviceScope owner(backend, plan.ordinal);
         ordinals_.push_back(plan.ordinal);
         admissions_.push_back(std::make_unique<MemoryAdmission>(backend, budget,
@@ -388,8 +391,8 @@ void DecoderMemoryAdmission::enable_pools(bool reuse) {
 }
 AllocationPoolStats DecoderMemoryAdmission::allocation_stats() const {
     AllocationPoolStats result;
-    for (const auto& pool : pools_) {
-        const auto item = pool->stats();
+    for (const std::unique_ptr<AllocationPool>& pool : pools_) {
+        const AllocationPoolStats item = pool->stats();
         result.requests += item.requests; result.allocations += item.allocations;
         result.reuses += item.reuses; result.evictions += item.evictions;
         result.allocated_bytes += item.allocated_bytes; result.reserved_bytes += item.reserved_bytes;
@@ -402,13 +405,13 @@ AllocationPoolStats DecoderMemoryAdmission::allocation_stats() const {
 MemoryAdmission::MemoryAdmission(Backend backend, const MemoryBudget& budget, size_t additional, size_t host_additional)
     : backend_(backend) {
     report_.budget_bytes = memory_available_limit(backend, budget.limit_bytes, budget.reserve_bytes);
-    auto live = memory_stats(backend).live_bytes();
+    size_t live = memory_stats(backend).live_bytes();
     report_.estimated_peak_bytes = checked_memory_add(live, additional);
     if (report_.estimated_peak_bytes > report_.budget_bytes)
         throw MemoryLimitExceeded(backend, additional, live, report_.budget_bytes);
     if (backend == Backend::CUDA) {
         report_.host_budget_bytes = memory_available_limit(Backend::CPU, 0, budget.reserve_bytes);
-        auto host_live = memory_stats(Backend::CPU).live_bytes();
+        size_t host_live = memory_stats(Backend::CPU).live_bytes();
         report_.host_estimated_peak_bytes = checked_memory_add(host_live, host_additional);
         if (report_.host_estimated_peak_bytes > report_.host_budget_bytes)
             throw MemoryLimitExceeded(Backend::CPU, host_additional, host_live, report_.host_budget_bytes);
@@ -417,7 +420,7 @@ MemoryAdmission::MemoryAdmission(Backend backend, const MemoryBudget& budget, si
     limit_ = std::make_unique<MemoryLimit>(backend, report_.budget_bytes);
 }
 MemoryReport MemoryAdmission::report() const {
-    auto result = report_;
+    MemoryReport result = report_;
     result.measured_peak_bytes = limit_->peak_bytes();
     if (host_limit_) result.host_measured_peak_bytes = host_limit_->peak_bytes();
     else {

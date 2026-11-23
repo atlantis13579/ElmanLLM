@@ -1,7 +1,7 @@
 #pragma once
 
 #include "Models/Model.h"
-#include "NN/Module.h"
+#include "Layers/Module.h"
 
 namespace elman {
 

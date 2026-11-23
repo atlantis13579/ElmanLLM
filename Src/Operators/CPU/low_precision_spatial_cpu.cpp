@@ -5,7 +5,7 @@ namespace elman {
 void launch_low_precision_spatial_cpu(LowPrecisionSpatial op, uint32_t* out, const uint32_t* a, const uint32_t* b, const uint32_t* c, const KernelParams& p) {
     const unsigned bytes = p.output_dtype() == int(DType::Float4E2M1FN) ? (unsigned(p.output_count()) + 1u) / 2u : unsigned(p.output_count());
     for (unsigned byte = 0; byte < bytes; ++byte) {
-        const auto dtype = DType(p.output_dtype());
+        const DType dtype = DType(p.output_dtype());
         const LowSpatialValues x{a, dtype}, y{b, dtype}, z{c, dtype};
         const bool packed = dtype == DType::Float4E2M1FN;
         const int i = packed ? byte * 2 : byte;

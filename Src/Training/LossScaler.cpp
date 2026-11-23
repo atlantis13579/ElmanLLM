@@ -14,7 +14,7 @@ namespace {
 bool finite_gradient(const Tensor& gradient) {
   if (!gradient.numel()) return true;
   const int count = static_cast<int>(gradient.numel());
-  const auto magnitudes = abs(gradient);
+  const Tensor magnitudes = abs(gradient);
   constexpr int chunk = 4096;
   const int rows = count / chunk;
   const int tail = count % chunk;
@@ -43,13 +43,13 @@ bool LossScaler::unscale_and_check(Model& model) const {
   if (!enabled_) return true;
   graph::RecordingGuard no_grad;
   bool finite = true;
-  for (auto& parameter : model.parameters()) {
-    auto& value = parameter.value;
+  for (Parameter& parameter : model.parameters()) {
+    Tensor& value = parameter.value;
     if (!value.node()->gradient) continue;
     if (value.dtype() != DType::Float32) throw std::invalid_argument("FP16 scaling requires Float32 parameters");
     DeviceScope owner(value.backend(), value.device());
-    auto grad = Tensor(value.node()->gradient);
-    auto unscaled = state_.scale == 1.f ? grad : mul(grad, 1.0 / state_.scale);
+    Tensor grad = Tensor(value.node()->gradient);
+    Tensor unscaled = state_.scale == 1.f ? grad : mul(grad, 1.0 / state_.scale);
     finite &= finite_gradient(unscaled);
     value.node()->gradient = unscaled.node();
   }

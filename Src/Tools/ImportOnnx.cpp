@@ -57,9 +57,9 @@ struct TensorLayout {
 TensorLayout layout(const onnx::TensorProto& tensor) {
     if (tensor.dims_size() > 8) throw std::invalid_argument("ONNX tensor rank exceeds eight");
     Shape shape;
-    for (auto size : tensor.dims()) shape.push_back(dimension(size));
-    const auto type = dtype(tensor.data_type());
-    const auto bytes = dtype_storage_bytes(type, shape_element_count(shape));
+    for (int64_t size : tensor.dims()) shape.push_back(dimension(size));
+    const DType type = dtype(tensor.data_type());
+    const size_t bytes = dtype_storage_bytes(type, shape_element_count(shape));
     return {std::move(shape), type, bytes};
 }
 
@@ -67,39 +67,39 @@ Json port(const onnx::ValueInfoProto& value) {
     if (!value.type().has_tensor_type() || !value.type().tensor_type().has_shape() ||
         value.type().tensor_type().shape().dim_size() > 8)
         throw std::invalid_argument("Expected a tensor port with known rank of at most eight: " + value.name());
-    const auto& tensor = value.type().tensor_type();
+    const onnx::TypeProto_Tensor& tensor = value.type().tensor_type();
     Json::Array shape;
-    for (const auto& dim : tensor.shape().dim()) shape.emplace_back(dim.has_dim_value() ? dimension(dim.dim_value()) : -1);
+    for (const onnx::TensorShapeProto_Dimension& dim : tensor.shape().dim()) shape.emplace_back(dim.has_dim_value() ? dimension(dim.dim_value()) : -1);
     return Json::Object{{"dtype", dtype_name(dtype(tensor.elem_type()))}, {"shape", std::move(shape)}};
 }
 
 uint64_t external_integer(const std::string& text) {
     uint64_t value = 0;
-    const auto end = text.data() + text.size();
-    const auto result = std::from_chars(text.data(), end, value);
+    const char* const end = text.data() + text.size();
+    const std::from_chars_result result = std::from_chars(text.data(), end, value);
     if (result.ec != std::errc{} || result.ptr != end) throw std::invalid_argument("Invalid ONNX external data offset or length");
     return value;
 }
 
 void inline_external_data(onnx::TensorProto& tensor, const fs::path& root) {
     if (tensor.data_location() != onnx::TensorProto::EXTERNAL) return;
-    const auto description = layout(tensor);
+    const TensorLayout description = layout(tensor);
     std::map<std::string, std::string> metadata;
-    for (const auto& item : tensor.external_data())
+    for (const onnx::StringStringEntryProto& item : tensor.external_data())
         if (!metadata.emplace(item.key(), item.value()).second) throw std::invalid_argument("Duplicate ONNX external data field");
     const auto location = metadata.find("location");
     if (location == metadata.end() || location->second.empty() || location->second.find('\0') != std::string::npos)
         throw std::invalid_argument("Missing ONNX external data location");
-    const auto relative = fs::u8path(location->second);
+    const std::filesystem::path relative = fs::u8path(location->second);
     if (relative.has_root_path() || std::find(relative.begin(), relative.end(), fs::path("..")) != relative.end())
         throw std::invalid_argument("ONNX external data must be inside the model directory");
-    const auto path = fs::canonical(root / relative);
-    const auto contained = path.lexically_relative(root);
+    const std::filesystem::path path = fs::canonical(root / relative);
+    const std::filesystem::path contained = path.lexically_relative(root);
     if (contained.empty() || *contained.begin() == fs::path("..") || !fs::is_regular_file(path))
         throw std::invalid_argument("ONNX external data resolves outside the model directory or is not a file");
     const uint64_t offset = metadata.count("offset") ? external_integer(metadata.at("offset")) : 0;
     const uint64_t length = metadata.count("length") ? external_integer(metadata.at("length")) : description.bytes;
-    const auto size = fs::file_size(path);
+    const uintmax_t size = fs::file_size(path);
     if (length != description.bytes || offset > size || length > size - offset ||
         offset > uint64_t(std::numeric_limits<std::streamoff>::max()) || length > uint64_t(std::numeric_limits<std::streamsize>::max()))
         throw std::invalid_argument("ONNX external data range does not match the tensor: " + tensor.name());
@@ -130,18 +130,18 @@ template<class Repeated>
 void append_values(std::vector<uint8_t>& output, const Repeated& values, size_t width, size_t expected) {
     if (static_cast<size_t>(values.size()) != expected / width) throw std::invalid_argument("ONNX tensor payload size differs from its shape");
     output.reserve(expected);
-    for (auto value : values) append_bytes(output, value, width);
+    for (typename Repeated::value_type value : values) append_bytes(output, value, width);
 }
 
 Tensor tensor_value(const onnx::TensorProto& tensor) {
-    auto description = layout(tensor);
+    TensorLayout description = layout(tensor);
     std::vector<uint8_t> bytes;
     if (tensor.has_raw_data()) {
-        const auto& raw = tensor.raw_data();
+        const std::string& raw = tensor.raw_data();
         if (raw.size() != description.bytes) throw std::invalid_argument("ONNX raw tensor size differs from its shape");
         bytes.assign(raw.begin(), raw.end());
     } else {
-        const auto width = dtype_info(description.type).bits / 8;
+        const unsigned int width = dtype_info(description.type).bits / 8;
         switch (description.type) {
         case DType::Float32: append_values(bytes, tensor.float_data(), width, description.bytes); break;
         case DType::Float64: append_values(bytes, tensor.double_data(), width, description.bytes); break;
@@ -189,7 +189,7 @@ Json attribute_value(const onnx::AttributeProto& attr) {
         return attr.s();
     case A::INTS: {
         Json::Array values;
-        for (const auto value : attr.ints()) values.emplace_back(exact_integer(value));
+        for (const int64_t value : attr.ints()) values.emplace_back(exact_integer(value));
         return values;
     }
     default: throw std::invalid_argument("Unsupported ONNX attribute type for " + attr.name());
@@ -230,21 +230,21 @@ Bundle import_graph(const fs::path& source) {
     if (model.functions_size() || model.training_info_size() || model.graph().sparse_initializer_size() ||
         model.opset_import_size() != 1)
         throw std::invalid_argument("ONNX import supports one standard opset without local functions, training graphs or sparse initializers");
-    auto& opset = *model.mutable_opset_import(0);
+    onnx::OperatorSetIdProto& opset = *model.mutable_opset_import(0);
     if ((opset.domain() != "" && opset.domain() != "ai.onnx") || opset.version() < 13)
         throw std::invalid_argument("ONNX standard opset 13 or later is required");
     opset.clear_domain();
-    const auto root = fs::canonical(fs::absolute(source).parent_path());
-    for (auto& tensor : *model.mutable_graph()->mutable_initializer()) inline_external_data(tensor, root);
-    for (auto& node : *model.mutable_graph()->mutable_node()) {
+    const std::filesystem::path root = fs::canonical(fs::absolute(source).parent_path());
+    for (onnx::TensorProto& tensor : *model.mutable_graph()->mutable_initializer()) inline_external_data(tensor, root);
+    for (onnx::NodeProto& node : *model.mutable_graph()->mutable_node()) {
         const auto op = supported().find(node.op_type());
-        const auto name = node.name().empty() ? node.op_type() : node.name();
+        const std::string name = node.name().empty() ? node.op_type() : node.name();
         if (op == supported().end()) throw std::invalid_argument(name + ": unsupported ONNX operator " + node.op_type());
         if ((node.domain() != "" && node.domain() != "ai.onnx") ||
-            std::count_if(node.output().begin(), node.output().end(), [](const auto& s) { return !s.empty(); }) != 1)
+            std::count_if(node.output().begin(), node.output().end(), [](const std::string& s) { return !s.empty(); }) != 1)
             throw std::invalid_argument(name + ": expected one named output in the standard ONNX domain");
         node.clear_domain();
-        for (auto& attr : *node.mutable_attribute()) {
+        for (onnx::AttributeProto& attr : *node.mutable_attribute()) {
             if (!op->second.count(attr.name())) throw std::invalid_argument(name + ": unsupported attribute " + attr.name());
             if (node.op_type() == "Constant" && attr.name() == "value") inline_external_data(*attr.mutable_t(), root);
         }
@@ -253,15 +253,15 @@ Bundle import_graph(const fs::path& source) {
     onnx::shape_inference::InferShapes(model, onnx::OpSchemaRegistry::Instance(), onnx::ShapeInferenceOptions(true, 1));
 
     Bundle result;
-    const auto& graph = model.graph();
-    for (const auto& tensor : graph.initializer()) result.weights.emplace(tensor.name(), tensor_value(tensor));
+    const onnx::GraphProto& graph = model.graph();
+    for (const onnx::TensorProto& tensor : graph.initializer()) result.weights.emplace(tensor.name(), tensor_value(tensor));
     Json::Object inputs, outputs;
-    for (const auto& value : graph.input())
+    for (const onnx::ValueInfoProto& value : graph.input())
         if (!result.weights.count(value.name())) inputs.emplace(value.name(), port(value));
-    for (const auto& value : graph.output()) outputs.emplace(value.name(), port(value));
+    for (const onnx::ValueInfoProto& value : graph.output()) outputs.emplace(value.name(), port(value));
     Json::Array nodes;
-    for (const auto& node : graph.node()) {
-        const auto& output = *std::find_if(node.output().begin(), node.output().end(), [](const auto& s) { return !s.empty(); });
+    for (const onnx::NodeProto& node : graph.node()) {
+        const std::string& output = *std::find_if(node.output().begin(), node.output().end(), [](const std::string& s) { return !s.empty(); });
         try {
             if (node.op_type() == "Constant") {
                 if (node.attribute_size() != 1) throw std::invalid_argument("Constant needs one value attribute");
@@ -270,7 +270,7 @@ Bundle import_graph(const fs::path& source) {
                 continue;
             }
             Json::Object attributes;
-            for (const auto& attr : node.attribute()) {
+            for (const onnx::AttributeProto& attr : node.attribute()) {
                 attributes.emplace(attr.name(), node.op_type() == "Cast" && attr.name() == "to"
                     ? Json(dtype_name(dtype(dimension(attr.i())))) : attribute_value(attr));
             }
@@ -287,7 +287,7 @@ Bundle import_graph(const fs::path& source) {
 }
 
 void write_bundle(const fs::path& destination, Bundle bundle) {
-    write_file_atomically(destination, [&](const auto& temporary) {
+    write_file_atomically(destination, [&](const fs::path& temporary) {
         if (!bundle.weights.empty()) {
             struct StagedWeights {
                 fs::path path;
@@ -295,9 +295,9 @@ void write_bundle(const fs::path& destination, Bundle bundle) {
             } staged{temporary};
             staged.path += ".safetensors";
             save_safetensors(staged.path, bundle.weights);
-            const auto digest = tools::sha256_file(staged.path);
-            const auto name = destination.stem().u8string() + '.' + digest.substr(0, 16) + ".safetensors";
-            const auto weights = destination.parent_path() / fs::u8path(name);
+            const std::string digest = tools::sha256_file(staged.path);
+            const std::string name = destination.stem().u8string() + '.' + digest.substr(0, 16) + ".safetensors";
+            const fs::path weights = destination.parent_path() / fs::u8path(name);
             bool published = false;
             if (!fs::exists(weights)) {
                 std::error_code error;

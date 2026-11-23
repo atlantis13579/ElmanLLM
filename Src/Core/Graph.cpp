@@ -35,7 +35,7 @@ Tensor tracked(Tensor output, const std::vector<Tensor>& parents,
     return output;
   }
   bool needed = false;
-  for (const auto& parent : parents) {
+  for (const Tensor& parent : parents) {
     needed |= parent.requires_grad();
   }
   if (!needed) {
@@ -44,7 +44,7 @@ Tensor tracked(Tensor output, const std::vector<Tensor>& parents,
   output.node()->requires_grad = true;
   output.node()->backward = std::move(backward);
   output.node()->saved_version = output.node()->value->version;
-  for (const auto& parent : parents) {
+  for (const Tensor& parent : parents) {
     if (parent.defined()) {
       output.node()->parents.push_back(parent.node());
       output.node()->versions.push_back(parent.node()->value->version);
@@ -86,7 +86,7 @@ std::string Tensor::graph_json() const {
         if (ids.count(node.get())) {
           return;
         }
-        for (const auto& parent : node->parents) {
+        for (const std::shared_ptr<TensorNode>& parent : node->parents) {
           visit(parent);
         }
         ids[node.get()] = nodes.size();
@@ -97,7 +97,7 @@ std::string Tensor::graph_json() const {
   std::ostringstream stream;
   stream << "{\"format\":\"elman.graph\",\"version\":1,\"nodes\":[";
   for (size_t i = 0; i < nodes.size(); ++i) {
-    const auto& node = nodes[i];
+    const std::shared_ptr<TensorNode>& node = nodes[i];
     if (i) {
       stream << ',';
     }

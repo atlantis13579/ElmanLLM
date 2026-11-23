@@ -2,7 +2,7 @@
 
 namespace elman::metal {
 Tensor lower_cos(Graph m, const Operands& inputs, const KernelParams&) {
-  auto a = inputs[0];
+  Tensor a = inputs[0];
   return [m.g cosWithTensor:m.float_work(a) name:nil];
 }
 }  // namespace elman::metal

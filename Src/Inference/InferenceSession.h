@@ -36,6 +36,8 @@ class InferenceSession {
   const TensorSignature& inputs() const { return inputs_; }
   const TensorSignature& outputs() const { return outputs_; }
   NamedTensors run(const NamedTensors& inputs) const;
+  // Explicit differentiable execution for declarative training graphs.
+  NamedTensors run_with_grad(const NamedTensors& inputs) const;
 
  private:
   Backend backend_;

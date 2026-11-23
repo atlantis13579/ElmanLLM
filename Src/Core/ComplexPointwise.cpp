@@ -48,7 +48,7 @@ int complex_pointwise_arity(ComplexPointwise operation) {
 }
 void validate_complex_pointwise(ComplexPointwise operation, const BufferPtr& output,
                                  const std::vector<BufferPtr>& inputs, const KernelParams& params) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     const int arity = complex_pointwise_arity(operation);
     require(bool(output) && inputs.size() >= size_t(arity) && inputs.size() <= 4, "Invalid complex pointwise arity");
     require(params.output_dtype() == int(output->dtype), "Complex output dtype descriptor mismatch");
@@ -59,7 +59,7 @@ void validate_complex_pointwise(ComplexPointwise operation, const BufferPtr& out
                     "Unexpected complex pointwise operand");
             continue;
         }
-        const auto input = KernelInput(i);
+        const KernelInput input = KernelInput(i);
         require(bool(inputs[i]) && inputs[i]->backend == output->backend, "Missing or mixed backend complex operand");
         const DType type = inputs[i]->dtype;
         require(params.input_dtype(input) == int(type), "Complex input dtype descriptor mismatch");
@@ -112,8 +112,8 @@ void validate_complex_pointwise(ComplexPointwise operation, const BufferPtr& out
     else require(is_complex(output->dtype), "Complex arithmetic requires complex output");
     for (int i = 0; i < arity; ++i) {
         if (!output->bytes || !inputs[i]->bytes) continue;
-        const auto a = reinterpret_cast<uintptr_t>(output->raw_pointer());
-        const auto b = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
+        const uintptr_t a = reinterpret_cast<uintptr_t>(output->raw_pointer());
+        const uintptr_t b = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
         const bool overlaps = a <= b ? b - a < output->bytes : a - b < inputs[i]->bytes;
         if (!overlaps) continue;
         require(a == b && output->dtype == inputs[i]->dtype && output->count == inputs[i]->count &&

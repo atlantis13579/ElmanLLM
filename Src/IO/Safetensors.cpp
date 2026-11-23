@@ -36,14 +36,14 @@ const std::map<std::string, DType>& storage_dtypes() {
     return types;
 }
 DType storage_dtype(const std::string& name) {
-    const auto& types = storage_dtypes();
+    const std::map<std::string, DType>& types = storage_dtypes();
     auto found = types.find(name);
     require(found != types.end(), "unsupported dtype " + name);
     return found->second;
 }
 void validate_utf8(const std::string& text) {
     for (size_t i = 0; i < text.size();) {
-        auto first = static_cast<unsigned char>(text[i++]);
+        unsigned char first = static_cast<unsigned char>(text[i++]);
         if (first < 0x80) continue;
         int count = first >= 0xc2 && first <= 0xdf ? 1 :
                     first >= 0xe0 && first <= 0xef ? 2 :
@@ -51,7 +51,7 @@ void validate_utf8(const std::string& text) {
         require(count >= 0 && i + count <= text.size(), "invalid UTF-8 header");
         uint32_t code = first & ((1u << (6 - count)) - 1);
         for (int j = 0; j < count; ++j) {
-            auto byte = static_cast<unsigned char>(text[i++]);
+            unsigned char byte = static_cast<unsigned char>(text[i++]);
             require((byte & 0xc0) == 0x80, "invalid UTF-8 continuation");
             code = (code << 6) | (byte & 0x3f);
         }
@@ -78,7 +78,7 @@ void validate_integer_tokens(const std::string& text) {
 }
 uint64_t file_size(std::ifstream& file) {
     file.seekg(0, std::ios::end);
-    auto end = file.tellg();
+    std::streampos end = file.tellg();
     require(end >= 0, "cannot determine file size");
     file.seekg(0);
     return static_cast<uint64_t>(end);
@@ -96,14 +96,21 @@ void write_safetensors_header(std::ostream& stream, const std::vector<Safetensor
     Json::Object catalog;
     if (!metadata.empty()) {
         Json::Object values;
-        for (const auto& [key, value] : metadata) values.emplace(key, value);
+        for (const std::pair<const std::string, std::string>& entry : metadata) {
+            const std::string& key = entry.first;
+            const std::string& value = entry.second;
+            values.emplace(key, value);
+        }
         catalog.emplace("__metadata__", std::move(values));
     }
     uint64_t offset = 0;
-    for (const auto& [name, dtype, dimensions] : entries) {
+    for (const SafetensorSpec& spec : entries) {
+        const std::string& name = spec.name;
+        const DType dtype = spec.dtype;
+        const Shape& dimensions = spec.shape;
         require(!name.empty() && name != "__metadata__" && !catalog.count(name), "invalid or duplicate output tensor name");
-        const auto& types = storage_dtypes();
-        const auto type = std::find_if(types.begin(), types.end(), [&](const auto& item) { return item.second == dtype; });
+        const std::map<std::string, DType>& types = storage_dtypes();
+        const auto type = std::find_if(types.begin(), types.end(), [&](const std::pair<const std::string, DType>& item) { return item.second == dtype; });
         require(type != types.end(), std::string("cannot save dtype ") + dtype_name(dtype));
         const uint64_t bytes = dtype_storage_bytes(dtype, shape_element_count(dimensions));
         require(bytes <= 9007199254740991ull - offset, "output offsets exceed exact JSON integer range");
@@ -113,7 +120,7 @@ void write_safetensors_header(std::ostream& stream, const std::vector<Safetensor
                                           {"data_offsets", Json::Array{double(offset), double(offset + bytes)}}});
         offset += bytes;
     }
-    auto header = Json(std::move(catalog)).dump(0);
+    std::string header = Json(std::move(catalog)).dump(0);
     validate_utf8(header);
     header.append((8 - header.size() % 8) % 8, ' ');
     require(header.size() <= 100000000, "output header exceeds format limit");
@@ -125,7 +132,9 @@ void write_safetensors_header(std::ostream& stream, const std::vector<Safetensor
 void save_safetensors(const std::filesystem::path& path, const std::map<std::string, Tensor>& tensors) {
     std::vector<SafetensorSpec> entries;
     entries.reserve(tensors.size());
-    for (const auto& [name, tensor] : tensors) {
+    for (const std::pair<const std::string, Tensor>& entry : tensors) {
+        const std::string& name = entry.first;
+        const Tensor& tensor = entry.second;
         require(tensor.defined(), "invalid output tensor value");
         entries.push_back({name, tensor.dtype(), tensor.shape()});
     }
@@ -133,8 +142,8 @@ void save_safetensors(const std::filesystem::path& path, const std::map<std::str
         std::ofstream file(temporary, std::ios::binary);
         require(bool(file), "cannot create output " + path.u8string());
         write_safetensors_header(file, entries);
-        for (const auto& entry : tensors) {
-            auto bytes = entry.second.raw_data();
+        for (const std::pair<const std::string, Tensor>& entry : tensors) {
+            std::vector<uint8_t> bytes = entry.second.raw_data();
             if (!bytes.empty()) file.write(reinterpret_cast<const char*>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
             require(bool(file), "cannot write tensor " + entry.first);
         }
@@ -159,27 +168,27 @@ SafetensorsFile::SafetensorsFile(const std::filesystem::path& path) : path_(path
     require(header.front() == '{', "header must start with an object");
     validate_utf8(header);
     validate_integer_tokens(header);
-    auto root = Json::parse(header);
+    Json root = Json::parse(header);
     data_start_ = 8 + header_bytes;
     uint64_t payload_bytes = file_size_ - data_start_;
     std::vector<std::pair<uint64_t, uint64_t>> ranges;
-    for (const auto& entry : root.object()) {
+    for (const std::pair<const std::string, Json>& entry : root.object()) {
         if (entry.first == "__metadata__") {
-            for (const auto& item : entry.second.object()) metadata_.emplace(item.first, item.second.string());
+            for (const std::pair<const std::string, Json>& item : entry.second.object()) metadata_.emplace(item.first, item.second.string());
             continue;
         }
-        const auto& value = entry.second;
+        const Json& value = entry.second;
         SafetensorInfo tensor;
         tensor.dtype = storage_dtype(value.at("dtype").string());
-        const auto& dimensions = value.at("shape").array();
+        const Json::Array& dimensions = value.at("shape").array();
         require(dimensions.size() <= 8, "tensor rank exceeds the runtime limit of eight");
-        for (const auto& dim : dimensions) {
+        for (const Json& dim : dimensions) {
             uint64_t size = unsigned_integer(dim);
             require(size <= uint64_t(std::numeric_limits<int>::max()), "dimension exceeds runtime indexing limit");
             tensor.shape.push_back(static_cast<int>(size));
         }
         size_t elements = shape_element_count(tensor.shape);
-        const auto& offsets = value.at("data_offsets").array();
+        const Json::Array& offsets = value.at("data_offsets").array();
         require(offsets.size() == 2, "expected two data offsets");
         uint64_t begin = unsigned_integer(offsets[0]), end = unsigned_integer(offsets[1]);
         require(begin <= end && end <= payload_bytes, "invalid tensor offsets");
@@ -191,7 +200,7 @@ SafetensorsFile::SafetensorsFile(const std::filesystem::path& path) : path_(path
     }
     std::sort(ranges.begin(), ranges.end());
     uint64_t end = 0;
-    for (const auto& range : ranges) {
+    for (const std::pair<uint64_t, uint64_t>& range : ranges) {
         require(range.first == end, "payload contains a hole or overlap");
         end = range.second;
     }
@@ -204,7 +213,7 @@ const SafetensorInfo& SafetensorsFile::info(const std::string& name) const {
     return found->second;
 }
 void SafetensorsFile::read_bytes(const std::string& name, uint64_t offset, void* output, size_t count) const {
-    const auto& tensor = info(name);
+    const SafetensorInfo& tensor = info(name);
     require(offset <= tensor.bytes && count <= tensor.bytes - offset && (!count || output), "invalid payload range for " + name);
     if (!count) return;
     std::ifstream file(path_, std::ios::binary);
@@ -213,18 +222,18 @@ void SafetensorsFile::read_bytes(const std::string& name, uint64_t offset, void*
     read_exact(file, output, count);
 }
 Tensor SafetensorsFile::load(const std::string& name, Backend backend) const {
-    const auto& tensor = info(name);
+    const SafetensorInfo& tensor = info(name);
     return load_storage(name, tensor.shape, tensor.dtype, backend);
 }
 Tensor SafetensorsFile::load_slice(const std::string& name, int axis, int offset, int count, Backend backend) const {
-    const auto& tensor = info(name);
+    const SafetensorInfo& tensor = info(name);
     if (axis < 0 || axis > 1 || size_t(axis) >= tensor.shape.size() || tensor.shape.size() > 2 ||
         offset < 0 || count < 0 || offset > tensor.shape[axis] || count > tensor.shape[axis] - offset ||
         dtype_info(tensor.dtype).bits % 8 != 0) throw std::invalid_argument("Unsupported Safetensors slice for " + name);
     if (count == tensor.shape[axis]) return load(name, backend);
     const uint64_t element_bytes = dtype_info(tensor.dtype).bits / 8;
     const uint64_t columns = tensor.shape.size() == 2 ? tensor.shape[1] : 1;
-    auto shape = tensor.shape;
+    Shape shape = tensor.shape;
     shape[axis] = count;
     const size_t bytes_count = dtype_storage_bytes(tensor.dtype, shape_element_count(shape));
     MemoryReservation reservation(Backend::CPU, bytes_count);
@@ -247,7 +256,7 @@ Tensor SafetensorsFile::load_slice(const std::string& name, int axis, int offset
     return Tensor::from_raw(std::move(shape), tensor.dtype, bytes, backend);
 }
 Tensor SafetensorsFile::load_storage(const std::string& name, const Shape& shape, DType dtype, Backend backend) const {
-    const auto& tensor = info(name);
+    const SafetensorInfo& tensor = info(name);
     require(dtype_storage_bytes(dtype, shape_element_count(shape)) == tensor.bytes, "logical and physical payload sizes differ");
     std::ifstream file(path_, std::ios::binary);
     require(bool(file), "cannot reopen " + path_.u8string());
@@ -266,16 +275,16 @@ SafetensorsWeights::SafetensorsWeights(const std::filesystem::path& directory) {
     if (!fs::exists(index_path)) {
         files_.emplace_back(root / "model.safetensors");
         tensors_ = files_.front().tensors();
-        for (const auto& item : tensors_) locations_.emplace(item.first, 0);
+        for (const std::pair<const std::string, SafetensorInfo>& item : tensors_) locations_.emplace(item.first, 0);
         return;
     }
-    auto index = Json::read(index_path);
+    Json index = Json::read(index_path);
     std::map<std::string, size_t> shards;
-    const auto& weights = index.at("weight_map").object();
+    const Json::Object& weights = index.at("weight_map").object();
     require(!weights.empty(), "empty sharded weight map");
-    for (const auto& item : weights) {
+    for (const std::pair<const std::string, Json>& item : weights) {
         std::string filename = item.second.string();
-        const auto relative = fs::u8path(filename);
+        const std::filesystem::path relative = fs::u8path(filename);
         require(!filename.empty() && !relative.is_absolute() && !relative.has_root_path() &&
                 relative.filename() == relative && filename != "." && filename != ".." &&
                 filename.find(':') == std::string::npos && filename.find('\\') == std::string::npos &&
@@ -293,7 +302,7 @@ SafetensorsWeights::SafetensorsWeights(const std::filesystem::path& directory) {
         locations_.emplace(item.first, position);
     }
     for (size_t i = 0; i < files_.size(); ++i) {
-        for (const auto& item : files_[i].tensors()) {
+        for (const std::pair<const std::string, SafetensorInfo>& item : files_[i].tensors()) {
             auto found = locations_.find(item.first);
             require(found != locations_.end() && found->second == i,
                     "shard tensor is missing from the index or appears in multiple shards: " + item.first);

@@ -1,4 +1,5 @@
 #include "Text/ClipTokenizer.h"
+#include "Core/LocalFunction.h"
 
 #include <filesystem>
 #include <fstream>
@@ -10,7 +11,7 @@ namespace elman {
 namespace {
 
 std::string token(const Json& config, const std::string& name) {
-  const auto& entry = config.at(name);
+  const Json& entry = config.at(name);
   return entry.is_object() ? entry.at("content").string() : entry.string();
 }
 
@@ -18,9 +19,9 @@ std::string token(const Json& config, const std::string& name) {
 
 ClipTokenizer::ClipTokenizer(const std::string& directory)
     : splitter_(R"(<\|startoftext\|>|<\|endoftext\|>|'s|'t|'re|'ve|'m|'ll|'d|\p{L}+|\p{N}|[^\s\p{L}\p{N}]+)") {
-  const auto root = std::filesystem::path(directory);
-  const auto config = Json::read((root / "tokenizer_config.json").string());
-  const auto vocab = Json::read((root / "vocab.json").string());
+  const std::filesystem::path root = std::filesystem::path(directory);
+  const Json config = Json::read((root / "tokenizer_config.json").string());
+  const Json vocab = Json::read((root / "vocab.json").string());
   if (config.string_or("tokenizer_class", "CLIPTokenizer") != "CLIPTokenizer" ||
       !config.bool_or("do_lower_case", true) || config.bool_or("add_prefix_space", false))
     throw std::invalid_argument("Unsupported CLIP tokenizer configuration");
@@ -29,12 +30,12 @@ ClipTokenizer::ClipTokenizer(const std::string& directory)
     throw std::invalid_argument("Invalid CLIP text length or vocabulary size");
   vocabulary_ = static_cast<int>(vocab.object().size());
   std::vector<bool> seen(vocabulary_, false);
-  for (const auto& entry : vocab.object()) {
+  for (const std::pair<const std::string, Json>& entry : vocab.object()) {
     const int id = entry.second.integer();
     if (id < 0 || id >= vocabulary_ || seen[id]) throw std::invalid_argument("Invalid CLIP vocabulary ID");
     seen[id] = true;
   }
-  auto id = [&](const std::string& symbol) { return vocab.at(symbol).integer(); };
+  LocalFunction id{[&](const std::string& symbol) { return vocab.at(symbol).integer(); }};
   bos_token_ = token(config, "bos_token");
   eos_token_ = token(config, "eos_token");
   if (bos_token_ != "<|startoftext|>" || eos_token_ != "<|endoftext|>")
@@ -42,9 +43,9 @@ ClipTokenizer::ClipTokenizer(const std::string& directory)
   bos_ = id(bos_token_);
   eos_ = id(eos_token_);
   pad_ = id(token(config, "pad_token"));
-  const auto& codepoints = bytelevel_codepoints();
+  const std::array<char16_t, 256>& codepoints = bytelevel_codepoints();
   for (size_t byte = 0; byte < codepoints.size(); ++byte) {
-    const auto symbol = utf8(std::u16string(1, codepoints[byte]));
+    const std::string symbol = utf8(std::u16string(1, codepoints[byte]));
     bpe_.byte_ids_[byte] = id(symbol);
     endings_[byte] = id(symbol + "</w>");
   }
@@ -66,7 +67,7 @@ ClipTokenizer::ClipTokenizer(const std::string& directory)
 
 std::vector<int32_t> ClipTokenizer::encode(const std::string& prompt) const {
   std::vector<int32_t> ids{bos_};
-  for (const auto& word : splitter_.split(lowercase_unicode(normalize_nfc(prompt)), false)) {
+  for (const std::string& word : splitter_.split(lowercase_unicode(normalize_nfc(prompt)), false)) {
     if (ids.size() >= size_t(length_ - 1)) break;
     if (word == bos_token_) ids.push_back(bos_);
     else if (word == eos_token_) ids.push_back(eos_);

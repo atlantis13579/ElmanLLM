@@ -3,7 +3,7 @@
 
 namespace elman {
 inline dim3 short_row_block(int length, int rows) {
-  auto power = [](int value) { int result = 1; while (result <= value / 2 && result < 512) result *= 2; return result; };
+  int (*const power)(int) = [](int value) { int result = 1; while (result <= value / 2 && result < 512) result *= 2; return result; };
   int columns = power(length), row_power = power(rows);
   int width = columns < 32 ? columns : 32;
   int height = row_power < 512 / width ? row_power : 512 / width;

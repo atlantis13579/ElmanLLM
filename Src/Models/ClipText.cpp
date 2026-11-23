@@ -48,9 +48,9 @@ struct ClipLayer {
         first(model_weights::linear(weights, prefix + ".mlp.fc1", config.width, config.intermediate)),
         second(model_weights::linear(weights, prefix + ".mlp.fc2", config.intermediate, config.width)) {}
   Tensor forward(const Tensor& input, bool use_quick_gelu) const {
-    auto normalized = attention_norm(input);
-    auto hidden = add(input, attention(normalized, normalized, true));
-    auto value = first(mlp_norm(hidden));
+    Tensor normalized = attention_norm(input);
+    Tensor hidden = add(input, attention(normalized, normalized, true));
+    Tensor value = first(mlp_norm(hidden));
     value = use_quick_gelu ? quick_gelu(value) : exact_gelu(value);
     return add(hidden, second(value));
   }
@@ -73,9 +73,9 @@ struct ClipText {
     const int batch = ids.shape()[0];
     if (batch < 1 || batch > std::numeric_limits<int>::max() / config.length)
       throw std::invalid_argument("Invalid CLIP text batch");
-    auto tokens = index_select(embedding, 0, reshape(ids, {batch * config.length}));
-    auto hidden = add(reshape(tokens, {batch, config.length, config.width}), positions);
-    for (const auto& layer : layers) hidden = layer.forward(hidden, config.quick_gelu);
+    Tensor tokens = index_select(embedding, 0, reshape(ids, {batch * config.length}));
+    Tensor hidden = add(reshape(tokens, {batch, config.length, config.width}), positions);
+    for (const ClipLayer& layer : layers) hidden = layer.forward(hidden, config.quick_gelu);
     return final_norm(hidden);
   }
 };
@@ -86,7 +86,7 @@ InferenceSession load_clip_text_encoder(const std::filesystem::path& directory, 
                                          int device, DType dtype) {
   DeviceScope owner(backend, device);
   const ClipConfig config(Json::read((directory / "config.json").string()));
-  auto model = std::make_shared<ClipText>(config, ComponentWeights(directory, "model", backend, dtype));
+  std::shared_ptr<ClipText> model = std::make_shared<ClipText>(config, ComponentWeights(directory, "model", backend, dtype));
   return InferenceSession(backend, device, {{"input_ids", {DType::Int32, {-1, config.length}}}},
       {{"last_hidden_state", {dtype, {-1, config.length, config.width}}}},
       [model = std::move(model)](const NamedTensors& inputs) {

@@ -45,11 +45,11 @@ void gradient(const std::string& name, const Shape& shape, const std::vector<flo
     Tensor x = t(shape, values, true);
     Tensor loss = sum_all(fn(x));
     loss.backward();
-    auto analytical = x.grad();
+    std::vector<float> analytical = x.grad();
     std::vector<float> numerical(values.size());
     const float delta = 0.001f;
     for (size_t i = 0; i < values.size(); ++i) {
-        auto plus = values, minus = values;
+        std::vector<float> plus = values, minus = values;
         plus[i] += delta;
         minus[i] -= delta;
         float hi = sum_all(fn(t(shape, plus))).data()[0], lo = sum_all(fn(t(shape, minus))).data()[0];
@@ -129,7 +129,7 @@ void reductions_and_layout() {
     near(reshape(a, {3, -1}).data(), a.data(), "reshape");
     near(slice(a, 1, 0, 3, 2).data(), {1, 3, 4, 6}, "slice");
     near(concat({a, a}, 1).data(), {1, 2, 3, 1, 2, 3, 4, 5, 6, 4, 5, 6}, "concat");
-    auto parts = split(a, 2, 1);
+    std::vector<Tensor> parts = split(a, 2, 1);
     check(parts.size() == 2, "split count");
     near(parts[1].data(), {3, 6}, "split remainder");
     near(repeat(t({2}, {1, 2}), {2, 2}).data(), {1, 2, 1, 2, 1, 2, 1, 2}, "repeat");
@@ -200,14 +200,14 @@ void convolution_and_random() {
     near(avg_pool2d(x, 2, 1).data(), {.3f, .4f, .6f, .7f}, "avg pool");
     gradient("max pool", x.shape(), x.data(), [](const Tensor& v) { return max_pool2d(v, 2, 1); });
     gradient("avg pool", x.shape(), x.data(), [](const Tensor& v) { return avg_pool2d(v, 2, 1, 1); });
-    auto uniform = Tensor::uniform({64}, -2, 3, 123, device).data();
+    std::vector<float> uniform = Tensor::uniform({64}, -2, 3, 123, device).data();
     near(uniform, Tensor::uniform({64}, -2, 3, 123, device).data(), "uniform deterministic");
     check(std::all_of(uniform.begin(), uniform.end(), [](float v) { return v >= -2 && v <= 3; }), "uniform range");
-    auto normal = Tensor::normal({64}, 0, 1, 456, device).data();
+    std::vector<float> normal = Tensor::normal({64}, 0, 1, 456, device).data();
     near(normal, Tensor::normal({64}, 0, 1, 456, device).data(), "normal deterministic");
     check(std::all_of(normal.begin(), normal.end(), [](float v) { return std::isfinite(v); }), "normal finite");
     Tensor ones = Tensor::ones({64}, device, true);
-    auto dropped = dropout(ones, .5f, 19);
+    Tensor dropped = dropout(ones, .5f, 19);
     sum_all(dropped).backward();
     near(ones.grad(), dropped.data(), "dropout backward mask");
     near(dropout(x, .5f, 19, false).data(), x.data(), "dropout eval");
@@ -256,7 +256,7 @@ void graph_and_parity() {
     if (device != Backend::CPU) {
         Tensor a = Tensor::normal({2, 3, 4}, 0, .2f, 23, device);
         Tensor b = Tensor::normal({1, 4, 3}, 0, .3f, 47, device);
-        auto run = [](Tensor a, Tensor b) { return sum(softmax(matmul(a, b)), 1); };
+        Tensor (*const run)(Tensor, Tensor) = [](Tensor a, Tensor b) { return sum(softmax(matmul(a, b)), 1); };
         near(run(a, b).data(), run(a.to(Backend::CPU), b.to(Backend::CPU)).data(), "CPU backend parity", .0002f);
         near(Tensor::uniform({64}, 0, 1, 42, device).data(), Tensor::uniform({64}, 0, 1, 42, Backend::CPU).data(),
              "random backend parity");

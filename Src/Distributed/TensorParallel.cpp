@@ -11,7 +11,7 @@ Tensor reduce_tensor_parallel(const Tensor& local, ProcessGroup& group) {
   if (group.size() == 1) return local;
   if (!is_compute_float(local.dtype())) throw std::invalid_argument("Tensor parallel reduction requires a compute dtype");
   DeviceScope owner(local.backend(), local.device());
-  auto values = local.data();
+  std::vector<float> values = local.data();
   group.all_reduce_sum(values.data(), values.size());
   return Tensor::from_data(local.shape(), values, local.backend(), false, local.dtype());
 }

@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <vector>
 #include "Core/Tensor.h"
+#include "Operators/float_optimizer_math.h"
 
 namespace elman::optimizer_internal {
 
@@ -18,15 +19,15 @@ struct StepParameters {
   double correction2;
 };
 
-struct DoubleStep {
+struct TensorStep {
   Tensor value;
   Tensor first_moment;
   Tensor second_moment;
 };
-DoubleStep double_step(const std::string& algorithm, const Tensor& values,
+TensorStep double_step(const std::string& algorithm, const Tensor& values,
                        const Tensor& gradients, const Tensor& first_moment,
                        const Tensor& second_moment, const StepParameters& step);
-DoubleStep complex_step(const std::string& algorithm, const Tensor& values, const Tensor& gradients,
+TensorStep complex_step(const std::string& algorithm, const Tensor& values, const Tensor& gradients,
                         const Tensor& first_moment, const Tensor& second_moment,
                         const StepParameters& step, bool first_step);
 struct LowStep {
@@ -37,16 +38,16 @@ struct LowStep {
 };
 LowStep low_step(const std::string& algorithm,const Tensor& values,const Tensor& gradients,
                 const Tensor& first_moment,const Tensor& second_moment,const StepParameters& step,bool first_step);
-DoubleStep resident_float32_step(const std::string& algorithm, const Tensor& values, const Tensor& gradients,
+TensorStep resident_float32_step(const std::string& algorithm, const Tensor& values, const Tensor& gradients,
                                 const Tensor& first_moment, const Tensor& second_moment, const StepParameters& step);
 
 void sgd_step(std::vector<float>& values, const std::vector<float>& gradients,
-              std::vector<float>& first_moment, const StepParameters& step);
+              std::vector<float>& first_moment, const FloatOptimizerParameters& step);
 void adam_step(std::vector<float>& values, const std::vector<float>& gradients,
                std::vector<float>& first_moment,
-               std::vector<float>& second_moment, const StepParameters& step);
+               std::vector<float>& second_moment, const FloatOptimizerParameters& step);
 void adamw_step(std::vector<float>& values, const std::vector<float>& gradients,
                 std::vector<float>& first_moment,
-                std::vector<float>& second_moment, const StepParameters& step);
+                std::vector<float>& second_moment, const FloatOptimizerParameters& step);
 
 }  // namespace elman::optimizer_internal

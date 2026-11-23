@@ -28,7 +28,7 @@ class Huffman {
 public:
     explicit Huffman(const std::vector<unsigned>& lengths) {
         std::array<unsigned, 16> counts{}, next{};
-        for (auto length : lengths) {
+        for (unsigned int length : lengths) {
             require(length <= 15, "Invalid DEFLATE Huffman length");
             if (length) ++counts[length];
         }
@@ -43,7 +43,7 @@ public:
             const unsigned code = next[length]++;
             int node = 0;
             while (length--) {
-                const auto branch = (code >> length) & 1;
+                const unsigned int branch = (code >> length) & 1;
                 int child = nodes_[node].child[branch];
                 if (child < 0) {
                     child = static_cast<int>(nodes_.size());
@@ -83,13 +83,13 @@ std::pair<Huffman, Huffman> tables(BitStream& stream, unsigned type) {
     for (unsigned i = 0; i < count; ++i) codes[order[i]] = stream.read(3);
     const Huffman code_lengths(codes);
     while (lengths.size() < literals + distances) {
-        const auto symbol = code_lengths.decode(stream);
+        const unsigned int symbol = code_lengths.decode(stream);
         if (symbol < 16) {
             lengths.push_back(symbol);
             continue;
         }
         require(symbol != 16 || !lengths.empty(), "DEFLATE repeat has no previous code length");
-        const auto times = symbol == 16 ? stream.read(2) + 3 : symbol == 17 ? stream.read(3) + 3 : stream.read(7) + 11;
+        const unsigned int times = symbol == 16 ? stream.read(2) + 3 : symbol == 17 ? stream.read(3) + 3 : stream.read(7) + 11;
         require(times <= literals + distances - lengths.size(), "DEFLATE code repeat exceeds alphabet");
         lengths.insert(lengths.end(), times, symbol == 16 ? lengths.back() : 0);
     }
@@ -106,17 +106,19 @@ std::vector<uint8_t> inflate(Bytes bytes, size_t size) {
     bool last;
     do {
         last = stream.read(1) != 0;
-        const auto type = stream.read(2);
+        const unsigned int type = stream.read(2);
         if (type == 0) {
             stream.align();
-            const auto count = stream.read(16);
+            const unsigned int count = stream.read(16);
             require(stream.read(16) == (count ^ 65535u) && count <= size - out.size(), "Invalid stored DEFLATE block");
             for (unsigned i = 0; i < count; ++i) out.push_back(static_cast<uint8_t>(stream.read(8)));
             continue;
         }
-        const auto [literal, distances] = tables(stream, type);
+        const std::pair<Huffman, Huffman> codes = tables(stream, type);
+        const Huffman& literal = codes.first;
+        const Huffman& distances = codes.second;
         while (true) {
-            const auto symbol = literal.decode(stream);
+            const unsigned int symbol = literal.decode(stream);
             if (symbol == 256) break;
             if (symbol < 256) {
                 require(out.size() < size, "DEFLATE output exceeds ZIP entry size");
@@ -126,7 +128,7 @@ std::vector<uint8_t> inflate(Bytes bytes, size_t size) {
             const unsigned code = symbol - 257;
             require(code < 29, "Invalid DEFLATE length symbol");
             const unsigned length = length_base[code] + stream.read(code < 8 || code == 28 ? 0 : code / 4 - 1);
-            const auto distance_code = distances.decode(stream);
+            const unsigned int distance_code = distances.decode(stream);
             require(distance_code < 30, "Invalid DEFLATE distance symbol");
             const unsigned distance = distance_base[distance_code] + stream.read(distance_code < 4 ? 0 : distance_code / 2 - 1);
             require(distance <= out.size() && length <= size - out.size(), "Invalid DEFLATE back-reference");
@@ -138,7 +140,7 @@ std::vector<uint8_t> inflate(Bytes bytes, size_t size) {
 }
 
 uint32_t crc32(Bytes bytes) {
-    static const auto table = [] {
+    static const std::array<uint32_t, 256> table = [] {
         std::array<uint32_t, 256> values{};
         for (size_t i = 0; i < values.size(); ++i) {
             uint32_t n = static_cast<uint32_t>(i);
@@ -155,17 +157,17 @@ uint32_t crc32(Bytes bytes) {
 }  // namespace
 
 std::vector<uint8_t> inflate_zlib(Bytes bytes, size_t size) {
-    const auto method = bytes.le(0, 1), flags = bytes.le(1, 1);
+    const uint64_t method = bytes.le(0, 1), flags = bytes.le(1, 1);
     require(bytes.size >= 6 && (method & 15) == 8 && (method >> 4) <= 7 &&
             ((method << 8) | flags) % 31 == 0 && !(flags & 32), "Unsupported zlib stream header");
-    const auto result = inflate(bytes.sub(2, bytes.size - 6), size);
+    const std::vector<uint8_t> result = inflate(bytes.sub(2, bytes.size - 6), size);
     uint32_t first = 1, second = 0;
-    for (const auto byte : result) {
+    for (const unsigned char byte : result) {
         first = (first + byte) % 65521;
         second = (second + first) % 65521;
     }
-    const auto trailer = bytes.sub(bytes.size - 4, 4);
-    const auto expected = (trailer.le(0, 1) << 24) | (trailer.le(1, 1) << 16) |
+    const Bytes trailer = bytes.sub(bytes.size - 4, 4);
+    const uint64_t expected = (trailer.le(0, 1) << 24) | (trailer.le(1, 1) << 16) |
                           (trailer.le(2, 1) << 8) | trailer.le(3, 1);
     require(((second << 16) | first) == expected, "zlib Adler-32 checksum mismatch");
     return result;
@@ -173,10 +175,10 @@ std::vector<uint8_t> inflate_zlib(Bytes bytes, size_t size) {
 
 ZipArchive::ZipArchive(const std::filesystem::path& path) : input_(path) {
     constexpr uint64_t limit = 65535 + 22;
-    const auto start = input_.size() - std::min(input_.size(), limit);
+    const uint64_t start = input_.size() - std::min(input_.size(), limit);
     input_.seek(start);
-    const auto tail = input_.bytes(input_.remaining());
-    const auto data = view(tail);
+    const std::vector<uint8_t> tail = input_.bytes(input_.remaining());
+    const Bytes data = view(tail);
     require(data.size >= 22, "Truncated ZIP archive");
     size_t end = data.size - 22;
     while (data.le(end, 4) != 0x06054b50u || end + 22 + data.le(end + 20, 2) != data.size) {
@@ -192,45 +194,45 @@ ZipArchive::ZipArchive(const std::filesystem::path& path) : input_(path) {
         require(start + end >= 20, "Missing ZIP64 locator");
         input_.seek(start + end - 20);
         require(input_.le(4) == 0x07064b50u && input_.le(4) == 0, "Invalid ZIP64 locator");
-        const auto record = input_.le(8);
+        const uint64_t record = input_.le(8);
         require(input_.le(4) == 1 && record <= start + end - 20 && start + end - 20 - record >= 56, "Invalid ZIP64 directory end");
         directory_end = record;
         input_.seek(record);
         require(input_.le(4) == 0x06064b50u && input_.le(8) >= 44, "Invalid ZIP64 directory end");
         input_.skip(4);
         require(input_.le(8) == 0, "Multi-disk ZIP64 is unsupported");
-        const auto disk_count = input_.le(8);
+        const uint64_t disk_count = input_.le(8);
         count = input_.le(8);
         require(disk_count == count, "Multi-disk ZIP64 is unsupported");
         bytes = input_.le(8);
         directory_ = input_.le(8);
     }
     require(directory_ <= directory_end && bytes <= directory_end - directory_ && count <= bytes / 46, "Invalid ZIP directory range");
-    const auto end_offset = directory_ + bytes;
+    const uint64_t end_offset = directory_ + bytes;
     input_.seek(directory_);
     for (uint64_t i = 0; i < count; ++i) {
-        const auto header = input_.bytes(46);
-        const auto h = view(header);
-        const auto flags = h.le(8, 2), method = h.le(10, 2);
+        const std::vector<uint8_t> header = input_.bytes(46);
+        const Bytes h = view(header);
+        const uint64_t flags = h.le(8, 2), method = h.le(10, 2);
         require(h.le(0, 4) == 0x02014b50u && !(flags & 1) && (method == 0 || method == 8) && h.le(34, 2) == 0,
                 "Unsupported ZIP entry header");
-        const auto name = input_.text(h.le(28, 2));
+        const std::string name = input_.text(h.le(28, 2));
         require(!name.empty() && name.find('\0') == std::string::npos, "Invalid ZIP entry name");
-        const auto extra = input_.bytes(h.le(30, 2));
+        const std::vector<uint8_t> extra = input_.bytes(h.le(30, 2));
         input_.skip(h.le(32, 2));
         require(input_.position() <= end_offset, "ZIP entry exceeds central directory");
         Entry entry{h.le(42, 4), h.le(20, 4), h.le(24, 4), static_cast<uint32_t>(h.le(16, 4)), static_cast<uint16_t>(method)};
         if (entry.offset == 0xffffffffu || entry.compressed == 0xffffffffu || entry.size == 0xffffffffu) {
-            auto fields = view(extra);
+            Bytes fields = view(extra);
             while (fields.size >= 4 && fields.le(0, 2) != 1) {
-                const auto length = 4 + static_cast<size_t>(fields.le(2, 2));
+                const size_t length = 4 + static_cast<size_t>(fields.le(2, 2));
                 require(length <= fields.size, "Truncated ZIP extra field");
                 fields = fields.sub(length, fields.size - length);
             }
             require(fields.size >= 4, "ZIP64 extra field missing");
             fields = fields.sub(4, static_cast<size_t>(fields.le(2, 2)));
             size_t at = 0;
-            for (auto* value : {&entry.size, &entry.compressed, &entry.offset}) {
+            for (uint64_t* value : {&entry.size, &entry.compressed, &entry.offset}) {
                 if (*value == 0xffffffffu) {
                     *value = fields.le(at, 8);
                     at += 8;
@@ -246,10 +248,10 @@ ZipArchive::ZipArchive(const std::filesystem::path& path) : input_(path) {
 std::vector<uint8_t> ZipArchive::read(const std::string& name) {
     const auto found = entries_.find(name);
     require(found != entries_.end(), "Missing ZIP entry: " + name);
-    const auto& entry = found->second;
+    const io::ZipArchive::Entry& entry = found->second;
     input_.seek(entry.offset);
-    const auto header = input_.bytes(30);
-    const auto h = view(header);
+    const std::vector<uint8_t> header = input_.bytes(30);
+    const Bytes h = view(header);
     require(h.le(0, 4) == 0x04034b50u && h.le(8, 2) == entry.method && !(h.le(6, 2) & 1) &&
             input_.text(h.le(26, 2)) == name, "ZIP local header differs from the catalog");
     input_.skip(h.le(28, 2));
@@ -261,7 +263,7 @@ std::vector<uint8_t> ZipArchive::read(const std::string& name) {
         require(entry.compressed >= entry.size / max_expansion + (entry.size % max_expansion != 0),
                 "DEFLATE entry exceeds the maximum expansion ratio");
     }
-    auto data = input_.bytes(entry.compressed);
+    std::vector<uint8_t> data = input_.bytes(entry.compressed);
     if (entry.method == 8) data = inflate(view(data), static_cast<size_t>(entry.size));
     require(data.size() == entry.size && crc32(view(data)) == entry.checksum, "ZIP entry CRC or size mismatch: " + name);
     return data;

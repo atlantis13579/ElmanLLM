@@ -4,7 +4,7 @@
 namespace elman {
 void validate_low_precision_reduction(LowPrecisionReduction op, const BufferPtr& output,
                                 const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     const bool gradient = op == LowPrecisionReduction::Gradient;
     const bool scan = op == LowPrecisionReduction::Cumsum || op == LowPrecisionReduction::ReverseCumsum;
     const int arity = gradient ? 3 : 1;
@@ -17,7 +17,7 @@ void validate_low_precision_reduction(LowPrecisionReduction op, const BufferPtr&
     std::vector<std::vector<int>> shapes;
     for (int i = 0; i < arity; ++i) {
         require(inputs[i] && (inputs[i]->dtype == dtype || (gradient && i > 0 && inputs[i]->dtype == DType::Float32)), "Missing or mistyped low precision reduction input");
-        const auto input = KernelInput(i);
+        const KernelInput input = KernelInput(i);
         const int rank = p.input_rank(input);
         require(rank >= 0 && rank <= 8, "Invalid low precision reduction rank");
         std::vector<int> shape(rank);
@@ -52,7 +52,7 @@ void validate_low_precision_reduction(LowPrecisionReduction op, const BufferPtr&
         (gradient && (p.attribute(2) == 2 || p.attribute(2) == 3 || p.attribute(2) == 5 || p.attribute(2) == 6));
     require(!extremum || (axis < 0 ? inputs[0]->count > 0 : shapes[0][axis] > 0), "Low precision extremum requires a nonempty axis");
     if (gradient) require(shapes[1] == reduced && shapes[2] == reduced, "Low precision reduction saved output or gradient shape differs");
-    const auto& expected = gradient || scan ? shapes[0] : reduced;
+    const std::vector<int>& expected = gradient || scan ? shapes[0] : reduced;
     require(p.output_rank() == int(expected.size()), "Invalid low precision reduction output rank");
     size_t count = 1;
     for (size_t d = 0; d < expected.size(); ++d) {
@@ -63,8 +63,8 @@ void validate_low_precision_reduction(LowPrecisionReduction op, const BufferPtr&
     require(count == output->count && p.output_count() == int(count), "Low precision reduction output count differs");
     for (int i = 0; i < arity; ++i) {
         if (!output->bytes || !inputs[i]->bytes) continue;
-        const auto first = reinterpret_cast<uintptr_t>(output->raw_pointer());
-        const auto second = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
+        const uintptr_t first = reinterpret_cast<uintptr_t>(output->raw_pointer());
+        const uintptr_t second = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
         const bool overlap = first <= second ? second - first < output->bytes : first - second < inputs[i]->bytes;
         require(!overlap, "Unsafe overlapping low precision reduction buffers");
     }

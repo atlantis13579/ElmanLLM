@@ -22,14 +22,14 @@ void launch_softmax_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
     // Reuse the FP32 reference-order implementation when vector libraries are
     // unavailable or the reduction has an inner stride. Its scalar exponential
     // adaptation and lane reduction retain the Float32 rounding order.
-    auto exact = p;
+    KernelParams exact = p;
     exact.v[KernelParams::kAttributeSlot + 1] = 1;
     launch_low_precision_softmax_cpu(LowPrecisionSoftmax::Softmax, out, a, nullptr, exact);
     return;
   }
   if (inner == 1 && is_narrow_float(DType(p.input_dtype(KernelInput::A))) && cpu_vector_math_available()) {
-    auto workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(p.output_count()), 2 * sizeof(float)));
-    auto input = static_cast<float*>(workspace->raw_pointer()), output = input + p.output_count();
+    BufferPtr workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(p.output_count()), 2 * sizeof(float)));
+    float* input = static_cast<float*>(workspace->raw_pointer()), *output = input + p.output_count();
     for (int i = 0; i < p.output_count(); ++i) input[i] = READ_A(i);
     if (try_softmax_math_cpu(output, input, p.output_count() / length, length, true)) {
       for (int i = 0; i < p.output_count(); ++i) WRITE_OUTPUT(i, output[i]);

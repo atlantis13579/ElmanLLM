@@ -7,6 +7,7 @@
 #include <unordered_set>
 
 #include "Core/Autograd.h"
+#include "Core/LocalFunction.h"
 #include "Core/Autocast.h"
 #include "Core/ComplexAutograd.h"
 #include "Core/LowPrecisionFloat.h"
@@ -71,7 +72,7 @@ static Tensor unbroadcast(Tensor g, const Shape& shape) {
       // sum_to reduces all broadcast axes together in opmath precision. Separate
       // narrow reductions would round the partial sums between dimensions.
       retained.insert(retained.end(), reduced.begin(), reduced.end());
-      auto rows = reshape(permute(g, retained), {int(shape_element_count(shape)), int(count)});
+      Tensor rows = reshape(permute(g, retained), {int(shape_element_count(shape)), int(count)});
       return reshape(sum(rows, 1), shape);
     }
   }
@@ -95,14 +96,14 @@ static DType promoted_dtype(const Tensor& a, const Tensor& b) {
           "Mixed low precision arithmetic requires an explicit cast");
   require(!is_packed_integer(a.dtype()) && !is_packed_integer(b.dtype()),
           "Mixed packed integer arithmetic requires an explicit cast");
-  auto category = [](DType dtype) {
+  int (*const category)(DType) = [](DType dtype) {
     return is_arithmetic_float(dtype) || dtype == DType::Float64 ? 2 :
         dtype == DType::Bool ? 0 : is_arithmetic_integer(dtype) ? 1 : -1;
   };
   require(category(a.dtype()) >= 0 && category(b.dtype()) >= 0, "Unsupported promotion dtype");
   if (a.shape().empty() != b.shape().empty()) {
-    const auto& dimensional = a.shape().empty() ? b : a;
-    const auto& zero_dimensional = a.shape().empty() ? a : b;
+    const Tensor& dimensional = a.shape().empty() ? b : a;
+    const Tensor& zero_dimensional = a.shape().empty() ? a : b;
     if (category(dimensional.dtype()) >= category(zero_dimensional.dtype())) return dimensional.dtype();
   }
   if (category(a.dtype()) == 2 || category(b.dtype()) == 2) {
@@ -111,7 +112,7 @@ static DType promoted_dtype(const Tensor& a, const Tensor& b) {
     if (is_arithmetic_float(a.dtype()) && is_arithmetic_float(b.dtype())) return DType::Float32;
     return is_arithmetic_float(a.dtype()) ? a.dtype() : b.dtype();
   }
-  auto wide_unsigned = [](DType dtype) {
+  bool (*const wide_unsigned)(DType) = [](DType dtype) {
     return dtype == DType::UInt16 || dtype == DType::UInt32 || dtype == DType::UInt64;
   };
   require(!wide_unsigned(a.dtype()) && !wide_unsigned(b.dtype()), "Mixed unsigned 16/32/64-bit promotion is undefined");
@@ -125,9 +126,9 @@ static DType promoted_dtype(const Tensor& a, const Tensor& b) {
 }
 Tensor where(const Tensor& condition, const Tensor& a, const Tensor& b) {
   require(condition.dtype() == DType::Bool, "where condition must be bool");
-  const auto dtype = promoted_dtype(a, b);
+  const DType dtype = promoted_dtype(a, b);
   Shape shape = broadcast(condition.shape(), broadcast(a.shape(), b.shape()));
-  const auto computation = dtype == DType::Complex32 ? DType::Complex64 : dtype;
+  const DType computation = dtype == DType::Complex32 ? DType::Complex64 : dtype;
   return tracked(dispatch_tensor("where", shape, {condition, cast(a, computation), cast(b, computation)}, {}, dtype),
                  {a, b}, [condition, a, b](const Tensor& g) {
                    const Tensor gradient = is_low_precision_float(g.dtype()) ? cast(g, DType::Float32) : g;
@@ -138,7 +139,7 @@ Tensor where(const Tensor& condition, const Tensor& a, const Tensor& b) {
 }
 static Tensor scalar_binary(const std::string& op, const Tensor& a, double argument) {
   if (is_complex(a.dtype())) {
-    const auto computation = a.dtype() == DType::Complex32 ? DType::Complex64 : a.dtype();
+    const DType computation = a.dtype() == DType::Complex32 ? DType::Complex64 : a.dtype();
     return cast(complex_binary(op, cast(a, computation),
         Tensor::from_complex_data({}, {{argument, 0}}, a.backend(), false, computation)), a.dtype());
   }
@@ -251,8 +252,8 @@ Tensor minimum(const Tensor& a, const Tensor& b) {
 static Tensor comparison(const std::string& op, const Tensor& a, const Tensor& b) {
   require((!is_complex(a.dtype()) && !is_complex(b.dtype())) || op == "eq" || op == "ne",
           "Ordered comparison is not defined for complex tensors");
-  const auto dtype = promoted_dtype(a, b);
-  const auto computation = dtype == DType::Complex32 ? DType::Complex64 : dtype;
+  const DType dtype = promoted_dtype(a, b);
+  const DType computation = dtype == DType::Complex32 ? DType::Complex64 : dtype;
   return dispatch_tensor(op, broadcast(a.shape(), b.shape()), {cast(a, computation), cast(b, computation)}, {}, DType::Bool);
 }
 Tensor eq(const Tensor& a, const Tensor& b) {
@@ -274,14 +275,14 @@ Tensor le(const Tensor& a, const Tensor& b) {
   return comparison("le", a, b);
 }
 Tensor logical_and(const Tensor& a, const Tensor& b) {
-  const auto dtype = promoted_dtype(a, b);
-  const auto computation = dtype == DType::Complex32 ? DType::Complex64 : dtype;
+  const DType dtype = promoted_dtype(a, b);
+  const DType computation = dtype == DType::Complex32 ? DType::Complex64 : dtype;
   return dispatch_tensor("logical_and", broadcast(a.shape(), b.shape()), {cast(a, computation), cast(b, computation)},
                          {}, DType::Bool);
 }
 Tensor logical_or(const Tensor& a, const Tensor& b) {
-  const auto dtype = promoted_dtype(a, b);
-  const auto computation = dtype == DType::Complex32 ? DType::Complex64 : dtype;
+  const DType dtype = promoted_dtype(a, b);
+  const DType computation = dtype == DType::Complex32 ? DType::Complex64 : dtype;
   return dispatch_tensor("logical_or", broadcast(a.shape(), b.shape()), {cast(a, computation), cast(b, computation)},
                          {}, DType::Bool);
 }
@@ -307,7 +308,7 @@ static Tensor unary(const std::string& op, const Tensor& x,
   require(x.dtype() != DType::Bool || (op != "relu" && (op != "abs" || x.backend() == Backend::CUDA)), "Activation does not support bool input");
   require(is_differentiable_float(x.dtype()) || (op != "silu" && op != "gelu" && op != "leaky_relu"), "Activation requires floating input");
   const bool preserve = op == "abs" || op == "sign" || op == "relu";
-  const auto input = !preserve && is_arithmetic_integer(x.dtype()) ? cast(x, DType::Float32) : x;
+  const Tensor input = !preserve && is_arithmetic_integer(x.dtype()) ? cast(x, DType::Float32) : x;
   std::vector<int> attributes;
   if (op == "leaky_relu" && x.dtype() == DType::Float64) {
     attributes.resize(3);
@@ -360,7 +361,7 @@ static Tensor unary(const std::string& op, const Tensor& x,
       d = mul(sigmoid, add(mul(x, sub(scalar(1, x.backend()), sigmoid)), 1));
     } else if (op == "gelu") {
       if (x.dtype() == DType::Float64) {
-        auto constant = [&](double value) { return Tensor::from_double_data({}, {value}, x.backend()); };
+        LocalFunction constant{[&](double value) { return Tensor::from_double_data({}, {value}, x.backend()); }};
         Tensor u = mul(add(x, mul(pow(x, 3), constant(.044715))), constant(.79788456080286535588));
         Tensor t = sub(div(constant(2), add(exp(mul(u, -2)), 1)), 1);
         d = add(mul(add(t, 1), .5f), mul(mul(mul(x, sub(constant(1), mul(t, t))),
@@ -419,27 +420,27 @@ Tensor silu_mul(const Tensor& gate, const Tensor& up) {
   if (is_low_precision_float(gate.dtype()) || is_low_precision_float(up.dtype())) {
     require(gate.dtype() == up.dtype(), "Low precision SiLU multiplication requires matching dtypes");
     return tracked(dispatch_tensor("silu_mul", broadcast(gate.shape(), up.shape()), {gate, up}, {}, gate.dtype()), {gate, up}, [gate, up](const Tensor& gradient) {
-      const auto x = cast(gate.detach(), DType::Float32), y = cast(up.detach(), DType::Float32), g = cast(gradient, DType::Float32);
+      const Tensor x = cast(gate.detach(), DType::Float32), y = cast(up.detach(), DType::Float32), g = cast(gradient, DType::Float32);
       if (up.requires_grad()) accumulate(up, unbroadcast(mul(g, silu(x)), up.shape()));
       if (gate.requires_grad()) {
-        const auto reduced = unbroadcast(mul(g, y), gate.shape());
-        const auto sigmoid = div(scalar(1, gate.backend()), add(exp(mul(x, -1)), 1));
-        const auto derivative = mul(sigmoid, add(mul(x, sub(scalar(1, gate.backend()), sigmoid)), 1));
+        const Tensor reduced = unbroadcast(mul(g, y), gate.shape());
+        const Tensor sigmoid = div(scalar(1, gate.backend()), add(exp(mul(x, -1)), 1));
+        const Tensor derivative = mul(sigmoid, add(mul(x, sub(scalar(1, gate.backend()), sigmoid)), 1));
         accumulate(gate, mul(reduced, derivative));
       }
     });
   }
   require(is_arithmetic_float(gate.dtype()) && gate.dtype() == up.dtype(),
           "silu_mul requires matching floating dtypes");
-  auto shape = broadcast(gate.shape(), up.shape());
+  Shape shape = broadcast(gate.shape(), up.shape());
   return tracked(dispatch_tensor("silu_mul", shape, {gate, up}, {}, gate.dtype()),
                  {gate, up}, [gate, up](const Tensor& g) {
     if (up.requires_grad()) accumulate(up, unbroadcast(mul(g, silu(gate)), up.shape()));
     if (gate.requires_grad()) {
-      auto gradient = unbroadcast(mul(g, up), gate.shape());
-      auto wide = cast(gate, gate.dtype() == DType::Float64 ? DType::Float64 : DType::Float32);
-      auto sigmoid = div(scalar(1, gate.backend()), add(exp(mul(wide, -1)), 1));
-      auto derivative = mul(sigmoid, add(mul(wide, sub(scalar(1, gate.backend()), sigmoid)), 1));
+      Tensor gradient = unbroadcast(mul(g, up), gate.shape());
+      Tensor wide = cast(gate, gate.dtype() == DType::Float64 ? DType::Float64 : DType::Float32);
+      Tensor sigmoid = div(scalar(1, gate.backend()), add(exp(mul(wide, -1)), 1));
+      Tensor derivative = mul(sigmoid, add(mul(wide, sub(scalar(1, gate.backend()), sigmoid)), 1));
       accumulate(gate, mul(cast(gradient, wide.dtype()), derivative));
     }
   });
@@ -450,16 +451,16 @@ Tensor rotary_embedding(const Tensor& x, const Tensor& cosine, const Tensor& sin
     require(!x.shape().empty() && x.shape().back() % 2 == 0, "Rotary input requires an even trailing dimension");
     require(broadcast(x.shape(), cosine.shape()) == x.shape() && broadcast(x.shape(), sine.shape()) == x.shape(), "Rotary factors may not expand the input");
     return tracked(dispatch_tensor("rotary_embedding", x.shape(), {x, cosine, sine}, {}, x.dtype()), {x, cosine, sine}, [x, cosine, sine](const Tensor& gradient) {
-      const auto value = cast(x.detach(), DType::Float32), c = cast(cosine.detach(), DType::Float32), s = cast(sine.detach(), DType::Float32), g = cast(gradient, DType::Float32);
+      const Tensor value = cast(x.detach(), DType::Float32), c = cast(cosine.detach(), DType::Float32), s = cast(sine.detach(), DType::Float32), g = cast(gradient, DType::Float32);
       const int width = x.shape().back(), half = width / 2;
       if (x.requires_grad()) {
-        const auto rotated = mul(g, s);
-        const auto inverse = concat({slice(rotated, -1, half, width), mul(slice(rotated, -1, 0, half), -1)}, -1);
+        const Tensor rotated = mul(g, s);
+        const Tensor inverse = concat({slice(rotated, -1, half, width), mul(slice(rotated, -1, 0, half), -1)}, -1);
         accumulate(x, add(mul(g, c), inverse));
       }
       if (cosine.requires_grad()) accumulate(cosine, unbroadcast(mul(g, value), cosine.shape()));
       if (sine.requires_grad()) {
-        const auto rotated = concat({mul(slice(value, -1, half, width), -1), slice(value, -1, 0, half)}, -1);
+        const Tensor rotated = concat({mul(slice(value, -1, half, width), -1), slice(value, -1, 0, half)}, -1);
         accumulate(sine, unbroadcast(mul(g, rotated), sine.shape()));
       }
     });
@@ -474,14 +475,14 @@ Tensor rotary_embedding(const Tensor& x, const Tensor& cosine, const Tensor& sin
                  {x, cosine, sine}, [x, cosine, sine](const Tensor& g) {
     int width = x.shape().back(), half = width / 2;
     if (x.requires_grad()) {
-      auto rotated_gradient = mul(g, sine);
-      auto inverse = concat({slice(rotated_gradient, -1, half, width),
+      Tensor rotated_gradient = mul(g, sine);
+      Tensor inverse = concat({slice(rotated_gradient, -1, half, width),
                              mul(slice(rotated_gradient, -1, 0, half), -1)}, -1);
       accumulate(x, add(mul(g, cosine), inverse));
     }
     if (cosine.requires_grad()) accumulate(cosine, unbroadcast(mul(g, x), cosine.shape()));
     if (sine.requires_grad()) {
-      auto rotated = concat({mul(slice(x, -1, half, width), -1), slice(x, -1, 0, half)}, -1);
+      Tensor rotated = concat({mul(slice(x, -1, half, width), -1), slice(x, -1, 0, half)}, -1);
       accumulate(sine, unbroadcast(mul(g, rotated), sine.shape()));
     }
   });
@@ -508,7 +509,7 @@ Tensor reshape(const Tensor& x, Shape shape) {
   }
   require(shape_element_count(shape) == x.numel(),
           "Reshape changes element count");
-  auto n = std::make_shared<TensorNode>();
+  std::shared_ptr<TensorNode> n = std::make_shared<TensorNode>();
   n->shape = shape;
   n->value = x.node()->value;
   n->operation = "reshape";
@@ -518,13 +519,13 @@ Tensor reshape(const Tensor& x, Shape shape) {
 }
 Tensor contiguous_view(const Tensor& x, Shape shape, size_t offset) {
   require(x.defined(), "Undefined contiguous view input");
-  auto count = shape_element_count(shape);
-  auto node = std::make_shared<TensorNode>();
+  size_t count = shape_element_count(shape);
+  std::shared_ptr<TensorNode> node = std::make_shared<TensorNode>();
   node->shape = std::move(shape);
   node->value = backend_view(x.node()->value, offset, count);
   node->operation = "contiguous_view";
   return tracked(Tensor(node), {x}, [x, offset](const Tensor& g) {
-    auto gradient = dispatch_tensor("slice_grad", {int(x.numel())}, {reshape(g, {int(g.numel())})},
+    Tensor gradient = dispatch_tensor("slice_grad", {int(x.numel())}, {reshape(g, {int(g.numel())})},
                                     {0, int(offset), 1}, x.dtype());
     accumulate(x, reshape(gradient, x.shape()));
   });
@@ -594,13 +595,13 @@ Tensor argsort(const Tensor& x, int dim, bool descending) {
 std::pair<Tensor, Tensor> sort(const Tensor& x, int dim, bool descending) {
   if (x.shape().empty()) {
     require(dim == 0 || dim == -1, "Scalar sort axis out of range");
-    auto result = sort(reshape(x, {1}), 0, descending);
+    std::pair<Tensor, Tensor> result = sort(reshape(x, {1}), 0, descending);
     return {reshape(result.first, {}), reshape(result.second, {})};
   }
   dim = axis(dim, x.shape().size());
-  auto ids = argsort(x, dim, descending);
+  Tensor ids = argsort(x, dim, descending);
   // Stable indices and values retain the selected backend and original dtype.
-  auto values = dispatch_tensor("gather", x.shape(), {x, ids}, {dim}, x.dtype());
+  Tensor values = dispatch_tensor("gather", x.shape(), {x, ids}, {dim}, x.dtype());
   values = tracked(values, {x, ids}, [x, ids, dim](const Tensor& gradient) {
     accumulate(x, dispatch_tensor("sort_backward", x.shape(), {gradient, ids}, {dim},
                                   (x.dtype() == DType::Float64 || is_low_precision_float(x.dtype())) ? x.dtype() : DType::Float32));
@@ -610,7 +611,7 @@ std::pair<Tensor, Tensor> sort(const Tensor& x, int dim, bool descending) {
 Tensor gather(const Tensor& x, int dim, const Tensor& ids) {
   if ((is_complex(x.dtype()) || x.dtype() == DType::Float64 || is_low_precision_float(x.dtype()) || is_packed_integer(x.dtype())) && (x.shape().empty() || ids.shape().empty())) {
     dim = axis(dim, std::max(size_t(1), x.shape().size()));
-    auto result = gather(x.shape().empty() ? reshape(x, {1}) : x, dim,
+    Tensor result = gather(x.shape().empty() ? reshape(x, {1}) : x, dim,
                          ids.shape().empty() ? reshape(ids, {1}) : ids);
     return ids.shape().empty() ? reshape(result, {}) : result;
   }
@@ -626,9 +627,9 @@ Tensor gather(const Tensor& x, int dim, const Tensor& ids) {
       dispatch_tensor("gather", ids.shape(), {x, ids}, {dim}, x.dtype()), {x},
       [x, ids, dim](const Tensor& g) {
         if (is_complex(x.dtype())) {
-          auto component = [&](const Tensor& value) {
+          LocalFunction component{[&](const Tensor& value) {
             return dispatch_tensor("gather_grad", x.shape(), {value, ids}, {dim}, value.dtype());
-          };
+          }};
           accumulate(x, complex(component(real(g)), component(imag(g))));
           return;
         }
@@ -641,7 +642,7 @@ Tensor index_select(const Tensor& x, int dim, const Tensor& ids) {
   if ((is_complex(x.dtype()) || x.dtype() == DType::Float64 || is_low_precision_float(x.dtype()) || is_packed_integer(x.dtype())) && (x.shape().empty() || ids.shape().empty())) {
     dim = axis(dim, std::max(size_t(1), x.shape().size()));
     require(!x.shape().empty() || ids.numel() == 1, "Scalar selection requires exactly one index");
-    auto result = index_select(x.shape().empty() ? reshape(x, {1}) : x, dim,
+    Tensor result = index_select(x.shape().empty() ? reshape(x, {1}) : x, dim,
                                ids.shape().empty() ? reshape(ids, {1}) : ids);
     return x.shape().empty() ? reshape(result, {}) : result;
   }
@@ -653,9 +654,9 @@ Tensor index_select(const Tensor& x, int dim, const Tensor& ids) {
   return tracked(dispatch_tensor("index_select", s, {x, ids}, {dim}, x.dtype()),
                  {x}, [x, ids, dim](const Tensor& g) {
                    if (is_complex(x.dtype())) {
-                     auto component = [&](const Tensor& value) {
+                     LocalFunction component{[&](const Tensor& value) {
                        return dispatch_tensor("index_select_grad", x.shape(), {value, ids}, {dim}, value.dtype());
-                     };
+                     }};
                      accumulate(x, complex(component(real(g)), component(imag(g))));
                      return;
                    }
@@ -665,7 +666,7 @@ Tensor index_select(const Tensor& x, int dim, const Tensor& ids) {
 }
 Tensor index_copy(const Tensor& x, int dim, const Tensor& ids, const Tensor& source) {
   dim = axis(dim, std::max(size_t(1), x.shape().size()));
-  auto result = dispatch_tensor("index_copy", x.shape(), {x, ids, source}, {dim}, x.dtype());
+  Tensor result = dispatch_tensor("index_copy", x.shape(), {x, ids, source}, {dim}, x.dtype());
   return tracked(result, {x, ids, source}, [x, ids, source, dim](const Tensor& gradient) {
     if (x.requires_grad())
       accumulate(x, index_copy(gradient, dim, ids, Tensor::zeros(source.shape(), source.backend(), false, source.dtype())));
@@ -673,7 +674,7 @@ Tensor index_copy(const Tensor& x, int dim, const Tensor& ids, const Tensor& sou
       // The source derivative checks indices even for empty slices,
       // although the forward and destination derivative do not inspect them.
       MemoryReservation host(Backend::CPU, checked_memory_add(ids.nbytes(), checked_memory_mul(ids.numel(), sizeof(int32_t))));
-      auto bytes = ids.raw_data();
+      std::vector<uint8_t> bytes = ids.raw_data();
       std::vector<int32_t> values(ids.numel());
       int length = x.shape().empty() ? 1 : x.shape()[dim];
       for (size_t i = 0; i < values.size(); ++i) {
@@ -683,8 +684,8 @@ Tensor index_copy(const Tensor& x, int dim, const Tensor& ids, const Tensor& sou
         require(value >= 0 && value < length, "Index copy source gradient index out of range");
         values[i] = int32_t(value);
       }
-      auto gradient_ids = Tensor::from_int_data({int(values.size())}, values, x.backend());
-      auto selected = source.numel() ? index_select(gradient.shape().empty() ? contiguous_view(gradient, {1}) : gradient,
+      Tensor gradient_ids = Tensor::from_int_data({int(values.size())}, values, x.backend());
+      Tensor selected = source.numel() ? index_select(gradient.shape().empty() ? contiguous_view(gradient, {1}) : gradient,
                                                     dim, gradient_ids) : Tensor::zeros(source.shape(), source.backend(), false, source.dtype());
       accumulate(source, contiguous_view(selected, source.shape()));
     }
@@ -706,7 +707,7 @@ Tensor scatter(const Tensor& x, int dim, const Tensor& ids,
   if ((x.dtype() == DType::Float64 || is_low_precision_float(x.dtype()) || is_packed_integer(x.dtype())) && (x.shape().empty() || ids.shape().empty())) {
     dim = axis(dim, std::max(size_t(1), x.shape().size()));
     require(source.shape() == ids.shape(), "Scatter source/index shape mismatch");
-    auto result = scatter(x.shape().empty() ? reshape(x, {1}) : x, dim,
+    Tensor result = scatter(x.shape().empty() ? reshape(x, {1}) : x, dim,
                           ids.shape().empty() ? reshape(ids, {1}) : ids,
                           source.shape().empty() ? reshape(source, {1}) : source);
     return x.shape().empty() ? reshape(result, {}) : result;
@@ -786,9 +787,9 @@ Tensor repeat(const Tensor& x, const Shape& reps) {
       dispatch_tensor("repeat", s, {y}, {}, x.dtype()), {x},
       [x, padded](const Tensor& g) {
         if (is_complex(x.dtype())) {
-          auto component = [&](const Tensor& value) {
+          LocalFunction component{[&](const Tensor& value) {
             return reshape(dispatch_tensor("repeat_grad", padded, {value}, {}, value.dtype()), x.shape());
-          };
+          }};
           accumulate(x, complex(component(real(g)), component(imag(g))));
           return;
         }
@@ -811,7 +812,7 @@ Tensor expand(const Tensor& x, const Shape& shape) {
   return tracked(
       dispatch_tensor("expand", s, {x}, {}, x.dtype()), {x},
       [x](const Tensor& g) {
-        const auto values = is_low_precision_float(g.dtype()) ? cast(g, DType::Float32) : g;
+        const Tensor values = is_low_precision_float(g.dtype()) ? cast(g, DType::Float32) : g;
         accumulate(x, unbroadcast(values, x.shape()));
       });
 }
@@ -891,7 +892,7 @@ Tensor cumsum(const Tensor& x, int dim) {
     dim = axis(dim, x.shape().size());
   }
   DType dtype = is_differentiable_float(x.dtype()) ? x.dtype() : DType::Int64;
-  auto result = dispatch_tensor("cumsum", x.shape(), {x}, {dim}, dtype);
+  Tensor result = dispatch_tensor("cumsum", x.shape(), {x}, {dim}, dtype);
   return tracked(result, {x}, [x, dim](const Tensor& gradient) {
     accumulate(x, dispatch_tensor("cumsum_backward", x.shape(), {gradient}, {dim}, gradient.dtype()));
   });
@@ -937,10 +938,10 @@ static std::vector<int> random_attributes(DType dtype, uint32_t seed, double fir
 Tensor Tensor::uniform(Shape shape, double low, double high, uint32_t seed,
                        Backend b, bool grad, DType dtype) {
   if (is_complex(dtype)) {
-    const auto count = shape_element_count(shape);
+    const size_t count = shape_element_count(shape);
     require(count <= size_t(INT32_MAX) / 2, "Complex random component count exceeds indexing limit");
-    auto components = Tensor::uniform({int(count), 2}, low, high, seed, b, false, complex_component_dtype(dtype));
-    auto result = reshape(complex(squeeze(slice(components, 1, 0, 1), 1),
+    Tensor components = Tensor::uniform({int(count), 2}, low, high, seed, b, false, complex_component_dtype(dtype));
+    Tensor result = reshape(complex(squeeze(slice(components, 1, 0, 1), 1),
                                   squeeze(slice(components, 1, 1, 2), 1)), shape).detach();
     result.node()->requires_grad = grad;
     return result;
@@ -955,10 +956,10 @@ Tensor Tensor::uniform(Shape shape, double low, double high, uint32_t seed,
 Tensor Tensor::normal(Shape shape, double mean, double sd, uint32_t seed,
                       Backend b, bool grad, DType dtype) {
   if (is_complex(dtype)) {
-    const auto count = shape_element_count(shape);
+    const size_t count = shape_element_count(shape);
     require(count <= size_t(INT32_MAX) / 2, "Complex random component count exceeds indexing limit");
-    auto components = Tensor::normal({int(count), 2}, mean, sd / std::sqrt(2.), seed, b, false, complex_component_dtype(dtype));
-    auto result = reshape(complex(squeeze(slice(components, 1, 0, 1), 1),
+    Tensor components = Tensor::normal({int(count), 2}, mean, sd / std::sqrt(2.), seed, b, false, complex_component_dtype(dtype));
+    Tensor result = reshape(complex(squeeze(slice(components, 1, 0, 1), 1),
                                   squeeze(slice(components, 1, 1, 2), 1)), shape).detach();
     result.node()->requires_grad = grad;
     return result;
@@ -973,10 +974,10 @@ Tensor dropout(const Tensor& x, double p, uint32_t seed, bool training) {
   require(p >= 0 && p <= 1, "Dropout probability must be in [0,1]");
   if (!training || p == 0 || x.numel() == 0) return x;
   require(is_arithmetic_float(x.dtype()) || is_low_precision_float(x.dtype()), "Training dropout requires floating input");
-  const auto attributes = random_attributes(x.dtype(), seed, p, 0., true);
+  const std::vector<int> attributes = random_attributes(x.dtype(), seed, p, 0., true);
   return tracked(dispatch_tensor("dropout", x.shape(), {x}, attributes, x.dtype()),
                  {x}, [x, attributes](const Tensor& g) {
-                   auto backward = attributes;
+                   std::vector<int> backward = attributes;
                    if (x.dtype() != DType::Float64) { backward.resize(10); backward[operator_attr::dropout::kBackward] = 1; }
                    accumulate(x, dispatch_tensor("dropout", g.shape(), {g}, backward, x.dtype()));
                  });
@@ -985,7 +986,7 @@ static Tensor matrix_backward_product(const Tensor& a, const Tensor& b, bool low
   // A one-term contraction is an outer product. Preserve its zero signs before
   // quantizing the leaf gradient, as the FP32 BLAS path does.
   if (low && a.shape().back() == 1 && b.shape()[b.shape().size() - 2] == 1) {
-    auto product = mul(a, b);
+    Tensor product = mul(a, b);
     const bool gemv = !vector_derivative && (a.shape()[a.shape().size() - 2] == 1 || b.shape().back() == 1);
     return a.backend() == Backend::CPU && (!folded || gemv) ? add(product, 0.) : product;
   }
@@ -1030,7 +1031,7 @@ static Tensor matmul_impl(const Tensor& a, const Tensor& b, bool vector_left = f
         if (left.requires_grad()) {
           // Retain the transposed weight layout so native CPU GEMM follows the
           // same dot reduction as the forward transposed-matrix primitive.
-          auto gradient = !low && left.dtype() == DType::Float32 && left.backend() == Backend::CPU ?
+          Tensor gradient = !low && left.dtype() == DType::Float32 && left.backend() == Backend::CPU ?
               matmul_transposed(g, b) : matrix_backward_product(g, transpose(b, -2, -1), low, folded, vector_left || vector_right);
           accumulate(left, unbroadcast(gradient, a.shape()));
         }
@@ -1038,7 +1039,7 @@ static Tensor matmul_impl(const Tensor& a, const Tensor& b, bool vector_left = f
       });
 }
 Tensor matmul(const Tensor& a, const Tensor& b) {
-  if (const auto target = autocast::dtype(); autocast::should_cast({&a, &b}, target))
+  if (const DType target = autocast::dtype(); autocast::should_cast({&a, &b}, target))
     return matmul(cast(a, target), cast(b, target));
   if (is_complex(a.dtype()) || is_complex(b.dtype())) return complex_matrix(a, b);
   return matmul_impl(a, b);
@@ -1050,7 +1051,7 @@ Tensor bmm(const Tensor& a, const Tensor& b) {
   return matmul(a, b);
 }
 Tensor matmul_transposed(const Tensor& a, const Tensor& b) {
-  if (const auto target = autocast::dtype(); autocast::should_cast({&a, &b}, target))
+  if (const DType target = autocast::dtype(); autocast::should_cast({&a, &b}, target))
     return matmul_transposed(cast(a, target), cast(b, target));
   require(a.shape().size() >= 2 && b.shape().size() >= 2,
           "Transposed matmul requires rank >= 2");
@@ -1089,7 +1090,7 @@ Tensor addmm(const Tensor& c, const Tensor& a, const Tensor& b, double beta,
     require(c.backend() == a.backend() && b.backend() == a.backend(), "Mixed-backend complex addmm");
     if (a.dtype() == DType::Complex32)
       return cast(addmm(cast(c, DType::Complex64), cast(a, DType::Complex64), cast(b, DType::Complex64), beta, alpha), a.dtype());
-    auto product = mul(complex_matrix(a, b), alpha);
+    Tensor product = mul(complex_matrix(a, b), alpha);
     if (beta != 0) return add(product, mul(c, beta));
     // Preserve the zero-gradient edge without reading a possibly nonfinite addend.
     return graph::tracked(product.detach(), {product, c}, [product, c](const Tensor& gradient) {
@@ -1119,7 +1120,7 @@ Tensor addmm(const Tensor& c, const Tensor& a, const Tensor& b, double beta,
     return expand(logical_or(c, c), shape);
   }
   if (!is_differentiable_float(a.dtype())) {
-    const auto coefficient_dtype = is_packed_integer(a.dtype()) ? DType::Int32 : a.dtype();
+    const DType coefficient_dtype = is_packed_integer(a.dtype()) ? DType::Int32 : a.dtype();
     validate_integer_matrix_coefficient(float(alpha), coefficient_dtype);
     validate_integer_matrix_coefficient(float(beta), coefficient_dtype);
     return dispatch_tensor("addmm", shape, {a, b, c}, attributes, a.dtype());
@@ -1136,7 +1137,7 @@ Tensor addmm(const Tensor& c, const Tensor& a, const Tensor& b, double beta,
                  });
 }
 Tensor linear(const Tensor& x, const Tensor& w, const Tensor& b) {
-  if (const auto target = autocast::dtype(); autocast::should_cast({&x, &w, &b}, target))
+  if (const DType target = autocast::dtype(); autocast::should_cast({&x, &w, &b}, target))
     return linear(cast(x, target), cast(w, target), autocast::cast_optional(b, target));
   require(!x.shape().empty() && w.shape().size() == 2 && x.shape().back() == w.shape()[1],
           "Linear expects input [...,in] and weight [out,in]");
@@ -1147,7 +1148,7 @@ Tensor linear(const Tensor& x, const Tensor& w, const Tensor& b) {
     if (x.dtype() == DType::Complex32)
       return cast(linear(cast(x, DType::Complex64), cast(w, DType::Complex64),
                          b.defined() ? cast(b, DType::Complex64) : Tensor{}), x.dtype());
-    auto result = matmul(x, transpose(w, 0, 1));
+    Tensor result = matmul(x, transpose(w, 0, 1));
     return b.defined() ? add(result, b) : result;
   }
   Shape shape = x.shape();
@@ -1189,7 +1190,7 @@ Tensor packed_linear(const Tensor& x, const Tensor& w, const std::vector<int>& w
   require(columns == w.shape()[0], "Packed projection widths differ from weight shape");
   require(!b.defined() || b.shape() == Shape{columns}, "Packed linear bias must match all output features");
   size_t rows = shape_element_count(Shape(x.shape().begin(), x.shape().end() - 1));
-  auto count = shape_element_count({int(rows), columns});
+  size_t count = shape_element_count({int(rows), columns});
   if (is_complex(x.dtype())) {
     if (x.dtype() == DType::Complex32)
       return cast(packed_linear(cast(x, DType::Complex64), cast(w, DType::Complex64), widths,
@@ -1197,8 +1198,8 @@ Tensor packed_linear(const Tensor& x, const Tensor& w, const std::vector<int>& w
     std::vector<Tensor> projections;
     int begin = 0;
     for (int width : widths) {
-      const auto weight = slice(w, 0, begin, begin + width);
-      const auto bias = b.defined() ? slice(b, 0, begin, begin + width) : Tensor{};
+      const Tensor weight = slice(w, 0, begin, begin + width);
+      const Tensor bias = b.defined() ? slice(b, 0, begin, begin + width) : Tensor{};
       projections.push_back(reshape(linear(x, weight, bias), {int(rows) * width}));
       begin += width;
     }
@@ -1210,11 +1211,11 @@ Tensor packed_linear(const Tensor& x, const Tensor& w, const std::vector<int>& w
     require(x.shape().back() == 0, "Nonempty Bool packed products are not supported");
     if (!b.defined()) return Tensor::zeros({int(count)}, x.backend(), false, DType::Bool);
     require(x.backend() == Backend::CUDA, "CPU Bool packed linear bias is unsupported for a zero-width product");
-    auto bias = logical_or(b, b);
+    Tensor bias = logical_or(b, b);
     std::vector<Tensor> projections;
     int begin = 0;
     for (int width : widths) {
-      auto shape = x.shape();
+      Shape shape = x.shape();
       shape.back() = width;
       projections.push_back(reshape(expand(slice(bias, 0, begin, begin + width), shape), {int(rows) * width}));
       begin += width;
@@ -1229,16 +1230,16 @@ Tensor packed_linear(const Tensor& x, const Tensor& w, const std::vector<int>& w
     const Tensor values = low ? cast(x, DType::Float32) : x;
     const Tensor weights = low ? cast(w, DType::Float32) : w;
     const Tensor gradient = low ? cast(g, DType::Float32) : g;
-    auto matrix = reshape(values, {int(rows), w.shape()[1]});
+    Tensor matrix = reshape(values, {int(rows), w.shape()[1]});
     Tensor input_gradient;
     std::vector<Tensor> weight_gradients(widths.size()), bias_gradients(widths.size());
     int end = columns;
     for (size_t index = widths.size(); index-- > 0;) {
       int width = widths[index], begin = end - width;
-      auto upstream = contiguous_view(gradient, {int(rows), width}, rows * size_t(begin));
+      Tensor upstream = contiguous_view(gradient, {int(rows), width}, rows * size_t(begin));
       if (x.requires_grad()) {
-        auto weight = contiguous_view(weights, {width, w.shape()[1]}, size_t(begin) * w.shape()[1]);
-        auto piece = reshape(matrix_backward_product(upstream, weight, low), x.shape());
+        Tensor weight = contiguous_view(weights, {width, w.shape()[1]}, size_t(begin) * w.shape()[1]);
+        Tensor piece = reshape(matrix_backward_product(upstream, weight, low), x.shape());
         if (low) input_gradient = input_gradient.defined() ? add(input_gradient, piece) : piece;
         else accumulate(x, piece);
       }
@@ -1248,7 +1249,7 @@ Tensor packed_linear(const Tensor& x, const Tensor& w, const std::vector<int>& w
     }
     if (low && x.requires_grad()) accumulate(x, input_gradient);
     if (w.requires_grad()) {
-      auto gradient = concat(weight_gradients, 0);
+      Tensor gradient = concat(weight_gradients, 0);
       // Slice backward adds each projection into a zero-filled full weight.
       if (low && widths.size() > 1) gradient = add(gradient, 0.);
       accumulate(w, gradient);
@@ -1279,8 +1280,8 @@ Tensor softmax(const Tensor& x, int dim) {
   }
   dim = axis(dim, x.shape().size());
   if (is_low_precision_float(x.dtype())) {
-    auto saved = dispatch_tensor("softmax", x.shape(), {x}, {dim, 1}, DType::Float32);
-    auto y = cast(saved, x.dtype());
+    Tensor saved = dispatch_tensor("softmax", x.shape(), {x}, {dim, 1}, DType::Float32);
+    Tensor y = cast(saved, x.dtype());
     return tracked(y, {x}, [x, saved, dim](const Tensor& g) {
       accumulate(x, dispatch_tensor("softmax", x.shape(), {saved, g}, {dim, 2}, x.dtype()));
     });
@@ -1288,8 +1289,8 @@ Tensor softmax(const Tensor& x, int dim) {
   Tensor y = dispatch_tensor("softmax", x.shape(), {x}, {dim}, x.dtype()),
          saved = y.detach();
   return tracked(y, {x}, [x, saved, dim](const Tensor& g) {
-    const auto values = is_narrow_float(saved.dtype()) ? cast(saved, DType::Float32) : saved;
-    const auto upstream = is_narrow_float(g.dtype()) || is_low_precision_float(g.dtype()) ? cast(g, DType::Float32) : g;
+    const Tensor values = is_narrow_float(saved.dtype()) ? cast(saved, DType::Float32) : saved;
+    const Tensor upstream = is_narrow_float(g.dtype()) || is_low_precision_float(g.dtype()) ? cast(g, DType::Float32) : g;
     accumulate(x, mul(values, sub(upstream, sum(mul(upstream, values), dim, true))));
   });
 }
@@ -1303,7 +1304,7 @@ Tensor attention_softmax(const Tensor& scores, const Tensor& mask, double diviso
     else dim = axis(dim, scores.shape().size());
     divisor = float(divisor);
     return tracked(dispatch_tensor("attention_softmax", scores.shape(), {scores, mask}, {dim, float_bits(float(divisor))}, scores.dtype()), {scores, mask}, [scores, mask, divisor, dim](const Tensor& g) {
-      auto gradient = low_attention_softmax_derivative(scores, mask, divisor, dim, g);
+      Tensor gradient = low_attention_softmax_derivative(scores, mask, divisor, dim, g);
       if (scores.requires_grad()) accumulate(scores, div(gradient, divisor));
       if (mask.requires_grad()) accumulate(mask, low_attention_reduce_shape(gradient, mask.shape()));
     });
@@ -1322,13 +1323,13 @@ Tensor attention_softmax(const Tensor& scores, const Tensor& mask, double diviso
     std::memcpy(attributes.data() + 5, &divisor, sizeof(divisor));
     attributes[7] = 1;
   } else divisor = float(divisor);
-  auto result = dispatch_tensor("attention_softmax", scores.shape(), {scores, mask}, attributes, scores.dtype());
+  Tensor result = dispatch_tensor("attention_softmax", scores.shape(), {scores, mask}, attributes, scores.dtype());
   return tracked(result, {scores, mask}, [scores, mask, divisor, dim](const Tensor& g) {
     // Recompute probabilities in the operation's accumulation dtype.
-    const auto dtype = scores.dtype() == DType::Float64 ? DType::Float64 : DType::Float32;
-    auto probability = softmax(cast(add(div(scores, divisor), mask), dtype), dim);
-    auto upstream = cast(g, dtype);
-    auto gradient = cast(mul(probability, sub(upstream, sum(mul(upstream, probability), dim, true))), scores.dtype());
+    const DType dtype = scores.dtype() == DType::Float64 ? DType::Float64 : DType::Float32;
+    Tensor probability = softmax(cast(add(div(scores, divisor), mask), dtype), dim);
+    Tensor upstream = cast(g, dtype);
+    Tensor gradient = cast(mul(probability, sub(upstream, sum(mul(upstream, probability), dim, true))), scores.dtype());
     if (scores.requires_grad()) accumulate(scores, div(gradient, divisor));
     if (mask.requires_grad()) accumulate(mask, unbroadcast(gradient, mask.shape()));
   });
@@ -1339,10 +1340,10 @@ Tensor tiled_attention(const Tensor& query, const Tensor& key, const Tensor& val
     require(query.dtype() == key.dtype() && query.dtype() == value.dtype() && query.dtype() == mask.dtype(), "Low precision attention operands must match");
     require(query.shape().size() == 4 && value.shape().size() == 4, "Tiled attention requires rank-four inputs");
     divisor = float(divisor);
-    auto result = dispatch_tensor("tiled_attention", {query.shape()[0], query.shape()[1], query.shape()[2], value.shape()[3]}, {query, key, value, mask},
+    Tensor result = dispatch_tensor("tiled_attention", {query.shape()[0], query.shape()[1], query.shape()[2], value.shape()[3]}, {query, key, value, mask},
                                   {float_bits(float(divisor)), query_tile, int(causal), causal_offset, int(tiling)}, query.dtype());
     return tracked(result, {query, key, value, mask}, [query, key, value, mask, divisor, causal, causal_offset](const Tensor& g) {
-      auto gradients = low_tiled_attention_derivatives(query, key, value, mask, divisor, causal, causal_offset, g);
+      std::vector<Tensor> gradients = low_tiled_attention_derivatives(query, key, value, mask, divisor, causal, causal_offset, g);
       const Tensor parents[]{query, key, value, mask};
       for (int i = 0; i < 4; ++i) if (gradients[i].defined()) accumulate(parents[i], gradients[i]);
     });
@@ -1351,7 +1352,7 @@ Tensor tiled_attention(const Tensor& query, const Tensor& key, const Tensor& val
           "Tiled attention requires rank-four query, key and value");
   require(is_arithmetic_float(query.dtype()) && key.dtype() == query.dtype() && value.dtype() == query.dtype() && mask.dtype() == query.dtype(),
           "Tiled attention requires matching floating dtypes");
-  auto q = query.shape(), k = key.shape(), v = value.shape();
+  Shape q = query.shape(), k = key.shape(), v = value.shape();
   require(q[0] == k[0] && q[0] == v[0] && q[1] > 0 && k[1] > 0 && q[1] % k[1] == 0 && k[1] == v[1] &&
           q[3] == k[3] && k[2] == v[2], "Incompatible tiled attention dimensions");
   require(query_tile > 0, "Tiled attention query tile must be positive");
@@ -1364,43 +1365,43 @@ Tensor tiled_attention(const Tensor& query, const Tensor& key, const Tensor& val
     std::memcpy(attributes.data() + 5, &divisor, sizeof(divisor));
     attributes[7] = 1;
   } else divisor = float(divisor);
-  auto result = dispatch_tensor("tiled_attention", {q[0], q[1], q[2], v[3]}, {query, key, value, mask}, attributes, query.dtype());
+  Tensor result = dispatch_tensor("tiled_attention", {q[0], q[1], q[2], v[3]}, {query, key, value, mask}, attributes, query.dtype());
   return tracked(result, {query, key, value, mask}, [query, key, value, mask, divisor, causal, causal_offset](const Tensor& g) {
-    const auto& q = query.shape();
-    const auto& k = key.shape();
+    const Shape& q = query.shape();
+    const Shape& k = key.shape();
     int groups = q[1] / k[1];
-    auto expand_heads = [&](const Tensor& x) {
-      const auto& s = x.shape();
+    LocalFunction expand_heads{[&](const Tensor& x) {
+      const Shape& s = x.shape();
       return reshape(expand(reshape(x, {s[0], s[1], 1, s[2], s[3]}), {s[0], s[1], groups, s[2], s[3]}),
                      {s[0], q[1], s[2], s[3]});
-    };
-    auto reduce_heads = [&](const Tensor& gradient, const Shape& s) {
+    }};
+    LocalFunction reduce_heads{[&](const Tensor& gradient, const Shape& s) {
       return reshape(sum(reshape(gradient, {s[0], s[1], groups, s[2], s[3]}), 2), s);
-    };
-    auto keys = expand_heads(key);
+    }};
+    Tensor keys = expand_heads(key);
     Tensor upper, effective_mask = mask;
     if (causal && q[2] && k[2] && causal_offset < k[2] - 1) {
       upper = causal_offset < 1 - q[2] ? Tensor::ones({}, query.backend(), false, DType::Bool) :
           triu(Tensor::ones({q[2], k[2]}, query.backend(), false, DType::Bool), causal_offset + 1);
       float minimum = query.dtype() == DType::Float16 ? -65504.0f :
                       query.dtype() == DType::BFloat16 ? -3.3895313892515355e38f : -3.402823466e38f;
-      auto excluded = query.dtype() == DType::Float64 ?
+      Tensor excluded = query.dtype() == DType::Float64 ?
           Tensor::from_double_data({}, {-std::numeric_limits<double>::max()}, query.backend()) :
           Tensor::from_data({}, {minimum}, query.backend(), false, query.dtype());
       effective_mask = where(upper, excluded, mask);
     }
-    const auto dtype = query.dtype() == DType::Float64 ? DType::Float64 : DType::Float32;
-    auto probability = softmax(cast(add(div(matmul_transposed(query, keys), divisor), effective_mask), dtype), -1);
-    auto rounded = cast(probability, query.dtype());
+    const DType dtype = query.dtype() == DType::Float64 ? DType::Float64 : DType::Float32;
+    Tensor probability = softmax(cast(add(div(matmul_transposed(query, keys), divisor), effective_mask), dtype), -1);
+    Tensor rounded = cast(probability, query.dtype());
     if (value.requires_grad()) accumulate(value, reduce_heads(matmul(transpose(rounded, 2, 3), g), value.shape()));
     if (query.requires_grad() || key.requires_grad() || mask.requires_grad()) {
-      auto upstream = cast(matmul_transposed(g, expand_heads(value)), dtype);
-      auto masked_gradient = cast(mul(probability, sub(upstream, sum(mul(upstream, probability), -1, true))), query.dtype());
+      Tensor upstream = cast(matmul_transposed(g, expand_heads(value)), dtype);
+      Tensor masked_gradient = cast(mul(probability, sub(upstream, sum(mul(upstream, probability), -1, true))), query.dtype());
       if (mask.requires_grad()) {
-        auto mask_gradient = upper.defined() ? where(upper, Tensor::zeros({}, query.backend(), false, query.dtype()), masked_gradient) : masked_gradient;
+        Tensor mask_gradient = upper.defined() ? where(upper, Tensor::zeros({}, query.backend(), false, query.dtype()), masked_gradient) : masked_gradient;
         accumulate(mask, unbroadcast(mask_gradient, mask.shape()));
       }
-      auto scaled_gradient = div(masked_gradient, divisor);
+      Tensor scaled_gradient = div(masked_gradient, divisor);
       if (query.requires_grad()) accumulate(query, matmul(scaled_gradient, keys));
       if (key.requires_grad()) accumulate(key, reduce_heads(matmul(transpose(scaled_gradient, 2, 3), query), key.shape()));
     }
@@ -1415,8 +1416,8 @@ Tensor log_softmax(const Tensor& x, int dim) {
   }
   dim = axis(dim, x.shape().size());
   if (is_low_precision_float(x.dtype())) {
-    auto saved = dispatch_tensor("log_softmax", x.shape(), {x}, {dim, 1}, DType::Float32);
-    auto y = cast(saved, x.dtype());
+    Tensor saved = dispatch_tensor("log_softmax", x.shape(), {x}, {dim, 1}, DType::Float32);
+    Tensor y = cast(saved, x.dtype());
     return tracked(y, {x}, [x, saved, dim](const Tensor& g) {
       accumulate(x, dispatch_tensor("log_softmax", x.shape(), {saved, g}, {dim, 2}, x.dtype()));
     });
@@ -1424,8 +1425,8 @@ Tensor log_softmax(const Tensor& x, int dim) {
   Tensor y = dispatch_tensor("log_softmax", x.shape(), {x}, {dim}, x.dtype()),
          saved = y.detach();
   return tracked(y, {x}, [x, saved, dim](const Tensor& g) {
-    const auto values = is_narrow_float(saved.dtype()) ? cast(saved, DType::Float32) : saved;
-    const auto upstream = is_narrow_float(g.dtype()) || is_low_precision_float(g.dtype()) ? cast(g, DType::Float32) : g;
+    const Tensor values = is_narrow_float(saved.dtype()) ? cast(saved, DType::Float32) : saved;
+    const Tensor upstream = is_narrow_float(g.dtype()) || is_low_precision_float(g.dtype()) ? cast(g, DType::Float32) : g;
     accumulate(x, sub(upstream, mul(exp(values), sum(upstream, dim, true))));
   });
 }
@@ -1445,19 +1446,19 @@ static Tensor cuda_batch_norm_reduce(const Tensor& values, DType dtype, int batc
   int64_t padded_spatial = (int64_t(spatial) + columns - 1) / columns * columns;
   require(padded_batch <= std::numeric_limits<int>::max() && padded_spatial <= std::numeric_limits<int>::max(),
           "Batch normalization reduction padding exceeds Int32 dimensions");
-  auto padded = reshape(cast(cast(values, dtype), DType::Float32), {channels, batch, spatial});
+  Tensor padded = reshape(cast(cast(values, dtype), DType::Float32), {channels, batch, spatial});
   if (padded_spatial != spatial)
     padded = concat({padded, Tensor::zeros({channels, batch, int(padded_spatial) - spatial}, values.backend())}, 2);
   if (padded_batch != batch)
     padded = concat({padded, Tensor::zeros({channels, int(padded_batch) - batch, int(padded_spatial)}, values.backend())}, 1);
-  auto lanes = reshape(permute(reshape(padded, {channels, int(padded_batch) / rows, rows, int(padded_spatial) / columns, columns}),
+  Tensor lanes = reshape(permute(reshape(padded, {channels, int(padded_batch) / rows, rows, int(padded_spatial) / columns, columns}),
                                {0, 2, 4, 1, 3}), {channels, threads, -1});
-  auto warp = [dtype](Tensor partials) {
+  LocalFunction warp{[dtype](Tensor partials) {
     for (int offset = 16; offset; offset /= 2)
       partials = add(slice(partials, -1, 0, offset), cast(cast(slice(partials, -1, offset, offset * 2), dtype), DType::Float32));
     return partials;
-  };
-  auto partials = reshape(warp(reshape(sum(lanes, 2), {channels, warps, 32})), {channels, warps});
+  }};
+  Tensor partials = reshape(warp(reshape(sum(lanes, 2), {channels, warps, 32})), {channels, warps});
   return warp(concat({partials, Tensor::zeros({channels, 32 - warps}, values.backend())}, 1));
 }
 static Tensor narrow_affine_norm(const Tensor& x, const Tensor& w, const Tensor& b,
@@ -1486,12 +1487,12 @@ static Tensor narrow_affine_norm(const Tensor& x, const Tensor& w, const Tensor&
   const Tensor average = mean(values, -1, true);
   const Tensor centered = sub(values, average);
   const Tensor inverse = rsqrt(add(mean(mul(centered, centered), -1, true), eps));
-  auto restore = [x, axes, kind](const Tensor& value) {
+  LocalFunction restore{[x, axes, kind](const Tensor& value) {
     if (kind != 1) return reshape(value, x.shape());
     Shape shape = x.shape();
     std::swap(shape[0], shape[1]);
     return permute(reshape(value, shape), axes);
-  };
+  }};
   Tensor output = kind == 2 && x.backend() == Backend::CUDA ?
       dispatch_tensor("group_norm", x.shape(), {x, w, b}, {groups, float_bits(eps)}, x.dtype()) :
       cast(restore(add(mul(mul(centered, inverse), weights), biases)), x.dtype());
@@ -1509,13 +1510,13 @@ static Tensor narrow_affine_norm(const Tensor& x, const Tensor& w, const Tensor&
       bool native = x.dtype() == DType::BFloat16 || w.dtype() == x.dtype() || batch > 880801 ||
                     x.numel() == size_t(std::numeric_limits<int>::max());
       if (native && !channels_last) {
-        auto reduced = cuda_batch_norm_reduce(concat({upstream, mul(upstream, sub(values, saved_mean))}, 0),
+        Tensor reduced = cuda_batch_norm_reduce(concat({upstream, mul(upstream, sub(values, saved_mean))}, 0),
                                               x.dtype(), batch, spatial, x.requires_grad());
-        auto total = slice(reduced, 0, 0, channels), dot = slice(reduced, 0, channels, channels * 2);
+        Tensor total = slice(reduced, 0, 0, channels), dot = slice(reduced, 0, channels, channels * 2);
         if (x.requires_grad()) {
           float norm = 1.0f / float(values.shape()[1]);
-          auto projection = mul(mul(mul(dot, norm), saved_inverse), saved_inverse);
-          auto gradient = mul(sub(sub(upstream, mul(sub(values, saved_mean), projection)), mul(total, norm)),
+          Tensor projection = mul(mul(mul(dot, norm), saved_inverse), saved_inverse);
+          Tensor gradient = mul(sub(sub(upstream, mul(sub(values, saved_mean), projection)), mul(total, norm)),
                               mul(saved_inverse, weights));
           accumulate(x, restore(gradient));
         }
@@ -1534,7 +1535,7 @@ static Tensor narrow_affine_norm(const Tensor& x, const Tensor& w, const Tensor&
                                                   {groups, float_bits(eps)}, x.dtype()));
       else accumulate(x, restore(add(add(mul(weighted, saved_inverse), mul(c2, values)), c3)));
     }
-    auto affine_reduce = [kind, x, w, restore](const Tensor& value) {
+    LocalFunction affine_reduce{[kind, x, w, restore](const Tensor& value) {
       if (kind == 0) {
         if (x.backend() == Backend::CPU) {
           // CPU LayerNorm stores each row update in an input-dtype partial
@@ -1551,7 +1552,7 @@ static Tensor narrow_affine_norm(const Tensor& x, const Tensor& w, const Tensor&
       std::iota(order.begin(), order.end(), 0);
       std::swap(order[0], order[1]);
       return sum(reshape(permute(full, order), {x.shape()[1], -1}), 1);
-    };
+    }};
     if (w.requires_grad()) accumulate(w, affine_reduce(mul(mul(upstream, sub(values, saved_mean)), saved_inverse)));
     if (b.requires_grad()) accumulate(b, affine_reduce(upstream));
   });
@@ -1575,84 +1576,84 @@ static Tensor float64_affine_norm(const Tensor& x, const Tensor& w, const Tensor
     width = shape_element_count(Shape(x.shape().begin() + 1, x.shape().end())) / groups;
   }
   require(rows <= size_t(INT32_MAX) && width <= size_t(INT32_MAX), "Double normalization grouping exceeds Int32");
-  const auto values = reshape(kind == 1 ? permute(x.detach(), axes) : x.detach(), {int(rows), int(width)});
+  const Tensor values = reshape(kind == 1 ? permute(x.detach(), axes) : x.detach(), {int(rows), int(width)});
   Shape affine(x.shape().size(), 1);
   if (kind != 0) affine[1] = x.shape()[1];
-  auto grouped_affine = [&](const Tensor& parameter) {
+  LocalFunction grouped_affine{[&](const Tensor& parameter) {
     if (kind == 0) return reshape(parameter.detach(), {1, int(width)});
     if (kind == 1) return reshape(parameter.detach(), {int(rows), 1});
     return reshape(expand(reshape(parameter.detach(), affine), x.shape()), values.shape());
-  };
-  const auto weights = grouped_affine(w), biases = grouped_affine(b);
-  const auto average = mean(values, -1, true), centered = sub(values, average);
-  const auto variance = mean(mul(centered, centered), -1, true);
-  auto inverse = rsqrt(add(variance, eps));
+  }};
+  const Tensor weights = grouped_affine(w), biases = grouped_affine(b);
+  const Tensor average = mean(values, -1, true), centered = sub(values, average);
+  const Tensor variance = mean(mul(centered, centered), -1, true);
+  Tensor inverse = rsqrt(add(variance, eps));
   if (kind == 1 && x.backend() == Backend::CPU && eps == 0) {
     // Native CPU BatchNorm defines zero inverse deviation for a constant row
     // with zero epsilon; the CUDA reference instead propagates NaN.
-    auto zero = Tensor::zeros({}, x.backend(), false, DType::Float64);
+    Tensor zero = Tensor::zeros({}, x.backend(), false, DType::Float64);
     inverse = where(eq(variance, zero), zero, inverse);
   }
-  const auto normalized = mul(centered, inverse);
-  auto restore = [x, axes, kind](const Tensor& value) {
+  const Tensor normalized = mul(centered, inverse);
+  LocalFunction restore{[x, axes, kind](const Tensor& value) {
     if (kind != 1) return reshape(value, x.shape());
-    auto shape = x.shape();
+    Shape shape = x.shape();
     std::swap(shape[0], shape[1]);
     return permute(reshape(value, shape), axes);
-  };
+  }};
   const size_t spatial = kind == 2 ? shape_element_count(Shape(x.shape().begin() + 2, x.shape().end())) : 1;
-  auto multiply_add = [x](const Tensor& a, const Tensor& b, const Tensor& c) {
+  LocalFunction multiply_add{[x](const Tensor& a, const Tensor& b, const Tensor& c) {
     // Preserve the fused CUDA affine arithmetic and the CPU rounding boundaries.
     if (x.backend() == Backend::CUDA)
       return dispatch_tensor("float64_fma", broadcast(broadcast(a.shape(), b.shape()), c.shape()), {a, b, c}, {}, DType::Float64);
     return add(mul(a, b), c);
-  };
+  }};
   Tensor affine_output;
   if ((kind == 1 && x.backend() == Backend::CPU) ||
       (kind == 2 && (x.backend() == Backend::CPU || spatial != 1))) {
-    auto scale = mul(inverse, weights);
-    auto offset = multiply_add(mul(scale, -1.), average, biases);
+    Tensor scale = mul(inverse, weights);
+    Tensor offset = multiply_add(mul(scale, -1.), average, biases);
     affine_output = multiply_add(scale, values, offset);
   } else affine_output = add(mul(normalized, weights), biases);
-  auto output = restore(affine_output);
+  Tensor output = restore(affine_output);
   return tracked(output, {x, w, b}, [x, w, b, kind, groups, spatial, values, weights, average, inverse, normalized, axes, restore, multiply_add](const Tensor& g) {
-    auto upstream = reshape(kind == 1 ? permute(g, axes) : g, values.shape());
+    Tensor upstream = reshape(kind == 1 ? permute(g, axes) : g, values.shape());
     if (kind == 2) {
       const int rows = values.shape()[0], channels = x.shape()[1], per_group = channels / groups;
-      auto ds = sum(reshape(mul(upstream, values), {rows, per_group, int(spatial)}), -1);
-      auto db = sum(reshape(upstream, {rows, per_group, int(spatial)}), -1);
-      auto gamma = reshape(expand(reshape(w.detach(), {1, groups, per_group}),
+      Tensor ds = sum(reshape(mul(upstream, values), {rows, per_group, int(spatial)}), -1);
+      Tensor db = sum(reshape(upstream, {rows, per_group, int(spatial)}), -1);
+      Tensor gamma = reshape(expand(reshape(w.detach(), {1, groups, per_group}),
                                   {x.shape()[0], groups, per_group}), {rows, per_group});
       if (x.requires_grad()) {
-        auto ds_weighted = sum(mul(ds, gamma), -1, true);
-        auto db_weighted = sum(mul(db, gamma), -1, true);
+        Tensor ds_weighted = sum(mul(ds, gamma), -1, true);
+        Tensor db_weighted = sum(mul(db, gamma), -1, true);
         const double reciprocal_width = 1. / double(values.shape()[1]);
-        auto c2 = mul(mul(mul(mul(multiply_add(db_weighted, average, mul(ds_weighted, -1.)), inverse), inverse), inverse), reciprocal_width);
-        auto c3 = multiply_add(mul(c2, -1.), average, mul(mul(mul(db_weighted, inverse), reciprocal_width), -1.));
-        auto c1 = mul(inverse, weights);
-        auto gradient = add(multiply_add(c1, upstream, mul(c2, values)), c3);
+        Tensor c2 = mul(mul(mul(mul(multiply_add(db_weighted, average, mul(ds_weighted, -1.)), inverse), inverse), inverse), reciprocal_width);
+        Tensor c3 = multiply_add(mul(c2, -1.), average, mul(mul(mul(db_weighted, inverse), reciprocal_width), -1.));
+        Tensor c1 = mul(inverse, weights);
+        Tensor gradient = add(multiply_add(c1, upstream, mul(c2, values)), c3);
         accumulate(x, restore(gradient));
       }
       if (w.requires_grad()) {
-        auto centered_gradient = x.backend() == Backend::CUDA && spatial == 1 ?
+        Tensor centered_gradient = x.backend() == Backend::CUDA && spatial == 1 ?
             multiply_add(upstream, values, mul(mul(upstream, average), -1.)) :
             multiply_add(mul(db, -1.), average, ds);
-        auto gradient = mul(centered_gradient, inverse);
+        Tensor gradient = mul(centered_gradient, inverse);
         accumulate(w, sum(reshape(gradient, {x.shape()[0], channels}), 0));
       }
       if (b.requires_grad()) accumulate(b, sum(reshape(db, {x.shape()[0], channels}), 0));
       return;
     }
     if (x.requires_grad()) {
-      auto weighted = mul(upstream, weights);
-      auto gradient = mul(inverse, sub(sub(weighted, mean(weighted, -1, true)),
+      Tensor weighted = mul(upstream, weights);
+      Tensor gradient = mul(inverse, sub(sub(weighted, mean(weighted, -1, true)),
                                       mul(normalized, mean(mul(weighted, normalized), -1, true))));
       accumulate(x, restore(gradient));
     }
-    auto affine_reduce = [w, kind](const Tensor& value) {
+    LocalFunction affine_reduce{[w, kind](const Tensor& value) {
       if (kind == 0) return reshape(sum(value, 0), w.shape());
       return reshape(sum(value, 1), w.shape());
-    };
+    }};
     if (w.requires_grad()) accumulate(w, affine_reduce(mul(upstream, normalized)));
     if (b.requires_grad()) accumulate(b, affine_reduce(upstream));
   });
@@ -1680,9 +1681,9 @@ static Tensor low_affine_normalization(const std::string& operation, const Tenso
   }
   std::vector<Tensor> parents{x, w};
   if (b.defined()) parents.push_back(b);
-  auto output = dispatch_tensor(operation, x.shape(), parents, attributes, x.dtype());
+  Tensor output = dispatch_tensor(operation, x.shape(), parents, attributes, x.dtype());
   return tracked(output, parents, [operation, x, w, b, attributes](const Tensor& g) {
-    auto derivative = attributes;
+    std::vector<int> derivative = attributes;
     if (x.requires_grad()) {
       derivative[8] = 1;
       accumulate(x, dispatch_tensor(operation, x.shape(), {x, w, g}, derivative, x.dtype()));
@@ -1733,15 +1734,15 @@ Tensor rms_norm(const Tensor& x, const Tensor& w, double eps, RmsNormRounding ro
     return low_affine_normalization("rms_norm", x, w, Tensor{}, eps, 1, int(rounding));
   }
   if (x.dtype() == DType::Float64 || w.dtype() == DType::Float64) {
-    const auto dtype = x.dtype() == DType::Float64 ? DType::Float64 : DType::Float32;
+    const DType dtype = x.dtype() == DType::Float64 ? DType::Float64 : DType::Float32;
     size_t rows = shape_element_count(Shape(x.shape().begin(), x.shape().end() - w.shape().size()));
     require(rows <= size_t(INT32_MAX) && w.numel() <= size_t(INT32_MAX), "Double RMS normalization grouping exceeds Int32");
-    auto values = reshape(cast(x, dtype), {int(rows), int(w.numel())});
-    auto normalized = mul(values, rsqrt(add(mean(mul(values, values), -1, true), eps)));
+    Tensor values = reshape(cast(x, dtype), {int(rows), int(w.numel())});
+    Tensor normalized = mul(values, rsqrt(add(mean(mul(values, values), -1, true), eps)));
     if (rounding == RmsNormRounding::Normalized) normalized = cast(normalized, x.dtype());
     return reshape(cast(mul(normalized, reshape(w, {int(w.numel())})), x.dtype()), x.shape());
   }
-  auto result = dispatch_tensor("rms_norm", x.shape(), {x, w},
+  Tensor result = dispatch_tensor("rms_norm", x.shape(), {x, w},
                                 {int(w.shape().size()), float_bits(float(eps)), int(rounding)}, x.dtype());
   return tracked(result, {x, w}, [x, w, eps, rounding](const Tensor& g) {
     if (!w.numel() || !x.numel()) {
@@ -1750,26 +1751,26 @@ Tensor rms_norm(const Tensor& x, const Tensor& w, double eps, RmsNormRounding ro
       return;
     }
     int width = int(w.numel()), rows = int(x.numel() / w.numel());
-    auto values = reshape(cast(x, DType::Float32), {rows, width});
-    auto inverse = rsqrt(add(mean(mul(values, values), -1, true), eps));
-    auto normalized = mul(values, inverse);
-    auto upstream = reshape(g, {rows, width});
-    auto weights = reshape(w, {width});
+    Tensor values = reshape(cast(x, DType::Float32), {rows, width});
+    Tensor inverse = rsqrt(add(mean(mul(values, values), -1, true), eps));
+    Tensor normalized = mul(values, inverse);
+    Tensor upstream = reshape(g, {rows, width});
+    Tensor weights = reshape(w, {width});
     bool rounded = rounding == RmsNormRounding::Normalized;
     if (w.requires_grad()) {
-      auto product = rounded ? mul(upstream, cast(normalized, x.dtype())) :
+      Tensor product = rounded ? mul(upstream, cast(normalized, x.dtype())) :
                                mul(cast(upstream, DType::Float32), normalized);
       accumulate(w, reshape(sum(product, 0), w.shape()));
     }
     if (x.requires_grad()) {
-      auto weighted = rounded ? cast(mul(upstream, weights), DType::Float32) :
+      Tensor weighted = rounded ? cast(mul(upstream, weights), DType::Float32) :
                                 mul(cast(upstream, DType::Float32), cast(weights, DType::Float32));
-      auto inverse_grad = sum(mul(weighted, values), -1, true);
-      auto variance_grad = mul(mul(inverse_grad, -0.5f), pow(inverse, 3));
+      Tensor inverse_grad = sum(mul(weighted, values), -1, true);
+      Tensor variance_grad = mul(mul(inverse_grad, -0.5f), pow(inverse, 3));
       // Keep the mean and square backward rounding boundaries of the eager
       // reference, including the backend-specific mean backward scaling.
-      auto square_grad = dispatch_tensor("reduce_grad", values.shape(), {values, inverse, variance_grad}, {1, 1, 1});
-      auto gradient = add(mul(weighted, inverse), mul(square_grad, mul(values, 2.0f)));
+      Tensor square_grad = dispatch_tensor("reduce_grad", values.shape(), {values, inverse, variance_grad}, {1, 1, 1});
+      Tensor gradient = add(mul(weighted, inverse), mul(square_grad, mul(values, 2.0f)));
       accumulate(x, reshape(gradient, x.shape()));
     }
   });
@@ -1824,8 +1825,8 @@ Tensor group_norm(const Tensor& x, int groups, const Tensor& w, const Tensor& b,
   if (is_narrow_float(x.dtype())) return narrow_affine_norm(x, w, b, float(eps), 2, groups);
   Shape affine(x.shape().size(), 1);
   affine[1] = x.shape()[1];
-  auto attributes = group_norm_attributes(groups, eps);
-  auto output = dispatch_tensor("group_norm", x.shape(), {x, w, b}, attributes, x.dtype());
+  std::vector<int> attributes = group_norm_attributes(groups, eps);
+  Tensor output = dispatch_tensor("group_norm", x.shape(), {x, w, b}, attributes, x.dtype());
   return tracked(output, {x, w, b}, [x, w, b, affine, attributes](const Tensor& gradient) {
     if (x.requires_grad()) accumulate(x, dispatch_tensor("group_norm_input_grad", x.shape(), {x, w, gradient}, attributes, x.dtype()));
     if (w.requires_grad()) accumulate(w, dispatch_tensor("group_norm_weight_grad", w.shape(), {x, gradient}, attributes, w.dtype()));
@@ -1837,8 +1838,8 @@ Tensor mse_loss(const Tensor& a, const Tensor& b) {
   if (is_low_precision_float(a.dtype()) || is_low_precision_float(b.dtype())) {
     require(a.dtype() == b.dtype() && a.backend() == b.backend(), "Low precision MSE requires matching dtypes and backends");
     const Shape shape = broadcast(a.shape(), b.shape());
-    const auto left = a.shape() == shape ? a.detach() : expand(a.detach(), shape);
-    const auto right = b.shape() == shape ? b.detach() : expand(b.detach(), shape);
+    const Tensor left = a.shape() == shape ? a.detach() : expand(a.detach(), shape);
+    const Tensor right = b.shape() == shape ? b.detach() : expand(b.detach(), shape);
     return tracked(dispatch_tensor("mse_loss", {}, {left, right}, {}, a.dtype()), {a, b}, [a, b, left, right](const Tensor& gradient) {
       if (a.requires_grad()) accumulate(a, unbroadcast(dispatch_tensor("mse_loss", left.shape(), {left, right, gradient}, {1}, DType::Float32), a.shape()));
       if (b.requires_grad()) accumulate(b, unbroadcast(dispatch_tensor("mse_loss", right.shape(), {right, left, gradient}, {1}, DType::Float32), b.shape()));
@@ -1850,6 +1851,16 @@ Tensor mse_loss(const Tensor& a, const Tensor& b) {
   Tensor d = sub(a, b);
   return mean_all(mul(d, d));
 }
+Tensor soft_target_cross_entropy(const Tensor& logits, const Tensor& probabilities) {
+  require(logits.shape() == probabilities.shape() && logits.shape().size() >= 2 && logits.numel() > 0,
+          "Soft cross entropy expects matching nonempty logits and probabilities");
+  require(logits.dtype() == probabilities.dtype() && is_differentiable_float(logits.dtype()) &&
+          logits.backend() == probabilities.backend(), "Soft cross entropy requires matching floating tensors");
+  const DType dtype = logits.dtype() == DType::Float64 ? DType::Float64 : DType::Float32;
+  Tensor log_probs = log_softmax(cast(logits, dtype), -1);
+  return mul(mean_all(sum(mul(cast(probabilities, dtype), log_probs), -1)), -1);
+}
+
 Tensor cross_entropy(const Tensor& logits, const Tensor& targets) {
   if (autocast::should_cast({&logits}, DType::Float32)) return cross_entropy(cast(logits, DType::Float32), targets);
   require(logits.backend() == targets.backend(), "Cross entropy requires matching backends");
@@ -1869,21 +1880,21 @@ Tensor cross_entropy(const Tensor& logits, const Tensor& targets) {
 }
 Tensor conv2d(const Tensor& x, const Tensor& w, const Tensor& b, int stride,
               int padding) {
-  if (const auto target = autocast::dtype(); autocast::should_cast({&x, &w, &b}, target))
+  if (const DType target = autocast::dtype(); autocast::should_cast({&x, &w, &b}, target))
     return conv2d(cast(x, target), cast(w, target), autocast::cast_optional(b, target), stride, padding);
   if (is_complex(x.dtype()) || is_complex(w.dtype()) || (b.defined() && is_complex(b.dtype()))) {
     require(x.dtype() == w.dtype() && is_complex(x.dtype()) && (!b.defined() || b.dtype() == x.dtype()),
             "Complex convolution requires matching dtypes");
     if (x.shape().size() == 3) return squeeze(conv2d(unsqueeze(x, 0), w, b, stride, padding), 0);
-    const auto values = x.dtype() == DType::Complex32 ? cast(x, DType::Complex64) : x;
-    const auto weights = w.dtype() == DType::Complex32 ? cast(w, DType::Complex64) : w;
-    const auto xr = real(values), xi = imag(values), wr = real(weights), wi = imag(weights);
-    const auto bias = b.defined() ? cast(b, values.dtype()) : Tensor{};
-    const auto br = bias.defined() ? real(bias) : Tensor{};
-    const auto bi = bias.defined() ? imag(bias) : Tensor{};
-    const auto a = conv2d(xr, wr, br, stride, padding);
-    const auto c = conv2d(xi, wi, {}, stride, padding);
-    const auto d = conv2d(add(xr, xi), add(wr, wi), bias.defined() ? add(br, bi) : Tensor{}, stride, padding);
+    const Tensor values = x.dtype() == DType::Complex32 ? cast(x, DType::Complex64) : x;
+    const Tensor weights = w.dtype() == DType::Complex32 ? cast(w, DType::Complex64) : w;
+    const Tensor xr = real(values), xi = imag(values), wr = real(weights), wi = imag(weights);
+    const Tensor bias = b.defined() ? cast(b, values.dtype()) : Tensor{};
+    const Tensor br = bias.defined() ? real(bias) : Tensor{};
+    const Tensor bi = bias.defined() ? imag(bias) : Tensor{};
+    const Tensor a = conv2d(xr, wr, br, stride, padding);
+    const Tensor c = conv2d(xi, wi, {}, stride, padding);
+    const Tensor d = conv2d(add(xr, xi), add(wr, wi), bias.defined() ? add(br, bi) : Tensor{}, stride, padding);
     return cast(complex(sub(a, c), sub(sub(d, a), c)), x.dtype());
   }
   if ((x.dtype() == DType::Float64 || is_low_precision_float(x.dtype())) && x.shape().size() == 3)

@@ -149,7 +149,7 @@ struct Graph {
   }
 
   Tensor filled(const KernelParams& p, double value) const {
-    const auto dtype = DType(p.output_dtype());
+    const DType dtype = DType(p.output_dtype());
     return spread(number(value, is_low_precision_float(dtype) ? MPSDataTypeFloat32 : storage_type(dtype)),
                   shape(p));
   }

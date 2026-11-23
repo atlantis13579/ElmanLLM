@@ -1,4 +1,5 @@
 #include "kernel.h"
+#include "Core/LocalFunction.h"
 #include "row_reduction.h"
 #include "Operators/low_precision_attention.h"
 #include "Operators/low_attention_reduction.h"
@@ -34,8 +35,8 @@ void launch_low_attention_matrix_cpu(uint32_t* output, const uint32_t* a, const 
     const bool fused = int64_t(rows) * columns * shared >= 400;
     for (int i = 0; i < p.output_count(); ++i) {
         const int batch = i / (rows * columns), row = i / columns % rows, column = i % columns;
-        const auto* left = reinterpret_cast<const float*>(a) + batch * rows * shared;
-        const auto* right = reinterpret_cast<const float*>(b) + batch * shared * columns;
+        const float* left = reinterpret_cast<const float*>(a) + batch * rows * shared;
+        const float* right = reinterpret_cast<const float*>(b) + batch * shared * columns;
         // Use the AVX2 GEMM tile width and paired edge accumulators.
         // The one/two-row edges round each product before the pairwise sum.
         const int tail = rows % 6;
@@ -66,7 +67,7 @@ void launch_low_attention_sum_cpu(uint32_t* output, const uint32_t* input, const
     for (int row = 0; row < p.output_count(); ++row) {
         float value = 0;
         for (int outer = 0; r.block && outer < r.length / r.block; ++outer) {
-            auto read = [&](int j) { return reinterpret_cast<const float*>(input)[r.offset(row, outer * r.block + j)]; };
+            LocalFunction read{[&](int j) { return reinterpret_cast<const float*>(input)[r.offset(row, outer * r.block + j)]; }};
             float partial;
             if (r.fastest && r.block >= 8) partial = contiguous_float_sum(r.block, read);
             else {

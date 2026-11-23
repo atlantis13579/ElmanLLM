@@ -1,4 +1,5 @@
 #include "Inference/Importers/TorchScript.h"
+#include "Core/LocalFunction.h"
 
 #include <algorithm>
 #include <cctype>
@@ -34,17 +35,17 @@ std::vector<Line> lines(std::string_view source) {
     int balance = 0, indent = 0;
     std::string statement;
     while (!source.empty()) {
-        const auto newline = source.find('\n');
-        const auto line = source.substr(0, newline);
+        const size_t newline = source.find('\n');
+        const std::string_view line = source.substr(0, newline);
         source.remove_prefix(newline == source.npos ? source.size() : newline + 1);
-        const auto token = trim(line);
+        const std::string_view token = trim(line);
         if (token.empty() || token.front() == '#') continue;
         if (statement.empty()) indent = int(token.data() - line.data());
         char quote = 0;
         bool escaped = false;
         size_t length = 0;
         for (; length < token.size(); ++length) {
-            const auto c = token[length];
+            const char c = token[length];
             if (escaped) escaped = false;
             else if (quote) {
                 if (c == '\\') escaped = true;
@@ -72,16 +73,16 @@ struct Method {
 };
 
 std::vector<std::string> parameter_names(std::string_view header) {
-    const auto open = header.find('(');
+    const size_t open = header.find('(');
     require(open != header.npos, "Missing TorchScript function parameters");
     std::vector<std::string> names;
     size_t start = open + 1;
     int depth = 0;
     for (size_t i = start; i < header.size(); ++i) {
-        const auto c = header[i];
+        const char c = header[i];
         if (!depth && (c == ',' || c == ')')) {
-            const auto parameter = trim(header.substr(start, i - start));
-            const auto end = parameter.find_first_of(":=");
+            const std::string_view parameter = trim(header.substr(start, i - start));
+            const size_t end = parameter.find_first_of(":=");
             if (!parameter.empty()) names.emplace_back(trim(parameter.substr(0, end)));
             start = i + 1;
             if (c == ')') return names;
@@ -93,22 +94,24 @@ std::vector<std::string> parameter_names(std::string_view header) {
 
 std::map<std::string, Method> methods(const std::map<std::string, std::string>& sources) {
     std::map<std::string, Method> result;
-    for (const auto& [path, source] : sources) {
-        auto package = path.substr(0, path.size() - 3);
+    for (const std::pair<const std::string, std::string>& entry : sources) {
+        const std::string& path = entry.first;
+        const std::string& source = entry.second;
+        std::string package = path.substr(0, path.size() - 3);
         std::replace(package.begin(), package.end(), '/', '.');
-        const auto statements = lines(source);
+        const std::vector<Line> statements = lines(source);
         std::string type;
         for (size_t i = 0; i < statements.size();) {
-            const auto& statement = statements[i];
+            const Line& statement = statements[i];
             if (statement.code.rfind("class ", 0) == 0 && statement.indent == 0) {
-                const auto class_end = statement.code.find_first_of("(:", 6);
+                const size_t class_end = statement.code.find_first_of("(:", 6);
                 type = std::string(trim(std::string_view(statement.code).substr(6, class_end - 6)));
             }
             if (statement.code.rfind("def ", 0) != 0) { ++i; continue; }
-            const auto open = statement.code.find('(');
+            const size_t open = statement.code.find('(');
             require(open != std::string::npos, "Missing TorchScript function name");
-            const auto prefix = statement.indent == 0 ? package : package + '.' + type;
-            const auto name = prefix + '.' + std::string(trim(std::string_view(statement.code).substr(4, open - 4)));
+            const std::string prefix = statement.indent == 0 ? package : package + '.' + type;
+            const std::string name = prefix + '.' + std::string(trim(std::string_view(statement.code).substr(4, open - 4)));
             Method method{parameter_names(statement.code), {}};
             ++i;
             while (i < statements.size() && statements[i].indent > statement.indent) method.body.push_back(statements[i++]);
@@ -165,7 +168,7 @@ public:
         return invoke(archive_.module->text + ".forward", inputs, 0);
     }
     std::string current(const Value& value) const {
-        auto name = value.text;
+        std::string name = value.text;
         for (auto next = updated_.find(name); next != updated_.end(); next = updated_.find(name))
             name = next->second;
         return name;
@@ -187,7 +190,7 @@ public:
         require(object.kind == Kind::Symbol, "Unsupported TorchScript member access");
         if (object.text == "CONSTANTS" && name.size() > 1 && name[0] == 'c') {
             size_t index = 0;
-            const auto parsed = std::from_chars(name.data() + 1, name.data() + name.size(), index);
+            const std::from_chars_result parsed = std::from_chars(name.data() + 1, name.data() + name.size(), index);
             require(parsed.ec == std::errc{} && parsed.ptr == name.data() + name.size() &&
                     index < archive_.constants->sequence.size(), "Invalid TorchScript constant reference");
             return stored(*archive_.constants->sequence[index]);
@@ -208,10 +211,10 @@ public:
 
     Value binary(const std::string& op, const Value& a, const Value& b) {
         if (a.kind == Kind::Tensor || b.kind == Kind::Tensor) {
-            const auto operation = op == "Div" ? "TrueDivide" : op;
+            const std::string operation = op == "Div" ? "TrueDivide" : op;
             if (a.kind == Kind::Tensor && b.kind == Kind::Tensor) return emit(operation, {a, b});
             const bool reverse = a.kind != Kind::Tensor;
-            const auto& literal = reverse ? a : b;
+            const Value& literal = reverse ? a : b;
             Json::Object attrs{{"op", operation}, {"reverse", reverse}};
             if (literal.kind == Kind::Integer || literal.kind == Kind::Boolean) {
                 attrs.emplace("integer", std::to_string(literal.integer));
@@ -219,14 +222,14 @@ public:
             } else attrs.emplace("value", numeric(literal));
             return emit("ScalarBinary", {reverse ? b : a}, std::move(attrs));
         }
-        const auto x = numeric(a), y = numeric(b);
+        const double x = numeric(a), y = numeric(b);
         if (op == "Eq") return boolean(x == y);
         if (op == "Ne") return boolean(x != y);
         if (op == "Gt") return boolean(x > y);
         if (op == "Ge") return boolean(x >= y);
         if (op == "Lt") return boolean(x < y);
         if (op == "Le") return boolean(x <= y);
-        const auto result = op == "Add" ? x + y : op == "Sub" ? x - y : op == "Mul" ? x * y : x / y;
+        const double result = op == "Add" ? x + y : op == "Sub" ? x - y : op == "Mul" ? x * y : x / y;
         if (a.kind == Kind::Integer && b.kind == Kind::Integer && op != "Div") {
             require(result >= -0x1p63 && result < 0x1p63, "TorchScript integer arithmetic overflow");
             return integer(int64_t(result));
@@ -256,7 +259,7 @@ private:
             case Storage::Object: return module(value);
             case Storage::List: {
                 Value result{Kind::Sequence};
-                for (const auto& item : value.sequence) result.elements.push_back(stored(*item));
+                for (const std::shared_ptr<const io::TorchScriptValue>& item : value.sequence) result.elements.push_back(stored(*item));
                 return result;
             }
             case Storage::Tensor: {
@@ -270,15 +273,15 @@ private:
 
     Value emit(std::string op, const std::vector<Value>& args, Json::Object attrs = {}) {
         std::vector<std::string> operands;
-        for (const auto& value : args) {
+        for (const Value& value : args) {
             require(value.kind == Kind::Tensor || value.kind == Kind::None, "TorchScript operation requires tensor operands: " + op);
             operands.push_back(current(value));
         }
         static const std::set<std::string> views{
             "Reshape", "Transpose", "SwapAxes", "ExpandDims", "Squeeze", "FlattenRange", "TensorIndex",
         };
-        const auto alias = views.count(op) != 0;
-        auto output = graph_.operation(std::move(op), operands, std::move(attrs));
+        const bool alias = views.count(op) != 0;
+        std::string output = graph_.operation(std::move(op), operands, std::move(attrs));
         if (alias) {
             view_values_.insert(operands.front());
             view_values_.insert(output);
@@ -287,7 +290,7 @@ private:
     }
 
     Value functionalize(const Value& value, const Value& replacement) {
-        const auto previous = current(value);
+        const std::string previous = current(value);
         require(value.kind == Kind::Tensor && replacement.kind == Kind::Tensor &&
                 !graph_.constant_value(previous) && !view_values_.count(previous),
                 "Unsupported TorchScript mutation of a constant or tensor view");
@@ -300,7 +303,7 @@ private:
         require(dimensions.kind == Kind::Sequence, "TorchScript reshape requires dimensions");
         std::vector<Value> runtime;
         Json::Array shape;
-        for (const auto& dim : dimensions.elements) {
+        for (const Value& dim : dimensions.elements) {
             if (dim.kind == Kind::Tensor) {
                 runtime.push_back(emit("Cast", {dim}, {{"to", dtype_name(DType::Int64)}}));
                 continue;
@@ -328,7 +331,7 @@ public:
     Expression(Compiler& compiler, const Scope& scope, std::string_view text, size_t depth)
         : compiler_(compiler), scope_(scope), text_(text), depth_(depth) {}
     Value parse() {
-        auto result = expression();
+        Value result = expression();
         require(trim(text_).empty(), "Unsupported TorchScript expression syntax near " + std::string(text_));
         return result;
     }
@@ -355,15 +358,15 @@ private:
     Value expression(int minimum = 0) {
         require(depth_ + nesting_ < 128, "TorchScript expression nesting exceeds the importer limit");
         ++nesting_;
-        auto left = primary();
+        Value left = primary();
         struct Binary { std::string_view code; const char* op; int precedence; };
         static const Binary tokens[]{
             {"==", "Eq", 1}, {"!=", "Ne", 1}, {">=", "Ge", 1}, {"<=", "Le", 1},
             {">", "Gt", 1}, {"<", "Lt", 1}, {"+", "Add", 2}, {"-", "Sub", 2}, {"*", "Mul", 3}, {"/", "Div", 3}
         };
         while (true) {
-            const auto op = std::find_if(std::begin(tokens), std::end(tokens),
-                             [&](const auto& token) { return token.precedence >= minimum && take(token.code); });
+            const Binary* const op = std::find_if(std::begin(tokens), std::end(tokens),
+                             [&](const Binary& token) { return token.precedence >= minimum && take(token.code); });
             if (op == std::end(tokens)) break;
             left = compiler_.binary(op->op, left, expression(op->precedence + 1));
         }
@@ -371,11 +374,11 @@ private:
         return left;
     }
     Value quoted() {
-        const auto quote = text_.front();
+        const char quote = text_.front();
         text_.remove_prefix(1);
         std::string value;
         while (!text_.empty()) {
-            auto ch = text_.front();
+            char ch = text_.front();
             text_.remove_prefix(1);
             if (ch == quote) return {Kind::String, std::move(value)};
             if (ch == '\\') {
@@ -393,7 +396,7 @@ private:
     }
     Value scalar() {
         size_t at = 0;
-        auto digits = [&] { while (at < text_.size() && std::isdigit(static_cast<unsigned char>(text_[at]))) ++at; };
+        LocalFunction digits{[&] { while (at < text_.size() && std::isdigit(static_cast<unsigned char>(text_[at]))) ++at; }};
         digits();
         bool floating = false;
         if (at < text_.size() && text_[at] == '.') { ++at; digits(); floating = true; }
@@ -403,7 +406,7 @@ private:
             digits();
             floating = true;
         }
-        const auto token = text_.substr(0, at);
+        const std::string_view token = text_.substr(0, at);
         text_.remove_prefix(at);
         if (floating) {
             std::istringstream in{std::string(token)};
@@ -414,7 +417,7 @@ private:
             return number(value);
         }
         int64_t value = 0;
-        const auto parsed = std::from_chars(token.data(), token.data() + token.size(), value);
+        const std::from_chars_result parsed = std::from_chars(token.data(), token.data() + token.size(), value);
         require(parsed.ec == std::errc{} && parsed.ptr == token.data() + token.size(), "Invalid TorchScript integer literal");
         return integer(value);
     }
@@ -429,7 +432,7 @@ private:
         if (take("{")) {
             Value result{Kind::Mapping};
             while (!take("}")) {
-                auto key = expression();
+                Value key = expression();
                 expect(":");
                 require(key.kind == Kind::String && result.fields.emplace(key.text, expression()).second,
                         "TorchScript graph output dictionaries require distinct string keys");
@@ -439,14 +442,14 @@ private:
         }
         if (text_.front() == '"' || text_.front() == '\'') return quoted();
         if (std::isdigit(static_cast<unsigned char>(text_.front()))) return scalar();
-        const auto name = identifier();
+        const std::string name = identifier();
         if (name == "None") return {};
         if (name == "True" || name == "False") return boolean(name == "True");
         const auto found = scope_.find(name);
         return found == scope_.end() ? Value{Kind::Symbol, name} : found->second;
     }
     Value sequence(bool tuple) {
-        const auto close = tuple ? ")"sv : "]"sv;
+        const std::string_view close = tuple ? ")"sv : "]"sv;
         Value result{Kind::Sequence};
         if (take(close)) return result;
         result.elements.push_back(expression());
@@ -461,16 +464,16 @@ private:
     Value primary() {
         text_ = trim(text_);
         last_delimiter_ = text_.empty() ? 0 : text_.front();
-        auto left = atom();
+        Value left = atom();
         while (true) {
             if (take(".")) left = compiler_.member(left, identifier());
             else if (take("(")) {
                 std::vector<Value> args;
                 Scope keywords;
                 while (!take(")")) {
-                    const auto saved = text_;
-                    const auto name_end = text_.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_");
-                    auto name = name_end != text_.npos ? trim(text_.substr(0, name_end)) : ""sv;
+                    const std::string_view saved = text_;
+                    const size_t name_end = text_.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_");
+                    std::string_view name = name_end != text_.npos ? trim(text_.substr(0, name_end)) : ""sv;
                     if (!name.empty()) text_.remove_prefix(name.size());
                     if (!name.empty() && trim(text_).substr(0, 2) != "==" && take("="))
                         require(keywords.emplace(std::string(name), expression()).second, "Duplicate TorchScript keyword argument");
@@ -482,10 +485,10 @@ private:
                 }
                 left = compiler_.call(std::move(left), std::move(args), keywords, depth_);
             } else if (take("[")) {
-                const auto index = expression();
+                const Value index = expression();
                 expect("]");
                 if (left.kind == Kind::Sequence) {
-                    auto at = integer_argument(index);
+                    int at = integer_argument(index);
                     if (at < 0) at += int(left.elements.size());
                     left = Value(left.elements.at(at));
                 } else if (left.kind == Kind::Mapping && index.kind == Kind::String) {
@@ -507,23 +510,23 @@ private:
 
 std::optional<Value> Compiler::block(const Method& source, Scope& scope, size_t& position, size_t end, int indent, size_t depth) {
     require(depth < 128, "TorchScript block nesting exceeds the importer limit");
-    auto parse = [&](std::string_view text) { return Expression(*this, scope, text, depth).parse(); };
+    LocalFunction parse{[&](std::string_view text) { return Expression(*this, scope, text, depth).parse(); }};
     while (position < end) {
-        const auto& line = source.body[position++];
+        const Line& line = source.body[position++];
         require(line.indent == indent, "Unexpected TorchScript block indentation");
         const std::string_view code = line.code;
         if (code == "pass") continue;
         if (code == "return") return Value{};
         if (code.substr(0, 7) == "return ") return parse(code.substr(7));
         if (code.substr(0, 3) == "if " && code.back() == ':') {
-            const auto condition = parse(code.substr(3, code.size() - 4));
+            const Value condition = parse(code.substr(3, code.size() - 4));
             require(position < end && source.body[position].indent > indent, "Empty TorchScript conditional branch");
-            const auto child_indent = source.body[position].indent;
-            auto bound = position;
+            const int child_indent = source.body[position].indent;
+            size_t bound = position;
             while (bound < end && source.body[bound].indent > indent) ++bound;
             const bool runtime_check = condition.kind == Kind::Tensor;
             if (runtime_check) {
-                const auto& last = source.body[bound - 1].code;
+                const std::string& last = source.body[bound - 1].code;
                 require(last.rfind("ops.prim.RaiseException(", 0) == 0 &&
                         (bound == position + 1 || (bound == position + 2 &&
                          source.body[position].code.find(" = torch.format(") != std::string::npos)),
@@ -531,22 +534,22 @@ std::optional<Value> Compiler::block(const Method& source, Scope& scope, size_t&
                 emit("AssertFalse", {condition});
             }
             const bool selected = runtime_check ? false : truth(condition);
-            if (selected) if (auto result = block(source, scope, position, bound, child_indent, depth + 1)) return result;
+            if (selected) if (std::optional<Value> result = block(source, scope, position, bound, child_indent, depth + 1)) return result;
             position = bound;
             if (position < end && source.body[position].indent == indent && source.body[position].code == "else:") {
-                const auto first = ++position;
+                const size_t first = ++position;
                 require(first < end && source.body[first].indent > indent, "Empty TorchScript else branch");
                 bound = first;
                 while (bound < end && source.body[bound].indent > indent) ++bound;
-                if (!selected) if (auto result = block(source, scope, position, bound, source.body[first].indent, depth + 1)) return result;
+                if (!selected) if (std::optional<Value> result = block(source, scope, position, bound, source.body[first].indent, depth + 1)) return result;
                 position = bound;
             }
             continue;
         }
-        const auto equal = code.find(" = ");
+        const size_t equal = code.find(" = ");
         require(equal != code.npos, "Unsupported TorchScript statement " + std::string(code));
-        const auto target = trim(code.substr(0, equal));
-        const auto name = trim(target.substr(0, target.find(':')));
+        const std::string_view target = trim(code.substr(0, equal));
+        const std::string_view name = trim(target.substr(0, target.find(':')));
         require(!name.empty() && name.find_first_not_of("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_") == name.npos,
                 "Unsupported TorchScript assignment target " + std::string(name));
         scope[std::string(name)] = parse(code.substr(equal + 3));
@@ -556,12 +559,12 @@ std::optional<Value> Compiler::block(const Method& source, Scope& scope, size_t&
 
 Value Compiler::invoke(const std::string& key, const std::vector<Value>& args, size_t depth) {
     require(depth < 128, "TorchScript recursive call exceeds the importer limit");
-    const auto& source = method(key);
+    const Method& source = method(key);
     require(args.size() == source.parameters.size(), "Wrong TorchScript argument count for " + key);
     Scope scope;
     for (size_t i = 0; i < args.size(); ++i) scope.emplace(source.parameters[i], args[i]);
     size_t position = 0;
-    const auto result = block(source, scope, position, source.body.size(), source.body.front().indent, depth);
+    const std::optional<Value> result = block(source, scope, position, source.body.size(), source.body.front().indent, depth);
     require(result.has_value(), "TorchScript method has no supported return " + key);
     return *result;
 }
@@ -573,31 +576,31 @@ Value Compiler::builtin(const std::string& name, const std::vector<Value>& args,
     }
     if (name == "annotate" || name == "unchecked_cast") return args.at(1);
     if (name == "ops.prim.RaiseException") {
-        const auto message = args.at(0);
+        const Value message = args.at(0);
         throw std::invalid_argument(message.kind == Kind::String ? message.text : "TorchScript raised an exception");
     }
     if (name == "bool") return boolean(truth(args.at(0)));
-    auto operation = name.rfind("torch.", 0) == 0 ? name.substr(6) : name;
+    std::string operation = name.rfind("torch.", 0) == 0 ? name.substr(6) : name;
     static const std::set<std::string> mutations{"relu_", "add_", "sub_", "mul_", "div_"};
     const bool inplace = mutations.count(operation) != 0;
     if (inplace) operation.pop_back();
-    auto option = [&](const char* key, size_t position, Value fallback) {
+    LocalFunction option{[&](const char* key, size_t position, Value fallback) {
         const auto it = keywords.find(key);
         if (it != keywords.end()) return it->second;
         return position < args.size() ? args[position] : fallback;
-    };
+    }};
     static const std::map<std::string, std::string> binaries{
         {"add", "Add"}, {"sub", "Sub"}, {"mul", "Mul"}, {"div", "Div"}, {"true_divide", "Div"},
         {"eq", "Eq"}, {"ne", "Ne"}, {"gt", "Gt"}, {"ge", "Ge"}, {"lt", "Lt"}, {"le", "Le"},
     };
     if (const auto it = binaries.find(operation); it != binaries.end()) {
-        auto rhs = args.at(1);
-        const auto alpha = option("alpha", 2, integer(1));
+        Value rhs = args.at(1);
+        const Value alpha = option("alpha", 2, integer(1));
         if (numeric(alpha) != 1) {
             require(operation == "add" || operation == "sub", "Unsupported TorchScript scalar option");
             rhs = binary("Mul", rhs, alpha);
         }
-        const auto result = binary(it->second, args.at(0), rhs);
+        const Value result = binary(it->second, args.at(0), rhs);
         return inplace ? functionalize(args[0], result) : result;
     }
     static const std::map<std::string, std::string> unary{
@@ -605,7 +608,7 @@ Value Compiler::builtin(const std::string& name, const std::vector<Value>& args,
         {"abs", "Abs"}, {"neg", "Neg"}, {"exp", "Exp"}, {"log", "Log"}, {"sqrt", "Sqrt"}, {"square", "Square"},
     };
     if (const auto it = unary.find(operation); it != unary.end()) {
-        const auto result = emit(it->second, {args.at(0)});
+        const Value result = emit(it->second, {args.at(0)});
         return inplace ? functionalize(args[0], result) : result;
     }
     if (operation == "__is__" || operation == "__isnot__") {
@@ -622,7 +625,7 @@ Value Compiler::builtin(const std::string& name, const std::vector<Value>& args,
                     {{"axis", integer_argument(option("dim", 1, integer(-1)))}});
     }
     if (operation == "gelu") {
-        const auto approximate = option("approximate", 1, {Kind::String, "none"});
+        const Value approximate = option("approximate", 1, {Kind::String, "none"});
         require(approximate.kind == Kind::String && (approximate.text == "none" || approximate.text == "tanh"),
                 "Unsupported TorchScript GELU mode");
         return emit(approximate.text == "none" ? "ExactGelu" : "Gelu", {args.at(0)});
@@ -644,18 +647,18 @@ Value Compiler::builtin(const std::string& name, const std::vector<Value>& args,
         return args.at(0);
     }
     if (operation == "permute" || operation == "transpose" || operation == "t") {
-        const auto permutation = args.size() > 1 ? args[1] : Value{};
+        const Value permutation = args.size() > 1 ? args[1] : Value{};
         if (operation == "permute") {
             require(permutation.kind == Kind::Sequence, "Invalid TorchScript permutation");
             Json::Array axes;
-            for (const auto& dim : permutation.elements) axes.emplace_back(integer_argument(dim));
+            for (const Value& dim : permutation.elements) axes.emplace_back(integer_argument(dim));
             return emit("Transpose", {args[0]}, {{"perm", std::move(axes)}});
         }
         return emit("SwapAxes", {args.at(0)}, {{"a", operation == "t" ? 0 : integer_argument(args.at(1))},
                                              {"b", operation == "t" ? 1 : integer_argument(args.at(2))}});
     }
     if (operation == "unsqueeze" || operation == "squeeze") {
-        const auto dim = option("dim", 1, {});
+        const Value dim = option("dim", 1, {});
         if (operation == "unsqueeze") return emit("ExpandDims", {args.at(0)}, {{"axis", integer_argument(dim)}});
         return emit("Squeeze", {args.at(0)}, {{"strict", false},
                     {"axes", dim.kind == Kind::None ? Json::Array{} : Json::Array{integer_argument(dim)}}});
@@ -666,29 +669,29 @@ Value Compiler::builtin(const std::string& name, const std::vector<Value>& args,
                     {{"axis", integer_argument(option("dim", 1, integer(0)))}});
     }
     if (operation == "adaptive_avg_pool2d") {
-        const auto& shape = args.at(1);
+        const Value& shape = args.at(1);
         require(shape.kind == Kind::Sequence && shape.elements.size() == 2, "Invalid TorchScript adaptive pooling output size");
         return emit("AdaptiveAvgPool2d", {args.at(0)}, {{"height", integer_argument(shape.elements[0])},
                                                         {"width", integer_argument(shape.elements[1])}});
     }
     if (operation == "_convolution" || operation == "conv2d" || operation == "max_pool2d" || operation == "avg_pool2d") {
-        auto list = [&](size_t at, std::vector<int> fallback) {
+        LocalFunction list{[&](size_t at, std::vector<int> fallback) {
             if (at >= args.size() || args[at].kind == Kind::None) return fallback;
             require(args[at].kind == Kind::Sequence, "TorchScript spatial operation requires an integer list");
             std::vector<int> values;
-            for (const auto& item : args[at].elements) values.push_back(integer_argument(item));
+            for (const Value& item : args[at].elements) values.push_back(integer_argument(item));
             return values.empty() ? fallback : values;
-        };
+        }};
         const bool conv = operation == "_convolution" || operation == "conv2d";
-        const auto kernel = conv ? std::vector<int>{1, 1} : list(1, {});
-        const auto step = list(conv ? 3 : 2, kernel), padding = list(conv ? 4 : 3, {0, 0});
+        const std::vector<int> kernel = conv ? std::vector<int>{1, 1} : list(1, {});
+        const std::vector<int> step = list(conv ? 3 : 2, kernel), padding = list(conv ? 4 : 3, {0, 0});
         require(step.size() == 2 && padding.size() == 2, "Invalid TorchScript spatial geometry");
         Json::Object attrs{{"strides", Json::Array(step.begin(), step.end())},
                            {"pads", Json::Array{padding[0], padding[1], padding[0], padding[1]}}};
         if (conv) {
             const int group = integer_argument(option("groups", operation == "_convolution" ? 8 : 6, integer(1)));
             if (operation == "_convolution") require(!truth(args.at(6)), "TorchScript transposed convolution is unsupported");
-            const auto dilation = list(5, {1, 1});
+            const std::vector<int> dilation = list(5, {1, 1});
             attrs.emplace("group", group);
             attrs.emplace("dilations", Json::Array(dilation.begin(), dilation.end()));
             return emit("Conv", {args.at(0), args.at(1), option("bias", 2, {})}, std::move(attrs));
@@ -697,7 +700,7 @@ Value Compiler::builtin(const std::string& name, const std::vector<Value>& args,
         attrs.emplace("kernel_shape", Json::Array(kernel.begin(), kernel.end()));
         attrs.emplace("ceil_mode", int(truth(option("ceil_mode", maximum ? 5 : 4, boolean(false)))));
         if (maximum) {
-            const auto dilation = list(4, {1, 1});
+            const std::vector<int> dilation = list(4, {1, 1});
             attrs.emplace("dilations", Json::Array(dilation.begin(), dilation.end()));
         } else {
             require(option("divisor_override", 6, {}).kind == Kind::None, "Unsupported TorchScript pool divisor override");
@@ -720,18 +723,22 @@ InferenceSession load_torchscript_session(const std::filesystem::path& path, Bac
     const io::TorchScriptArchive archive(path, backend);
     GraphBuilder graph(backend, device);
     Compiler compiler(graph, archive);
-    const auto& parameters = compiler.forward().parameters;
+    const std::vector<std::string>& parameters = compiler.forward().parameters;
     require(parameters.size() > 1, "TorchScript forward must have at least one tensor input");
     const TensorSpec dynamic{DType::Float32, {}, true, true};
     std::vector<Value> inputs;
     for (size_t i = 1; i < parameters.size(); ++i) inputs.push_back({Kind::Tensor, graph.input(parameters[i], dynamic)});
-    const auto result = compiler.run(std::move(inputs));
-    auto add = [&](const std::string& name, const Value& tensor) {
+    const Value result = compiler.run(std::move(inputs));
+    LocalFunction add{[&](const std::string& name, const Value& tensor) {
         require(tensor.kind == Kind::Tensor, "TorchScript graph outputs must be tensors");
         graph.output(name, compiler.current(tensor), dynamic);
-    };
+    }};
     if (result.kind == Kind::Mapping) {
-        for (const auto& [name, value] : result.fields) add(name, value);
+        for (const std::pair<const std::string, Value>& entry : result.fields) {
+            const std::string& name = entry.first;
+            const Value& value = entry.second;
+            add(name, value);
+        }
     } else if (result.kind == Kind::Sequence) {
         for (size_t i = 0; i < result.elements.size(); ++i) add("output_" + std::to_string(i), result.elements[i]);
     } else add("output", result);

@@ -89,11 +89,11 @@ void launch_low_precision_reduction_cuda(LowPrecisionReduction op, uint32_t* out
     if (!count) return;
     if (op == LowPrecisionReduction::Cumsum || op == LowPrecisionReduction::ReverseCumsum) {
         // Retain the established FP32 scan order and stream-owned scratch lifetime.
-        auto input = backend_workspace(Backend::CUDA, size_t(count) * sizeof(float));
-        auto result = backend_workspace(Backend::CUDA, size_t(count) * sizeof(float));
-        auto* decoded = static_cast<uint32_t*>(input->raw_pointer());
-        auto* scanned = static_cast<uint32_t*>(result->raw_pointer());
-        auto params = p;
+        BufferPtr input = backend_workspace(Backend::CUDA, size_t(count) * sizeof(float));
+        BufferPtr result = backend_workspace(Backend::CUDA, size_t(count) * sizeof(float));
+        uint32_t* decoded = static_cast<uint32_t*>(input->raw_pointer());
+        uint32_t* scanned = static_cast<uint32_t*>(result->raw_pointer());
+        KernelParams params = p;
         params.v[KernelParams::kOutputDTypeSlot] = int(DType::Float32);
         launch_low_precision_cast_cuda(decoded, a, params);
         params.v[KernelParams::input_dtype_slot(KernelInput::A)] = int(DType::Float32);
@@ -104,7 +104,7 @@ void launch_low_precision_reduction_cuda(LowPrecisionReduction op, uint32_t* out
         return;
     }
     const int units = p.output_dtype() == int(DType::Float4E2M1FN) ? int((unsigned(count) + 1u) / 2u) : count;
-    const auto order = op == LowPrecisionReduction::Amax || op == LowPrecisionReduction::Amin ? low_reduction_order(p) : LowReductionOrder{1, 1, false, false};
+    const LowReductionOrder order = op == LowPrecisionReduction::Amax || op == LowPrecisionReduction::Amin ? low_reduction_order(p) : LowReductionOrder{1, 1, false, false};
     low_precision_reduction_kernel<<<(unsigned(units) + 255u) / 256u, 256, 0, current_cuda_stream()>>>(op, out, a, b, c, p, units, order);
 }
 } // namespace elman

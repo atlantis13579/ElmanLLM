@@ -23,7 +23,7 @@ DecoderPlacement::DecoderPlacement(Backend backend, int layers, std::vector<int>
     stage_count_ = simulated_ ? simulated_devices : int(ordinals_.size());
     if (ordinals_.size() > size_t(layers)) throw std::invalid_argument("More devices than decoder layers");
     std::set<int> unique;
-    auto available = devices(backend);
+    std::vector<DeviceInfo> available = devices(backend);
     for (int ordinal : ordinals_) {
         if (!unique.insert(ordinal).second) throw std::invalid_argument("Duplicate decoder device ordinal");
         if (std::none_of(available.begin(), available.end(), [&](const DeviceInfo& device) { return device.ordinal == ordinal; }))
@@ -69,14 +69,14 @@ Tensor DecoderPlacement::transfer_to_layer(const Tensor& hidden, int layer) cons
         ++activation_transfers_;
         // A real copy prevents the simulated stages from sharing the activation
         // allocation and exercises the same cross-queue read/write dependencies.
-        auto copy = Tensor::zeros(hidden.shape(), backend_, false, hidden.dtype());
+        Tensor copy = Tensor::zeros(hidden.shape(), backend_, false, hidden.dtype());
         copy_device_storage(copy.node()->value, hidden.node()->value);
         return copy;
     }
     return hidden;
 }
 void DecoderPlacement::synchronize() const {
-    for (const auto& stream : streams_) stream->synchronize();
+    for (const std::unique_ptr<ExecutionStream>& stream : streams_) stream->synchronize();
 }
 const Tensor& DeviceTensorCopies::get(int ordinal) {
     if (!source_.defined() || source_.device() == ordinal) return source_;

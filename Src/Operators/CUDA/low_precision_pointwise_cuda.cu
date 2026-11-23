@@ -5,7 +5,7 @@ namespace elman {
 __global__ void kernel_low_precision_pointwise_cuda(LowPrecisionPointwise op, uint32_t* output, const uint32_t* a,
                                                    const uint32_t* b, const uint32_t* c, KernelParams p) {
     const unsigned index = blockIdx.x * blockDim.x + threadIdx.x;
-    auto* bytes = reinterpret_cast<uint8_t*>(output);
+    uint8_t* bytes = reinterpret_cast<uint8_t*>(output);
     if (p.output_dtype() == int(DType::Float4E2M1FN)) {
         if (index >= (unsigned(p.output_count()) + 1) / 2) return;
         const uint8_t low = low_precision_pointwise_result(op, int(index * 2), a, b, c, p);

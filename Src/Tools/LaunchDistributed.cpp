@@ -76,15 +76,15 @@ Options parse(const Arguments& arguments) {
     for (size_t i = 0; i < arguments.size(); ++i) {
         const std::string_view argument = arguments[i];
         if (argument == "--" || argument.rfind("--", 0) != 0) {
-            const auto first = i + (argument == "--" ? 1 : 0);
+            const size_t first = i + (argument == "--" ? 1 : 0);
             options.command.assign(arguments.begin() + first, arguments.end());
             break;
         }
-        const auto equals = argument.find('=');
-        const auto key = argument.substr(0, equals);
+        const size_t equals = argument.find('=');
+        const std::string_view key = argument.substr(0, equals);
         if (equals == std::string_view::npos && ++i == arguments.size())
             throw std::invalid_argument("Missing value for " + std::string(key));
-        const auto value = equals == std::string_view::npos ? std::string_view(arguments[i]) : argument.substr(equals + 1);
+        const std::string_view value = equals == std::string_view::npos ? std::string_view(arguments[i]) : argument.substr(equals + 1);
         if (key == "--processes") options.processes = integer_argument(value, key);
         else if (key == "--master-address") options.address = value;
         else if (key == "--master-port") options.port = integer_argument(value, key);
@@ -98,10 +98,10 @@ Options parse(const Arguments& arguments) {
     if (options.processes <= 0 || options.command.empty() || options.command.front().empty() || options.port <= 0 ||
         options.port > 65535 || options.timeout <= 0 || options.timeout > 3600)
         throw std::invalid_argument("Provide a positive process count, executable, port in 1-65535 and timeout in 1-3600 seconds");
-    const auto octets = parse_list(options.address, '.', "--master-address");
+    const std::vector<int> octets = parse_list(options.address, '.', "--master-address");
     if (octets.size() != 4 || std::any_of(octets.begin(), octets.end(), [](int n) { return n < 0 || n > 255; }))
         throw std::invalid_argument("Master address must be IPv4");
-    const auto address = std::to_string(octets[0]) + '.' + std::to_string(octets[1]) + '.' +
+    const std::string address = std::to_string(octets[0]) + '.' + std::to_string(octets[1]) + '.' +
                          std::to_string(octets[2]) + '.' + std::to_string(octets[3]);
     if (options.address != address) throw std::invalid_argument("Master address must use canonical dotted IPv4 notation");
     if (!options.explicit_threads) options.cpu_threads = std::clamp(available_cpus() / options.processes, 1, 256);
@@ -138,7 +138,7 @@ std::wstring widen(const std::string& text) {
 std::wstring quote(const std::wstring& value) {
     std::wstring result = L"\"";
     size_t slashes = 0;
-    for (const auto ch : value) {
+    for (const wchar_t ch : value) {
         if (ch == L'\\') {
             ++slashes;
             continue;
@@ -164,18 +164,22 @@ std::wstring environment_block(const Environment& updates, bool explicit_threads
     } original;
     if (!original.data) throw std::runtime_error("Cannot read Windows environment");
     std::map<std::wstring, std::wstring, EnvironmentOrder> values;
-    for (const auto* entry = original.data; *entry;) {
+    for (const wchar_t* entry = original.data; *entry;) {
         const std::wstring text(entry);
-        const auto equals = text.find(L'=', 1);
+        const size_t equals = text.find(L'=', 1);
         if (equals != std::wstring::npos) values[text.substr(0, equals)] = text.substr(equals + 1);
         entry += text.size() + 1;
     }
-    for (const auto& [key, value] : updates) {
-        const auto name = widen(key);
+    for (const std::pair<const std::string, std::string>& entry : updates) {
+        const std::string& key = entry.first;
+        const std::string& value = entry.second;
+        const std::wstring name = widen(key);
         if (key != "ELMAN_CPU_THREADS" || explicit_threads || !values.count(name)) values[name] = widen(value);
     }
     std::wstring block;
-    for (const auto& [name, value] : values) {
+    for (const std::pair<const std::wstring, std::wstring>& entry : values) {
+        const std::wstring& name = entry.first;
+        const std::wstring& value = entry.second;
         block += name + L'=' + value;
         block += L'\0';
     }
@@ -187,11 +191,11 @@ using Process = HANDLE;
 constexpr Process invalid_process = nullptr;
 Process spawn(const Arguments& arguments, const Environment& updates, bool explicit_threads) {
     std::wstring command;
-    for (const auto& argument : arguments) {
+    for (const std::string& argument : arguments) {
         if (!command.empty()) command += L' ';
         command += quote(widen(argument));
     }
-    auto environment = environment_block(updates, explicit_threads);
+    std::wstring environment = environment_block(updates, explicit_threads);
     STARTUPINFOW startup{};
     startup.cb = sizeof(startup);
     startup.dwFlags = STARTF_USESTDHANDLES;
@@ -207,7 +211,7 @@ Process spawn(const Arguments& arguments, const Environment& updates, bool expli
 }
 
 bool poll(Process& process, int& status) {
-    const auto result = WaitForSingleObject(process, 0);
+    const DWORD result = WaitForSingleObject(process, 0);
     if (result == WAIT_TIMEOUT) return false;
     DWORD code = 0;
     if (result != WAIT_OBJECT_0 || !GetExitCodeProcess(process, &code))
@@ -219,8 +223,8 @@ bool poll(Process& process, int& status) {
 }
 
 void stop(std::vector<Process>& workers) noexcept {
-    for (auto process : workers) if (process) TerminateProcess(process, 1);
-    for (auto process : workers) if (process) {
+    for (Process process : workers) if (process) TerminateProcess(process, 1);
+    for (Process process : workers) if (process) {
         WaitForSingleObject(process, 3000);
         CloseHandle(process);
     }
@@ -233,7 +237,7 @@ bool was_interrupted() { return interrupted != 0; }
 std::vector<char*> pointers(Arguments& items) {
     std::vector<char*> result;
     result.reserve(items.size() + 1);
-    for (auto& item : items) result.push_back(item.data());
+    for (std::string& item : items) result.push_back(item.data());
     result.push_back(nullptr);
     return result;
 }
@@ -244,14 +248,21 @@ Process spawn(Arguments arguments, const Environment& updates, bool explicit_thr
     Environment values;
     for (char** entry = environ; *entry; ++entry) {
         const std::string text(*entry);
-        const auto equals = text.find('=');
+        const size_t equals = text.find('=');
         if (equals != std::string::npos) values[text.substr(0, equals)] = text.substr(equals + 1);
     }
-    for (const auto& [key, value] : updates)
+    for (const std::pair<const std::string, std::string>& entry : updates) {
+        const std::string& key = entry.first;
+        const std::string& value = entry.second;
         if (key != "ELMAN_CPU_THREADS" || explicit_threads || !values.count(key)) values[key] = value;
+    }
     Arguments environment;
-    for (const auto& [key, value] : values) environment.push_back(key + '=' + value);
-    auto argv = pointers(arguments), envp = pointers(environment);
+    for (const std::pair<const std::string, std::string>& entry : values) {
+        const std::string& key = entry.first;
+        const std::string& value = entry.second;
+        environment.push_back(key + '=' + value);
+    }
+    std::vector<char*> argv = pointers(arguments), envp = pointers(environment);
     Process child;
     const int error = posix_spawnp(&child, argv[0], nullptr, nullptr, argv.data(), envp.data());
     if (error) throw std::system_error(error, std::generic_category(), "Cannot start " + arguments.front());
@@ -260,7 +271,7 @@ Process spawn(Arguments arguments, const Environment& updates, bool explicit_thr
 
 bool poll(Process& process, int& status) {
     int raw = 0;
-    const auto child = waitpid(process, &raw, WNOHANG);
+    const pid_t child = waitpid(process, &raw, WNOHANG);
     if (child == 0 || (child < 0 && errno == EINTR)) return false;
     if (child < 0) throw std::system_error(errno, std::generic_category(), "Cannot wait for worker");
     process = invalid_process;
@@ -269,20 +280,20 @@ bool poll(Process& process, int& status) {
 }
 
 void stop(std::vector<Process>& workers) noexcept {
-    for (auto process : workers) if (process) kill(process, SIGTERM);
-    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    for (Process process : workers) if (process) kill(process, SIGTERM);
+    const std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
     while (std::chrono::steady_clock::now() < deadline) {
         bool pending = false;
-        for (auto& process : workers) if (process) {
-            const auto result = waitpid(process, nullptr, WNOHANG);
+        for (Process& process : workers) if (process) {
+            const pid_t result = waitpid(process, nullptr, WNOHANG);
             if (result > 0 || (result < 0 && errno == ECHILD)) process = invalid_process;
             else pending = true;
         }
         if (!pending) return;
         std::this_thread::sleep_for(std::chrono::milliseconds(20));
     }
-    for (auto process : workers) if (process) kill(process, SIGKILL);
-    for (auto process : workers) if (process) while (waitpid(process, nullptr, 0) < 0 && errno == EINTR) {}
+    for (Process process : workers) if (process) kill(process, SIGKILL);
+    for (Process process : workers) if (process) while (waitpid(process, nullptr, 0) < 0 && errno == EINTR) {}
 }
 #endif
 
@@ -310,7 +321,7 @@ int launch(const Options& options) {
         environment["ELMAN_RANK"] = environment["ELMAN_LOCAL_RANK"] = std::to_string(rank);
         Arguments command;
         if (!options.numa_nodes.empty()) {
-            const auto node = std::to_string(options.numa_nodes[rank]);
+            const std::string node = std::to_string(options.numa_nodes[rank]);
             command = {"numactl", "--cpunodebind=" + node, "--membind=" + node};
         }
         command.insert(command.end(), options.command.begin(), options.command.end());
@@ -320,7 +331,7 @@ int launch(const Options& options) {
     while (remaining) {
         if (was_interrupted()) return 130;
         for (size_t rank = 0; rank < workers.processes.size(); ++rank) {
-            auto& worker = workers.processes[rank];
+            Process& worker = workers.processes[rank];
             int status = 0;
             if (worker == invalid_process || !poll(worker, status)) continue;
             --remaining;

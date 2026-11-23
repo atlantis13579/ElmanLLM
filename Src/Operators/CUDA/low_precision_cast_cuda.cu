@@ -20,8 +20,8 @@ __device__ double low_precision_read_cuda(const uint32_t* input, int i, DType dt
 }
 __global__ void kernel_low_precision_cast_cuda(uint32_t* output, const uint32_t* input, KernelParams p) {
     const unsigned i = blockIdx.x * blockDim.x + threadIdx.x;
-    const auto source = DType(p.input_dtype(KernelInput::A)), target = DType(p.output_dtype());
-    auto* bytes = reinterpret_cast<uint8_t*>(output);
+    const DType source = DType(p.input_dtype(KernelInput::A)), target = DType(p.output_dtype());
+    uint8_t* bytes = reinterpret_cast<uint8_t*>(output);
     if (source == target) {
         const unsigned count = target == DType::Float4E2M1FN ? (unsigned(p.output_count()) + 1) / 2 : unsigned(p.output_count());
         if (i < count) bytes[i] = reinterpret_cast<const uint8_t*>(input)[i];

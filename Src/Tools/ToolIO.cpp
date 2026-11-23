@@ -62,7 +62,7 @@ std::string sha256_file(const std::filesystem::path& path) {
     std::array<unsigned char, 32> digest{};
     while (file) {
         file.read(reinterpret_cast<char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
-        if (const auto count = file.gcount()) {
+        if (const std::streamsize count = file.gcount()) {
 #ifdef _WIN32
             check_hash(BCryptHashData(state.hash, buffer.data(), static_cast<ULONG>(count), 0) >= 0);
 #elif defined(__APPLE__)
@@ -83,7 +83,7 @@ std::string sha256_file(const std::filesystem::path& path) {
 #endif
     std::string hex;
     hex.reserve(64);
-    for (auto byte : digest) {
+    for (unsigned char byte : digest) {
         constexpr char digits[] = "0123456789abcdef";
         hex += digits[byte >> 4];
         hex += digits[byte & 15];
@@ -94,7 +94,7 @@ std::string sha256_file(const std::filesystem::path& path) {
 std::filesystem::path executable_path() {
 #ifdef _WIN32
     std::wstring path(32768, L'\0');
-    const auto length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+    const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
     if (!length || length >= path.size()) throw std::runtime_error("Cannot determine executable path");
     path.resize(length);
     return path;
@@ -116,7 +116,7 @@ void write_json(std::ostream& stream, const Json& value) {
 }
 
 void write_json_atomically(const std::filesystem::path& path, const Json& value) {
-    write_file_atomically(path, [&](const auto& temporary) {
+    write_file_atomically(path, [&](const std::filesystem::path& temporary) {
         std::ofstream stream(temporary, std::ios::binary);
         write_json(stream, value);
         stream.close();

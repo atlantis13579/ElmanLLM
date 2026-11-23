@@ -19,9 +19,9 @@ ResnetBlock::ResnetBlock(const io::ComponentWeights& weights, const std::string&
 }
 
 Tensor ResnetBlock::operator()(const Tensor& input, const Tensor& time_embedding) const {
-  auto value = first(silu(first_norm(input)));
+  Tensor value = first(silu(first_norm(input)));
   if (time) {
-    auto projected = (*time)(silu(time_embedding));
+    Tensor projected = (*time)(silu(time_embedding));
     value = add(value, reshape(projected, {projected.shape()[0], projected.shape()[1], 1, 1}));
   }
   value = second(silu(second_norm(value)));
@@ -52,13 +52,13 @@ SpatialTransformer::SpatialTransformer(const io::ComponentWeights& weights, cons
       ff_out(model_weights::linear(weights, prefix + ".transformer_blocks.0.ff.net.2", width * 4, width)), widened(width * 4) {}
 
 Tensor SpatialTransformer::operator()(const Tensor& input, const Tensor& context) const {
-  auto x = image_tokens(project_in(group_norm(input)));
-  const auto normalized = self_norm(x);
+  Tensor x = image_tokens(project_in(group_norm(input)));
+  const Tensor normalized = self_norm(x);
   x = add(x, self_attention(normalized, normalized));
   x = add(x, cross_attention(cross_norm(x), context));
-  const auto projected = ff_gate(ff_norm(x));
-  const auto value = slice(projected, -1, 0, widened);
-  const auto gate = slice(projected, -1, widened, 2 * widened);
+  const Tensor projected = ff_gate(ff_norm(x));
+  const Tensor value = slice(projected, -1, 0, widened);
+  const Tensor gate = slice(projected, -1, widened, 2 * widened);
   x = add(x, ff_out(mul(value, exact_gelu(gate))));
   return add(input, project_out(token_image(x, input.shape()[2], input.shape()[3])));
 }

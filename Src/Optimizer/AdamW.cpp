@@ -1,23 +1,16 @@
-#include <cmath>
-
 #include "Optimizer/OptimizerInternal.h"
 
 namespace elman::optimizer_internal {
 
 void adamw_step(std::vector<float>& values, const std::vector<float>& gradients,
                 std::vector<float>& first_moment,
-                std::vector<float>& second_moment, const StepParameters& step) {
+                std::vector<float>& second_moment, const FloatOptimizerParameters& step) {
   for (size_t i = 0; i < values.size(); ++i) {
-    double gradient = gradients[i] * step.gradient_scale;
-    first_moment[i] = static_cast<float>(step.beta1 * first_moment[i] +
-                                         (1 - step.beta1) * gradient);
-    second_moment[i] = static_cast<float>(
-        step.beta2 * second_moment[i] + (1 - step.beta2) * gradient * gradient);
-    double update =
-        (first_moment[i] / step.correction1) /
-        (std::sqrt(second_moment[i] / step.correction2) + step.epsilon);
-    update += step.weight_decay * values[i];
-    values[i] = static_cast<float>(values[i] - step.rate * update);
+    const FloatOptimizerElement result = float_optimizer_element(
+        values[i], gradients[i], first_moment[i], second_moment[i], step, FloatOptimizerAlgorithm::AdamW, false, i, values.size());
+    values[i] = result.value;
+    first_moment[i] = result.first;
+    second_moment[i] = result.second;
   }
 }
 

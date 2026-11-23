@@ -17,13 +17,13 @@ std::vector<uint8_t> encode_complex(const std::vector<std::complex<double>>& val
     for (size_t i = 0; i < values.size(); ++i) {
         const double components[2] = {values[i].real(), values[i].imag()};
         for (int part = 0; part < 2; ++part) {
-            auto* output = result.data() + (i * 2 + part) * component_bytes;
+            unsigned char* output = result.data() + (i * 2 + part) * component_bytes;
             if (dtype == DType::Complex128) std::memcpy(output, &components[part], sizeof(double));
             else if (dtype == DType::Complex64) {
                 const float component = float(components[part]);
                 std::memcpy(output, &component, sizeof(float));
             } else {
-                const auto component = numeric::float_to_half(float(components[part]));
+                const uint16_t component = numeric::float_to_half(float(components[part]));
                 std::memcpy(output, &component, sizeof(uint16_t));
             }
         }
@@ -38,13 +38,13 @@ Tensor Tensor::from_complex_data(Shape shape, const std::vector<std::complex<dou
 }
 std::vector<std::complex<double>> Tensor::complex_data() const {
     require(is_complex(dtype()), "Complex data requires complex storage");
-    const auto bytes = raw_data();
+    const std::vector<uint8_t> bytes = raw_data();
     const size_t component_bytes = dtype_storage_bytes(complex_component_dtype(dtype()), 1);
     std::vector<std::complex<double>> values(numel());
     for (size_t i = 0; i < values.size(); ++i) {
         double components[2];
         for (int part = 0; part < 2; ++part) {
-            const auto* input = bytes.data() + (i * 2 + part) * component_bytes;
+            const unsigned char* input = bytes.data() + (i * 2 + part) * component_bytes;
             if (dtype() == DType::Complex128) std::memcpy(&components[part], input, sizeof(double));
             else if (dtype() == DType::Complex64) {
                 float component;

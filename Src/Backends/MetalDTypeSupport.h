@@ -16,17 +16,17 @@ inline bool raw_layout(const std::string& op) {
 }
 
 inline void validate_operator_dtypes(const std::string& op, const KernelParams& p) {
-    const auto out = DType(p.output_dtype());
+    const DType out = DType(p.output_dtype());
     DType widest = out;
-    for (auto slot : {KernelInput::A, KernelInput::B, KernelInput::C, KernelInput::D}) {
-        const auto type = DType(p.input_dtype(slot));
+    for (KernelInput slot : {KernelInput::A, KernelInput::B, KernelInput::C, KernelInput::D}) {
+        const DType type = DType(p.input_dtype(slot));
         if (p.input_rank(slot) >= 0 && wide_words(type) > wide_words(widest)) widest = type;
     }
     if (!wide_words(widest)) return;
 
-    const auto a = DType(p.input_dtype(KernelInput::A));
-    const auto b = DType(p.input_dtype(KernelInput::B));
-    const auto c = DType(p.input_dtype(KernelInput::C));
+    const DType a = DType(p.input_dtype(KernelInput::A));
+    const DType b = DType(p.input_dtype(KernelInput::B));
+    const DType c = DType(p.input_dtype(KernelInput::C));
     if ((op == "real" || op == "imag") && a == DType::Complex128 && out == DType::Float64) return;
     if (op == "complex" && a == DType::Float64 && b == a && out == DType::Complex128) return;
     if (op == "conj" && out == DType::Complex128 && a == out) return;

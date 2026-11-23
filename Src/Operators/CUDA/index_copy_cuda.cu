@@ -20,7 +20,7 @@ __global__ void copy_indexed(uint32_t* out, const uint32_t* indices, const uint3
     int position = i / inner % length;
     int selected_source = order ? int(order[position]) : position;
     int dtype = p.input_dtype(KernelInput::B), destination_length = p.input_shape(KernelInput::A, axis);
-    auto selected = index_copy_index(indices, selected_source, dtype);
+    int64_t selected = index_copy_index(indices, selected_source, dtype);
     if (selected < 0 || selected >= destination_length) return;
     // Stable index sorting gives each duplicated destination one final writer.
     if (order && position + 1 < length && index_copy_index(indices, int(order[position + 1]), dtype) == selected) return;
@@ -40,7 +40,7 @@ void launch_index_copy_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
                             const uint32_t* c, const KernelParams& p) {
     if (!p.output_count()) return;
     if (out != a) {
-        auto result = cudaMemcpyAsync(out, a, dtype_storage_bytes(DType(p.output_dtype()), size_t(p.output_count())),
+        cudaError_t result = cudaMemcpyAsync(out, a, dtype_storage_bytes(DType(p.output_dtype()), size_t(p.output_count())),
                                       cudaMemcpyDeviceToDevice, current_cuda_stream());
         if (result != cudaSuccess) throw std::runtime_error(std::string("CUDA index copy: ") + cudaGetErrorString(result));
     }
@@ -53,7 +53,7 @@ void launch_index_copy_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
         order = backend_workspace(Backend::CUDA, size_t(length) * sizeof(int32_t));
         if (p.input_dtype(KernelInput::B) == int(DType::Int64)) {
             narrowed = backend_workspace(Backend::CUDA, size_t(length) * sizeof(int32_t));
-            auto* values = static_cast<uint32_t*>(narrowed->raw_pointer());
+            uint32_t* values = static_cast<uint32_t*>(narrowed->raw_pointer());
             narrow_indices<<<(unsigned(length) + 255u) / 256u, 256, 0, current_cuda_stream()>>>(values, b, length);
             keys = values;
         }
@@ -62,7 +62,7 @@ void launch_index_copy_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
         sort.v[KernelParams::kOutputRankSlot] = 1;
         sort.v[KernelParams::kOutputShapeSlot] = length;
         sort.v[KernelParams::kOutputDTypeSlot] = int(DType::Int32);
-        for (auto input : {KernelInput::A, KernelInput::B, KernelInput::C, KernelInput::D})
+        for (KernelInput input : {KernelInput::A, KernelInput::B, KernelInput::C, KernelInput::D})
             sort.v[KernelParams::input_slot(input)] = -1;
         int slot = KernelParams::input_slot(KernelInput::A);
         sort.v[slot] = 1;

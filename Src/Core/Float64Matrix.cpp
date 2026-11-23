@@ -1,11 +1,12 @@
 #include "Operators/float64_matrix.h"
+#include "Core/LocalFunction.h"
 #include <algorithm>
 #include <stdexcept>
 
 namespace elman {
 void validate_float64_matrix(Float64Matrix operation, const BufferPtr& output,
                              const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     require(output->dtype == DType::Float64, "Float64 matrix requires a Double output");
     const bool linear = operation == Float64Matrix::Linear || operation == Float64Matrix::PackedLinear;
     const bool packed = operation == Float64Matrix::PackedLinear;
@@ -15,7 +16,7 @@ void validate_float64_matrix(Float64Matrix operation, const BufferPtr& output,
     const bool bias = inputs.size() > 2 && bool(inputs[2]);
     require(!addmm || bias, "Float64 addmm requires its addend");
     require(linear || addmm || !bias, "Unexpected Float64 matrix addend");
-    auto shape_count = [&](const std::vector<int>& shape) {
+    LocalFunction shape_count{[&](const std::vector<int>& shape) {
         size_t forward = 1, backward = 1;
         for (size_t i = 0; i < shape.size(); ++i) {
             const int a = shape[i], b = shape[shape.size() - i - 1];
@@ -25,10 +26,10 @@ void validate_float64_matrix(Float64Matrix operation, const BufferPtr& output,
             forward *= size_t(a); backward *= size_t(b);
         }
         return forward;
-    };
+    }};
     std::vector<std::vector<int>> shape(3);
     for (int i = 0; i < 3; ++i) {
-        const auto input = KernelInput(i);
+        const KernelInput input = KernelInput(i);
         const int rank = p.input_rank(input);
         const bool present = size_t(i) < inputs.size() && bool(inputs[i]);
         if (!present) { require(i == 2 && rank == -1, "Missing Float64 matrix descriptor"); continue; }
@@ -47,7 +48,7 @@ void validate_float64_matrix(Float64Matrix operation, const BufferPtr& output,
     std::vector<int> target(rank), expected;
     for (int d = 0; d < rank; ++d) target[d] = p.output_shape(d);
     require(shape_count(target) == output->count && p.output_count() == int(output->count), "Float64 matrix output shape differs from storage");
-    const auto& a = shape[0]; const auto& b = shape[1]; const auto& c = shape[2];
+    const std::vector<int>& a = shape[0]; const std::vector<int>& b = shape[1]; const std::vector<int>& c = shape[2];
     if (linear) {
         require(!a.empty() && b.size() == 2 && a.back() == b[1], "Invalid Float64 linear feature dimensions");
         const int columns = b[0];
@@ -92,8 +93,8 @@ void validate_float64_matrix(Float64Matrix operation, const BufferPtr& output,
         }
     }
     require(target == expected, "Float64 matrix output dimensions differ");
-    for (const auto& input : inputs) if (input && output->bytes && input->bytes) {
-        const auto a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(input->raw_pointer());
+    for (const BufferPtr& input : inputs) if (input && output->bytes && input->bytes) {
+        const uintptr_t a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(input->raw_pointer());
         require(a <= b ? b - a >= output->bytes : a - b >= input->bytes, "Float64 matrix output overlaps an input");
     }
 }

@@ -10,7 +10,7 @@ namespace elman {
 namespace {
 uint64_t pool_identity() {
     static std::atomic<uint64_t> next{1};
-    auto value = next.load(std::memory_order_relaxed);
+    uint64_t value = next.load(std::memory_order_relaxed);
     for (;;) {
         if (value == std::numeric_limits<uint64_t>::max())
             throw std::overflow_error("Cache block pool identities are exhausted");
@@ -31,7 +31,7 @@ struct CacheBlockState {
         for (int index = capacity; index-- > 0;) free.push_back(index);
     }
     void release(int index) noexcept {
-        auto& slot = slots[size_t(index)];
+        CacheBlockState::Slot& slot = slots[size_t(index)];
         if (slot.references == 2) --shared;
         if (--slot.references == 0) free.push_back(index);
         --references;
@@ -55,7 +55,7 @@ CacheBlockLease CacheBlockPool::acquire(size_t count) {
 bool CacheBlockPool::live(const CacheBlock& block) const {
     if (block.pool != state_->identity || block.index < 0 || size_t(block.index) >= state_->slots.size()) return false;
     std::lock_guard<std::mutex> lock(state_->mutex);
-    const auto& slot = state_->slots[size_t(block.index)];
+    const CacheBlockState::Slot& slot = state_->slots[size_t(block.index)];
     return slot.references != 0 && slot.generation == block.generation;
 }
 CacheBlockStats CacheBlockPool::stats() const {
@@ -89,8 +89,8 @@ CacheBlockLease CacheBlockLease::share_prefix(size_t count) const {
             throw std::overflow_error("Cache block slot references are exhausted");
     // Copy host metadata before incrementing any physical references.
     result.blocks_.assign(blocks_.begin(), blocks_.begin() + count);
-    for (const auto& block : result.blocks_) {
-        auto& slot = state_->slots[size_t(block.index)];
+    for (const CacheBlock& block : result.blocks_) {
+        CacheBlockState::Slot& slot = state_->slots[size_t(block.index)];
         if (slot.references++ == 1) ++state_->shared;
     }
     state_->references += count;
@@ -106,7 +106,7 @@ void CacheBlockLease::swap_block(size_t position, CacheBlockLease& other, size_t
     if (!state_ || state_ != other.state_) throw std::invalid_argument("Cache block exchange requires one pool");
     if (position >= blocks_.size() || other_position >= other.blocks_.size())
         throw std::out_of_range("Cache block exchange position is outside the lease");
-    const auto a = blocks_[position], b = other.blocks_[other_position];
+    const CacheBlock a = blocks_[position], b = other.blocks_[other_position];
     if (this != &other && a != b && (owns(b) || other.owns(a)))
         throw std::invalid_argument("Cache block exchange would duplicate a lease entry");
     std::swap(blocks_[position], other.blocks_[other_position]);
@@ -128,7 +128,7 @@ void CacheBlockLease::resize(size_t count) {
         blocks_.reserve(count);
         while (blocks_.size() < count) {
             int index = state_->free.back();
-            auto& slot = state_->slots[size_t(index)];
+            CacheBlockState::Slot& slot = state_->slots[size_t(index)];
             blocks_.push_back({index, slot.generation + 1, state_->identity});
             ++slot.generation;
             slot.references = 1;

@@ -13,21 +13,21 @@ Tensor causal_mask(Graph m, Tensor mask, int queries, int keys, int64_t offset, 
   const float lowest = type == MPSDataTypeFloat16    ? -65504.f
                        : type == MPSDataTypeBFloat16 ? -3.3895313892515355e38f
                                                      : -3.402823466e38f;
-  auto blocked = m.number(lowest, mask.dataType);
+  Tensor blocked = m.number(lowest, mask.dataType);
   if (offset <= -int64_t(queries)) {
     return blocked;
   }
-  auto dims = @[ @1, @1, @(queries), @(keys) ];
-  auto distance = m.sub(m.index(dims, 3), m.index(dims, 2));
+  NSArray<NSNumber*>* dims = @[ @1, @1, @(queries), @(keys) ];
+  Tensor distance = m.sub(m.index(dims, 3), m.index(dims, 2));
   return m.select(m.less(m.integer(offset), distance), blocked, mask);
 }
 }  // namespace
 
 Tensor lower_tiled_attention(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto query = inputs[0];
-  auto key = inputs[1];
-  auto value = inputs[2];
-  auto mask = inputs[3];
+  Tensor query = inputs[0];
+  Tensor key = inputs[1];
+  Tensor value = inputs[2];
+  Tensor mask = inputs[3];
   const int key_count = p.input_shape(KernelInput::B, 2);
   if (!key_count) {
     return m.zeros(shape(p), query.dataType);
@@ -37,11 +37,11 @@ Tensor lower_tiled_attention(Graph m, const Operands& inputs, const KernelParams
   const int queries = p.input_shape(KernelInput::A, 2);
   const int dimension = p.input_shape(KernelInput::A, 3);
   if (heads != kv_heads) {
-    auto* repeat = [NSMutableArray<NSNumber*> arrayWithCapacity:heads];
+    NSMutableArray<NSNumber*>* repeat = [NSMutableArray<NSNumber*> arrayWithCapacity:heads];
     for (int i = 0; i < heads; ++i) {
       [repeat addObject:@(i / (heads / kv_heads))];
     }
-    auto ids = m.int_vector(repeat);
+    Tensor ids = m.int_vector(repeat);
     key = m.gather(key, ids, 1);
     value = m.gather(value, ids, 1);
   }
@@ -63,7 +63,7 @@ Tensor lower_tiled_attention(Graph m, const Operands& inputs, const KernelParams
   if (dimension != value_width || dimension % 8 != 0 || fully_blocked_rows) {
     // A finite additive mask on a fully blocked row still participates in
     // softmax. Fused SDPA is allowed to suppress such rows entirely.
-    auto logits = m.matmul(query, m.transpose(key, 2, 3));
+    Tensor logits = m.matmul(query, m.transpose(key, 2, 3));
     logits = m.add(m.mul(logits, m.number(scale, logits.dataType)), mask);
     return m.matmul([m.g softMaxWithTensor:logits axis:3 name:nil], value);
   }

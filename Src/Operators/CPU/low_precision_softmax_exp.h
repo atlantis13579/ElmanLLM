@@ -64,7 +64,7 @@ inline float low_softmax_vector_log(float value) {
     if (subnormal) exponent -= 64;
 
     struct Pair { float high, low; };
-    auto add = [](float left, float right) {
+    Pair (*const add)(float, float) = [](float left, float right) {
         const float high = left + right, delta = high - left;
         return Pair{high, (left - (high - delta)) + (right - delta)};
     };

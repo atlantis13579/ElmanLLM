@@ -43,11 +43,11 @@ ELMAN_AFFINE_HD int64_t affine_encode_element(int index, AffineQuantization oper
     const int row = index / columns, group = (index % columns) / p.attribute(0);
     const int scale_index = quantization_parameter_index(KernelInput::B, row, group, p);
     const int zero_index = quantization_parameter_index(KernelInput::C, row, group, p);
-    const auto zero = affine_zero(zeros, zero_index, p.input_dtype(KernelInput::C));
+    const int64_t zero = affine_zero(zeros, zero_index, p.input_dtype(KernelInput::C));
     if (operation == AffineQuantization::Relu) {
-        const auto dtype = DType(p.output_dtype());
+        const DType dtype = DType(p.output_dtype());
         if (zero < quantized_minimum(dtype) || zero > quantized_maximum(dtype)) return quantized_minimum(dtype);
-        const auto value = quantized_code(input, uint64_t(index), DType(p.output_dtype()));
+        const int64_t value = quantized_code(input, uint64_t(index), DType(p.output_dtype()));
         return value < zero ? zero : value;
     }
     const double value = read(input, index, p.input_dtype(KernelInput::A));
@@ -74,7 +74,7 @@ ELMAN_AFFINE_HD double affine_decode_element(int index, AffineQuantization opera
     const int group = column / p.attribute(0);
     const int scale_index = quantization_parameter_index(KernelInput::B, row, group, p);
     const int zero_index = quantization_parameter_index(KernelInput::C, row, group, p);
-    const auto dtype = DType(p.input_dtype(KernelInput::A));
+    const DType dtype = DType(p.input_dtype(KernelInput::A));
     const int64_t zero = affine_zero(zeros, zero_index, p.input_dtype(KernelInput::C));
     const double scale = read(scales, scale_index, p.input_dtype(KernelInput::B));
     if (!(scale > 0) || scale > 1.7976931348623157e308 || zero < quantized_minimum(dtype) || zero > quantized_maximum(dtype)) return 0;
@@ -87,7 +87,7 @@ template<class Reader>
 ELMAN_AFFINE_HD void affine_quantize_unit(int unit, AffineQuantization operation, uint32_t* output, const uint32_t* input,
                                           const uint32_t* scales, const uint32_t* zeros,
                                           const KernelParams& p, Reader read) {
-    const auto dtype = DType(p.output_dtype());
+    const DType dtype = DType(p.output_dtype());
     const unsigned bits = quantized_storage_bits(dtype);
     if (bits < 8) {
         unsigned byte = 0;
@@ -99,7 +99,7 @@ ELMAN_AFFINE_HD void affine_quantize_unit(int unit, AffineQuantization operation
         }
         reinterpret_cast<uint8_t*>(output)[unit] = uint8_t(byte);
     } else {
-        const auto code = affine_encode_element(unit, operation, input, scales, zeros, p, read);
+        const int64_t code = affine_encode_element(unit, operation, input, scales, zeros, p, read);
         if (dtype == DType::QInt32) reinterpret_cast<int32_t*>(output)[unit] = int32_t(code);
         else reinterpret_cast<uint8_t*>(output)[unit] = uint8_t(code);
     }

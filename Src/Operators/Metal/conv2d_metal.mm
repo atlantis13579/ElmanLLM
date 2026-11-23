@@ -5,9 +5,9 @@
 
 namespace elman::metal {
 Tensor lower_conv2d(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto a = inputs[0];
-  auto b = inputs[1];
-  auto c = inputs[2];
+  Tensor a = inputs[0];
+  Tensor b = inputs[1];
+  Tensor c = inputs[2];
   if (!a && c) {
     return m.spread(m.reshape(c, @[ @1, @(p.output_shape(1)), @1, @1 ]), shape(p));
   }
@@ -16,7 +16,7 @@ Tensor lower_conv2d(Graph m, const Operands& inputs, const KernelParams& p) {
   }
   using namespace operator_attr::conv2d;
   const int pw = p.attribute(kPaddingWidth), ph = p.attribute(kPaddingHeight);
-  auto* descriptor =
+  MPSGraphConvolution2DOpDescriptor* descriptor =
       [MPSGraphConvolution2DOpDescriptor descriptorWithStrideInX:p.attribute(kStrideWidth)
                                                        strideInY:p.attribute(kStrideHeight)
                                                  dilationRateInX:p.attribute(kDilationWidth)
@@ -29,7 +29,7 @@ Tensor lower_conv2d(Graph m, const Operands& inputs, const KernelParams& p) {
                                                     paddingStyle:MPSGraphPaddingStyleExplicit
                                                       dataLayout:MPSGraphTensorNamedDataLayoutNCHW
                                                    weightsLayout:MPSGraphTensorNamedDataLayoutOIHW];
-  auto result = [m.g convolution2DWithSourceTensor:a weightsTensor:b descriptor:descriptor name:nil];
+  Tensor result = [m.g convolution2DWithSourceTensor:a weightsTensor:b descriptor:descriptor name:nil];
   if (!c) {
     return result;
   }

@@ -78,14 +78,14 @@ void launch_mean_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
     if (axis < 0) for (int i = 0; i < p.input_rank(KernelInput::A); ++i) length *= p.input_shape(KernelInput::A, i);
     if (inner == 1 && length > 0 && length <= 128 &&
         p.input_dtype(KernelInput::A) == int(DType::Float32) && p.output_dtype() == int(DType::Float32)) {
-      auto block = short_row_block(length, p.output_count());
+      dim3 block = short_row_block(length, p.output_count());
       mean_short_rows_cuda<<<(p.output_count() + block.y - 1) / block.y, block, 0, current_cuda_stream()>>>(
           out, a, p, length, 1.0f / float(length));
       return;
     }
     if (inner == 1 && length > 128 && length <= 8192 && length % 4 == 0 &&
         is_compute_float(DType(p.output_dtype())) && p.input_dtype(KernelInput::A) == p.output_dtype()) {
-      auto power = [](int value) { int result = 1; while (result <= value / 2 && result < 512) result *= 2; return result; };
+      int (*const power)(int) = [](int value) { int result = 1; while (result <= value / 2 && result < 512) result *= 2; return result; };
       int columns = power(length / 4), rows = power(p.output_count());
       int width = columns < 32 ? columns : 32;
       int height = rows < 512 / width ? rows : 512 / width;

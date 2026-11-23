@@ -5,7 +5,7 @@
 
 namespace elman::metal {
 Tensor lower_conj(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto a = inputs[0];
+  Tensor a = inputs[0];
   if (wide_words(DType(p.output_dtype()))) {
     return [m.g bitwiseXORWithPrimaryTensor:a
                             secondaryTensor:m.int_vector(@[ @0, @0, @0, @(INT_MIN) ])

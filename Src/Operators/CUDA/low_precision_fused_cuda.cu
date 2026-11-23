@@ -6,7 +6,7 @@ namespace {
 __global__ void low_fused_kernel(LowPrecisionFused op, uint32_t* output, const uint32_t* a, const uint32_t* b, const uint32_t* c, KernelParams p, unsigned bytes) {
     const unsigned byte = blockIdx.x * blockDim.x + threadIdx.x;
     if (byte < bytes) {
-        const auto dtype = DType(p.output_dtype());
+        const DType dtype = DType(p.output_dtype());
         const bool packed = dtype == DType::Float4E2M1FN;
         const int i = packed ? int(byte * 2) : int(byte);
         uint8_t value = low_precision_encode(low_precision_fused_value(op, i, a, b, c, p), dtype);

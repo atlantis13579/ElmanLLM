@@ -111,9 +111,9 @@ bool tiled_filter_gradient(uint32_t* out, const uint32_t* a, const uint32_t* b, 
   try { workspace = backend_workspace(Backend::CUDA, elements * sizeof(float)); }
   catch (const MemoryLimitExceeded&) { return false; }
   catch (const AllocationFailure&) { return false; }
-  auto* packed = static_cast<float*>(workspace->raw_pointer());
-  auto* partials = packed + packed_count;
-  auto stream = current_cuda_stream();
+  float* packed = static_cast<float*>(workspace->raw_pointer());
+  float* partials = packed + packed_count;
+  cudaStream_t stream = current_cuda_stream();
   pack_filter_tiles<<<(unsigned(packed_count) + 255) / 256, 256, 0, stream>>>(packed,
       reinterpret_cast<const float*>(a), reinterpret_cast<const float*>(b), int(packed_count), inputs, outputs, height, width, positions);
   convolution_filter_partials_cuda(partials, packed, inputs * 9, outputs, filter_tile, tiles);

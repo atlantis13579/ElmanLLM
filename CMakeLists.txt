@@ -29,8 +29,13 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/Binaries/${CMAKE_SYSTEM_NAME}/${ELMAN_BUILD_VARIANT}")
-set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/Binaries/${CMAKE_SYSTEM_NAME}/${ELMAN_BUILD_VARIANT}")
-set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/Binaries/${CMAKE_SYSTEM_NAME}/${ELMAN_BUILD_VARIANT}")
+set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Lib")
+set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Lib")
+if(CMAKE_CONFIGURATION_TYPES)
+    set(ELMAN_TEST_RUNTIME_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>")
+else()
+    set(ELMAN_TEST_RUNTIME_DIRECTORY "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+endif()
 if(NOT CMAKE_CONFIGURATION_TYPES AND NOT CMAKE_BUILD_TYPE)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build configuration" FORCE)
 endif()
@@ -43,6 +48,7 @@ endif()
 
 file(GLOB CPU_OPERATORS CONFIGURE_DEPENDS "Src/Operators/CPU/*.cpp")
 set(ELMAN_SOURCES
+    Src/Training/GraphTraining.cpp
     Src/Serving/GenerationScheduler.cpp
     Src/Backends/Cpu.cpp
     Src/Backends/CpuGemm.cpp
@@ -109,7 +115,8 @@ set(ELMAN_SOURCES
     Src/Models/Diffusion/Flux2Vae.cpp
     Src/Inference/Diffusion/Flux2Sampler.cpp
     Src/Inference/Diffusion/Flux2Session.cpp
-    Src/NN/InferenceLayers.cpp
+    Src/Layers/LayerNorm.cpp
+    Src/Layers/Attention.cpp
     Src/Models/Diffusion/Blocks.cpp
     Src/IO/ComponentWeights.cpp
     Src/Distributed/ProcessGroup.cpp
@@ -117,6 +124,7 @@ set(ELMAN_SOURCES
     Src/Core/ComplexTensor.cpp
     Src/Core/ComplexPointwise.cpp
     Src/Core/ComplexAutograd.cpp
+    Src/Reinforcement/PolicyValueInference.cpp
     Src/Inference/ModelEvaluation.cpp
     Src/Inference/GraphSession.cpp
     Src/Inference/GraphBuilder.cpp
@@ -154,14 +162,22 @@ set(ELMAN_SOURCES
     Src/IO/Hdf5.cpp
     Src/IO/ZipArchive.cpp
     Src/Models/Model.cpp
+    Src/Reinforcement/ContinuousActorCritic.cpp
     Src/Models/ModuleModel.cpp
     Src/Models/LLM/Decoder.cpp
     Src/Models/LLM/DeepSeek.cpp
     Src/Models/LLM/DecoderFactory.cpp
     Src/Models/LLM/Qwen2.cpp
     Src/Models/ResNet.cpp
-    Src/NN/Module.cpp
-    Src/NN/Layers.cpp
+    Src/Reinforcement/SpatialPolicyValue.cpp
+    Src/Layers/Module.cpp
+    Src/Layers/Sequential.cpp
+    Src/Layers/Linear.cpp
+    Src/Layers/Conv2d.cpp
+    Src/Layers/GroupNorm.cpp
+    Src/Layers/BatchNorm2d.cpp
+    Src/Layers/ReLU.cpp
+    Src/Layers/Dropout.cpp
     Src/Optimizer/Adam.cpp
     Src/Optimizer/AdamW.cpp
     Src/Optimizer/Optimizer.cpp
@@ -178,6 +194,10 @@ set(ELMAN_SOURCES
     Src/Text/TokenStream.cpp
     Src/Training/DataLoader.cpp
     Src/Training/LossScaler.cpp
+    Src/Reinforcement/Reinforcement.cpp
+    Src/Reinforcement/PPO.cpp
+    Src/Reinforcement/PpoRunner.cpp
+    Src/Reinforcement/PolicyValueTraining.cpp
     Src/Training/Sampler.cpp
     Src/Training/Trainer.cpp
     ${CPU_OPERATORS}
@@ -236,8 +256,9 @@ if(ELMAN_MKL_ROOT)
         if(NOT ELMAN_MKL_RUNTIME)
             message(FATAL_ERROR "ELMAN_MKL_ROOT requires runtime DLLs under bin")
         endif()
-        add_custom_command(TARGET elman_core POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            ${ELMAN_MKL_RUNTIME} "$<TARGET_FILE_DIR:elman_core>" VERBATIM)
+        add_custom_command(TARGET elman_core POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E make_directory "${ELMAN_TEST_RUNTIME_DIRECTORY}"
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ELMAN_MKL_RUNTIME} "${ELMAN_TEST_RUNTIME_DIRECTORY}" VERBATIM)
     endif()
 endif()
 if(WIN32)
@@ -267,8 +288,9 @@ if(ELMAN_ENABLE_CUDA)
             if(NOT ELMAN_CUDNN_RUNTIME)
                 message(FATAL_ERROR "ELMAN_CUDNN_ROOT requires cuDNN runtime DLLs under bin or bin/x64")
             endif()
-            add_custom_command(TARGET elman_core POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${ELMAN_CUDNN_RUNTIME} "$<TARGET_FILE_DIR:elman_core>" VERBATIM)
+            add_custom_command(TARGET elman_core POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${ELMAN_TEST_RUNTIME_DIRECTORY}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ELMAN_CUDNN_RUNTIME} "${ELMAN_TEST_RUNTIME_DIRECTORY}" VERBATIM)
         endif()
     endif()
     if(ELMAN_CUBLAS_ROOT)
@@ -282,161 +304,58 @@ if(ELMAN_ENABLE_CUDA)
             if(NOT ELMAN_CUBLAS_RUNTIME)
                 message(FATAL_ERROR "ELMAN_CUBLAS_ROOT requires cuBLAS runtime DLLs under bin or bin/x64")
             endif()
-            add_custom_command(TARGET elman_core POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                ${ELMAN_CUBLAS_RUNTIME} "$<TARGET_FILE_DIR:elman_core>" VERBATIM)
+            add_custom_command(TARGET elman_core POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E make_directory "${ELMAN_TEST_RUNTIME_DIRECTORY}"
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ELMAN_CUBLAS_RUNTIME} "${ELMAN_TEST_RUNTIME_DIRECTORY}" VERBATIM)
         endif()
     else()
         target_link_libraries(elman_core PRIVATE CUDA::cublas CUDA::cublasLt)
     endif()
 endif()
 
-set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS
-    Apps/Web/Static/index.html Apps/Web/Static/style.css Apps/Web/Static/app.js
-)
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/Apps/Web/Static/index.html" ELMAN_WEB_INDEX)
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/Apps/Web/Static/style.css" ELMAN_WEB_STYLE)
-file(READ "${CMAKE_CURRENT_SOURCE_DIR}/Apps/Web/Static/app.js" ELMAN_WEB_SCRIPT)
-configure_file(Apps/Web/Assets.h.in Apps/Web/Assets.h @ONLY)
-
-add_library(elman_app_services STATIC Apps/ChatService.cpp Apps/GpuMonitor.cpp Apps/ImageService.cpp)
-target_include_directories(elman_app_services PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/Apps")
-target_link_libraries(elman_app_services PUBLIC elman_core PRIVATE Threads::Threads)
+add_library(elman_serving STATIC
+    Src/Networking/TcpServer.cpp
+    Src/Networking/HttpServer.cpp
+    Src/Networking/HttpFiles.cpp
+    Src/Serving/Server.cpp
+    Src/Serving/GpuMonitor.cpp
+    Src/Serving/Http/ChatService.cpp
+    Src/Serving/Http/ChatResponse.cpp
+    Src/Serving/Http/Http.cpp
+    Src/Serving/Http/ImageService.cpp
+    Src/Reinforcement/Messages.cpp
+    Src/Reinforcement/PolicyValueServer.cpp)
+target_link_libraries(elman_serving PUBLIC elman_core PRIVATE Threads::Threads)
+if(WIN32)
+    target_link_libraries(elman_serving PRIVATE ws2_32)
+endif()
 if(ELMAN_ENABLE_CUDA)
     find_path(ELMAN_NVML_INCLUDE_DIR nvml.h PATHS ${CUDAToolkit_INCLUDE_DIRS} NO_DEFAULT_PATH NO_CACHE)
     if(ELMAN_NVML_INCLUDE_DIR)
-        target_compile_definitions(elman_app_services PRIVATE ELMAN_HAS_NVML)
-        target_include_directories(elman_app_services PRIVATE "${ELMAN_NVML_INCLUDE_DIR}")
-        target_link_libraries(elman_app_services PRIVATE ${CMAKE_DL_LIBS})
+        target_compile_definitions(elman_serving PRIVATE ELMAN_HAS_NVML)
+        target_include_directories(elman_serving PRIVATE "${ELMAN_NVML_INCLUDE_DIR}")
+        target_link_libraries(elman_serving PRIVATE ${CMAKE_DL_LIBS})
     endif()
 endif()
 
-add_executable(elman Apps/Main.cpp Apps/Web/ChatResponse.cpp Apps/Web/Http.cpp Apps/Web/Server.cpp)
-target_include_directories(elman PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/Apps/Web")
-target_link_libraries(elman PRIVATE elman_app_services Threads::Threads)
+add_executable(elman Apps/Main.cpp)
+target_link_libraries(elman PRIVATE elman_serving)
 if(WIN32)
-    target_link_libraries(elman PRIVATE ws2_32)
+    foreach(runtime ELMAN_MKL_RUNTIME ELMAN_CUDNN_RUNTIME ELMAN_CUBLAS_RUNTIME)
+        if(${runtime})
+            add_custom_command(TARGET elman POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                ${${runtime}} "$<TARGET_FILE_DIR:elman>" VERBATIM)
+        endif()
+    endforeach()
+    set(ELMAN_APP_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/Binaries/Windows")
+    set_target_properties(elman PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ELMAN_APP_OUTPUT_DIRECTORY}")
+    foreach(configuration DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
+        set_target_properties(elman PROPERTIES "RUNTIME_OUTPUT_DIRECTORY_${configuration}" "${ELMAN_APP_OUTPUT_DIRECTORY}")
+    endforeach()
+    target_link_libraries(elman_serving PRIVATE shell32)
 endif()
 
 if(ELMAN_BUILD_TESTS)
     enable_testing()
-    set(elman_test_output "${CMAKE_CURRENT_BINARY_DIR}/TestArtifacts")
-    set(operator_fixtures "${PROJECT_SOURCE_DIR}/Tests/OperatorCases.json")
-
-    function(add_elman_test_target target source)
-        add_executable(${target} Tests/${source})
-        target_link_libraries(${target} PRIVATE elman_core ${ARGN})
-    endfunction()
-
-    add_elman_test_target(elman_flux2_tests Flux2Test.cpp)
-    add_elman_test_target(elman_operator_parity OperatorParity.cpp)
-    add_elman_test_target(elman_tensor_tests Float32Test.cpp)
-    add_elman_test_target(elman_kernel_tests KernelReference.cpp)
-    add_elman_test_target(elman_model_io_tests ModelIO.cpp)
-    add_elman_test_target(elman_optimizer_tests OptimizerTest.cpp)
-    add_elman_test_target(elman_tokenizer_tests TokenizerTest.cpp)
-    add_elman_test_target(elman_storage_tests StorageTest.cpp)
-    add_elman_test_target(elman_chat_tests ChatTest.cpp elman_app_services)
-    add_elman_test_target(elman_memory_tests MemoryTest.cpp Threads::Threads)
-    add_elman_test_target(elman_cache_blocks CacheBlocksTest.cpp Threads::Threads)
-    add_elman_test_target(elman_paged_cache PagedKVCacheTest.cpp Threads::Threads)
-    add_elman_test_target(elman_shared_cache SharedCacheTest.cpp Threads::Threads)
-    add_elman_test_target(elman_prefix_cache PrefixCacheTest.cpp Threads::Threads)
-    add_elman_test_target(elman_indexed_copy IndexedCopyTest.cpp)
-    add_elman_test_target(elman_pool_tests AllocationPoolTest.cpp Threads::Threads)
-    add_elman_test_target(elman_view_tests ContiguousViewTest.cpp)
-    add_elman_test_target(elman_attention_tests TiledAttentionTest.cpp)
-    add_elman_test_target(elman_execution_tests ExecutionTest.cpp Threads::Threads)
-    add_elman_test_target(elman_staging_tests StagingTest.cpp Threads::Threads)
-    add_elman_test_target(elman_float8_tests Float8Test.cpp)
-    add_elman_test_target(elman_storage_layout StorageLayoutTest.cpp)
-    add_elman_test_target(elman_text_stream_tests TextStreamTest.cpp)
-    add_elman_test_target(elman_float64_tests Float64Test.cpp)
-    add_elman_test_target(elman_integer_tests IntegerTest.cpp)
-    if(MSVC)
-        target_compile_options(elman_text_stream_tests PRIVATE /utf-8)
-    endif()
-
-    set(cpu_cuda_test_backends cpu)
-    set(gpu_test_backends)
-    if(ELMAN_ENABLE_CUDA)
-        list(APPEND cpu_cuda_test_backends cuda)
-        list(APPEND gpu_test_backends cuda)
-        target_sources(elman_execution_tests PRIVATE Tests/CudaExecutionProbe.cu)
-        target_sources(elman_staging_tests PRIVATE Tests/CudaStagingProbe.cu)
-    endif()
-    if(ELMAN_ENABLE_METAL)
-        list(APPEND gpu_test_backends metal)
-    endif()
-
-    foreach(backend cpu ${gpu_test_backends})
-        add_test(NAME flux2_${backend} COMMAND elman_flux2_tests ${backend} "${elman_test_output}/Flux2/${backend}")
-        set_tests_properties(flux2_${backend} PROPERTIES SKIP_RETURN_CODE 77 LABELS "diffusion;operator" TIMEOUT 180)
-    endforeach()
-    add_test(NAME operator_fixtures_cpu COMMAND elman_operator_parity "${operator_fixtures}" cpu)
-    foreach(backend IN LISTS gpu_test_backends)
-        add_test(NAME operators_cpu_${backend} COMMAND elman_operator_parity "${operator_fixtures}" ${backend})
-        set_tests_properties(operators_cpu_${backend} PROPERTIES SKIP_RETURN_CODE 77 LABELS "${backend};operator" TIMEOUT 600)
-    endforeach()
-
-    foreach(backend IN LISTS cpu_cuda_test_backends)
-        add_test(NAME memory_${backend} COMMAND elman_memory_tests ${backend})
-        add_test(NAME prefix_cache_${backend} COMMAND elman_prefix_cache ${backend})
-        add_test(NAME shared_cache_${backend} COMMAND elman_shared_cache ${backend})
-        add_test(NAME paged_cache_${backend} COMMAND elman_paged_cache ${backend})
-        add_test(NAME indexed_copy_${backend} COMMAND elman_indexed_copy ${backend})
-        add_test(NAME allocation_pool_${backend} COMMAND elman_pool_tests ${backend})
-        add_test(NAME contiguous_view_${backend} COMMAND elman_view_tests ${backend})
-        add_test(NAME attention_memory_${backend} COMMAND elman_attention_tests ${backend})
-        add_test(NAME execution_${backend} COMMAND elman_execution_tests ${backend})
-        add_test(NAME host_staging_${backend} COMMAND elman_staging_tests ${backend})
-        add_test(NAME storage_layout_${backend} COMMAND elman_storage_layout ${backend})
-        add_test(NAME storage_${backend} COMMAND elman_storage_tests ${backend})
-        set_tests_properties(prefix_cache_${backend} PROPERTIES LABELS "llm;memory;paged-cache;prefix" RUN_SERIAL TRUE TIMEOUT 180)
-        set_tests_properties(shared_cache_${backend} PROPERTIES LABELS "llm;memory;paged-cache" RUN_SERIAL TRUE TIMEOUT 180)
-        set_tests_properties(paged_cache_${backend} indexed_copy_${backend}
-            PROPERTIES LABELS "llm;memory;paged-cache" RUN_SERIAL TRUE TIMEOUT 120)
-        set_tests_properties(contiguous_view_${backend} PROPERTIES LABELS "llm;memory;views" RUN_SERIAL TRUE TIMEOUT 120)
-        set_tests_properties(attention_memory_${backend} PROPERTIES LABELS "llm;memory;fusion" RUN_SERIAL TRUE TIMEOUT 120)
-        set_tests_properties(execution_${backend} PROPERTIES TIMEOUT 60)
-        set_tests_properties(host_staging_${backend} PROPERTIES LABELS "memory;execution" TIMEOUT 60)
-        set_tests_properties(storage_layout_${backend} PROPERTIES LABELS "dtype;storage" TIMEOUT 60)
-
-        add_test(NAME float64_${backend} COMMAND elman_float64_tests ${backend} "${elman_test_output}/Float64/${backend}")
-        add_test(NAME integer_${backend} COMMAND elman_integer_tests ${backend})
-        add_test(NAME float8_${backend} COMMAND elman_float8_tests ${backend} --suite "${elman_test_output}/Float8/${backend}")
-        add_test(NAME float16_${backend} COMMAND elman_float8_tests ${backend} --float16)
-        add_test(NAME floating_random_${backend} COMMAND elman_float8_tests ${backend} --floating-random)
-        add_test(NAME tensor_${backend} COMMAND elman_tensor_tests ${backend})
-        add_test(NAME kernels_${backend} COMMAND elman_kernel_tests ${backend})
-        add_test(NAME optimizer_${backend} COMMAND elman_optimizer_tests ${backend})
-        set_tests_properties(float64_${backend} integer_${backend} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300)
-        set_tests_properties(float8_${backend} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 300 RUN_SERIAL TRUE
-            LABELS "dtype;float8;float16;float32;lowprecision;optimizer;checkpoint;random;dropout;attention;sampling")
-        set_tests_properties(float16_${backend} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 60 LABELS "dtype;float16")
-        set_tests_properties(floating_random_${backend} PROPERTIES SKIP_RETURN_CODE 77 TIMEOUT 180 RUN_SERIAL TRUE
-            LABELS "dtype;float32;float16;random")
-        set_tests_properties(tensor_${backend} kernels_${backend} optimizer_${backend} PROPERTIES SKIP_RETURN_CODE 77)
-        set_tests_properties(float64_${backend} PROPERTIES LABELS "dtype;float64")
-        set_tests_properties(integer_${backend} PROPERTIES LABELS "dtype;integer")
-        set_property(TEST tensor_${backend} kernels_${backend} optimizer_${backend} APPEND PROPERTY LABELS float32)
-        set_property(TEST kernels_${backend} APPEND PROPERTY LABELS float16)
-    endforeach()
-
-    if(ELMAN_ENABLE_CUDA)
-        set_tests_properties(memory_cuda paged_cache_cuda indexed_copy_cuda allocation_pool_cuda contiguous_view_cuda
-            attention_memory_cuda execution_cuda host_staging_cuda storage_layout_cuda storage_cuda
-            PROPERTIES SKIP_RETURN_CODE 77)
-        set_tests_properties(host_staging_cuda storage_layout_cuda PROPERTIES RUN_SERIAL TRUE TIMEOUT 120)
-        set_tests_properties(execution_cuda PROPERTIES RUN_SERIAL TRUE)
-    endif()
-
-    add_test(NAME cache_blocks COMMAND elman_cache_blocks)
-    set_tests_properties(cache_blocks PROPERTIES LABELS "llm;memory;paged-cache" TIMEOUT 60)
-    add_test(NAME text_stream COMMAND elman_text_stream_tests)
-    add_test(NAME tokenizer COMMAND elman_tokenizer_tests)
-    add_test(NAME model_io COMMAND elman_model_io_tests)
-    if(ELMAN_LLM_MODEL_DIR)
-        add_test(NAME chat_output COMMAND elman_chat_tests "${ELMAN_LLM_MODEL_DIR}")
-        set_tests_properties(chat_output PROPERTIES LABELS "text" RUN_SERIAL TRUE TIMEOUT 60)
-    endif()
+    add_subdirectory(Tests)
 endif()

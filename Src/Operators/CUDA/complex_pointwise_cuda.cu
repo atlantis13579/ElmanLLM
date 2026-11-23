@@ -23,9 +23,9 @@ __global__ void complex_kernel(ComplexPointwise operation, uint32_t* out, const 
     const uint64_t index = uint64_t(blockIdx.x) * blockDim.x + threadIdx.x;
     if (index >= uint64_t(p.output_count())) return;
     const int i = int(index);
-    const auto x = complex_read<Real>(a, uint64_t(broadcast_index(i, KernelInput::A, p)), DType(p.input_dtype(KernelInput::A)), Reader{});
-    const auto y = arity > 1 ? complex_read<Real>(b, uint64_t(broadcast_index(i, KernelInput::B, p)), DType(p.input_dtype(KernelInput::B)), Reader{}) : ComplexNumber<Real>{};
-    const auto z = arity > 2 ? complex_read<Real>(c, uint64_t(broadcast_index(i, KernelInput::C, p)), DType(p.input_dtype(KernelInput::C)), Reader{}) : ComplexNumber<Real>{};
+    const ComplexNumber<Real> x = complex_read<Real>(a, uint64_t(broadcast_index(i, KernelInput::A, p)), DType(p.input_dtype(KernelInput::A)), Reader{});
+    const ComplexNumber<Real> y = arity > 1 ? complex_read<Real>(b, uint64_t(broadcast_index(i, KernelInput::B, p)), DType(p.input_dtype(KernelInput::B)), Reader{}) : ComplexNumber<Real>{};
+    const ComplexNumber<Real> z = arity > 2 ? complex_read<Real>(c, uint64_t(broadcast_index(i, KernelInput::C, p)), DType(p.input_dtype(KernelInput::C)), Reader{}) : ComplexNumber<Real>{};
     complex_write(out, index, DType(p.output_dtype()), complex_pointwise_value(operation, x, y, z), Writer{});
 }
 }

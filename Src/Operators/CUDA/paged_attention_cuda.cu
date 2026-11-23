@@ -71,8 +71,8 @@ __global__ void paged_scores(Storage* scores, const Storage* query, const Storag
     const int kv_head = (head % s.heads) / (s.heads / s.kv_heads);
     const int code = map[(head / s.heads) * s.keys + int(i % s.keys)];
     const int slot = code >= 0 ? code : -(code + 1);
-    const auto q = query + size_t(head * s.queries + start + row % rows) * Width + lane;
-    const auto* k = code == INT_MIN ? nullptr : keys + ((size_t(slot) * s.kv_heads + kv_head) * Width + lane);
+    const Storage* const q = query + size_t(head * s.queries + start + row % rows) * Width + lane;
+    const Storage* k = code == INT_MIN ? nullptr : keys + ((size_t(slot) * s.kv_heads + kv_head) * Width + lane);
     float sum = float(q[0]) * (k ? float(k[0]) : 0.f);
     #pragma unroll
     for (int d = 32; d < Width; d += 32) {
@@ -96,7 +96,7 @@ __global__ void paged_values(Storage* out, const Storage* scores, const Storage*
     for (unsigned key = warp; key < unsigned(s.keys); key += warps) {
         const int code = slots[key];
         const int slot = code < 0 ? -(code + 1) : code;
-        const auto* v = code == INT_MIN ? nullptr : values + ((size_t(slot) * s.kv_heads + kv_head) * Width + lane);
+        const Storage* v = code == INT_MIN ? nullptr : values + ((size_t(slot) * s.kv_heads + kv_head) * Width + lane);
         const float weight = float(weights[key]);
         #pragma unroll
         for (int channel = 0; channel < channels_per_lane; ++channel) {
@@ -109,7 +109,7 @@ __global__ void paged_values(Storage* out, const Storage* scores, const Storage*
     }
     __syncthreads();
     if (warp) return;
-    auto destination = out + ((head * s.queries + start + row % rows) * Width + lane);
+    Storage* destination = out + ((head * s.queries + start + row % rows) * Width + lane);
     #pragma unroll
     for (int channel = 0; channel < channels_per_lane; ++channel) {
         const int d = lane + channel * 32;
@@ -124,8 +124,8 @@ void launch_warp_paged_tile(uint32_t* out, uint32_t* scores, const uint32_t* q, 
                            const PagedAttentionShape& shape, int rows, int start, const KernelParams& p) {
     const int query_rows = shape.batch * shape.heads * rows;
     constexpr int warps = 8;
-    auto stream = current_cuda_stream();
-    auto* typed_scores = reinterpret_cast<Storage*>(scores);
+    cudaStream_t stream = current_cuda_stream();
+    Storage* typed_scores = reinterpret_cast<Storage*>(scores);
     paged_scores<Width><<<(size_t(query_rows) * shape.keys + warps - 1) / warps, dim3(32,warps), 0, stream>>>(
         typed_scores, reinterpret_cast<const Storage*>(q), reinterpret_cast<const Storage*>(k), map, shape, rows, start);
     launch_attention_softmax_cuda(scores, scores, mask, nullptr, shape.probabilities(p, rows, start));
@@ -142,19 +142,19 @@ void launch_paged_attention_cuda(uint32_t* out, const uint32_t* q, const uint32_
         check_cuda_execution(cudaMemsetAsync(out, 0, size_t(p.output_count()) * bytes, current_cuda_stream()), "empty paged attention");
         return;
     }
-    auto score_buffer = backend_workspace(Backend::CUDA, size_t(s.batch) * s.heads * s.tile * s.keys * bytes);
-    auto mask_buffer = backend_workspace(Backend::CUDA, size_t(s.batch) * s.keys * bytes);
-    auto* scores = static_cast<uint32_t*>(score_buffer->raw_pointer());
-    auto* mask = static_cast<uint32_t*>(mask_buffer->raw_pointer());
-    const auto* map = reinterpret_cast<const int32_t*>(encoded);
+    BufferPtr score_buffer = backend_workspace(Backend::CUDA, size_t(s.batch) * s.heads * s.tile * s.keys * bytes);
+    BufferPtr mask_buffer = backend_workspace(Backend::CUDA, size_t(s.batch) * s.keys * bytes);
+    uint32_t* scores = static_cast<uint32_t*>(score_buffer->raw_pointer());
+    uint32_t* mask = static_cast<uint32_t*>(mask_buffer->raw_pointer());
+    const int32_t* map = reinterpret_cast<const int32_t*>(encoded);
     const float minimum = s.dtype == int(DType::Float16) ? -65504.f :
         s.dtype == int(DType::BFloat16) ? -3.3895313892515355e38f : -3.402823466e38f;
     const int mask_count = s.batch * s.keys;
     mask_kernel<<<(size_t(mask_count) + 255) / 256, 256, 0, current_cuda_stream()>>>(mask, map, mask_count, s.dtype, minimum);
     if (p.attribute(5)) {
         const int matrices = s.batch * s.heads;
-        auto pointer_buffer = backend_workspace(Backend::CUDA, size_t(matrices) * 3 * sizeof(void*));
-        auto arrays = static_cast<void**>(pointer_buffer->raw_pointer());
+        BufferPtr pointer_buffer = backend_workspace(Backend::CUDA, size_t(matrices) * 3 * sizeof(void*));
+        void** arrays = static_cast<void**>(pointer_buffer->raw_pointer());
         for (int next = 0; next < s.queries; next += std::min(s.tile, s.queries - next)) {
             const int rows = s.tile, start = std::min(next, s.queries - rows);
             AttentionGemm qk{DType(s.dtype), rows, s.keys, s.dimension, matrices, s.heads / s.kv_heads,

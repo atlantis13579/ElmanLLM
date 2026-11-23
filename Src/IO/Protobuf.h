@@ -7,7 +7,7 @@ namespace elman::io::protobuf {
 inline uint64_t varint(Bytes bytes, size_t& offset) {
     uint64_t value = 0;
     for (unsigned shift = 0; shift <= 63; shift += 7) {
-        const auto next = bytes.le(offset++, 1);
+        const uint64_t next = bytes.le(offset++, 1);
         require(shift != 63 || next <= 1, "Protobuf varint exceeds 64 bits");
         value |= (next & 127) << shift;
         if (!(next & 128)) return value;
@@ -36,14 +36,14 @@ public:
     explicit Message(Bytes bytes = {}) {
         size_t offset = 0;
         while (offset < bytes.size) {
-            const auto tag = varint(bytes, offset);
+            const uint64_t tag = varint(bytes, offset);
             require((tag >> 3) > 0 && (tag >> 3) < (1u << 29), "Invalid protobuf tag");
             Field field{uint32_t(tag >> 3), unsigned(tag & 7)};
             switch (field.wire) {
                 case 0: field.value = varint(bytes, offset); break;
                 case 1: field.value = bytes.le(offset, 8); offset += 8; break;
                 case 2: {
-                    const auto length = varint(bytes, offset);
+                    const uint64_t length = varint(bytes, offset);
                     require(length <= bytes.size - offset, "Truncated protobuf field");
                     field.data = bytes.sub(offset, size_t(length));
                     offset += size_t(length);
@@ -61,25 +61,25 @@ public:
         return nullptr;
     }
     Bytes bytes(uint32_t number) const {
-        const auto value = field(number);
+        const Field* const value = field(number);
         return value ? value->bytes() : Bytes{};
     }
     std::string string(uint32_t number) const {
-        const auto value = bytes(number);
+        const Bytes value = bytes(number);
         return value.text(0, value.size);
     }
     uint64_t integer(uint32_t number, uint64_t fallback = 0) const {
-        const auto value = field(number);
+        const Field* const value = field(number);
         return value ? value->integer() : fallback;
     }
     std::vector<Bytes> messages(uint32_t number) const {
         std::vector<Bytes> values;
-        for (const auto& field : fields_) if (field.number == number) values.push_back(field.bytes());
+        for (const io::protobuf::Field& field : fields_) if (field.number == number) values.push_back(field.bytes());
         return values;
     }
     std::vector<uint64_t> numbers(uint32_t number, size_t fixed_width = 0) const {
         std::vector<uint64_t> values;
-        for (const auto& field : fields_) {
+        for (const io::protobuf::Field& field : fields_) {
             if (field.number != number) continue;
             if (field.wire != 2) values.push_back(field.value);
             else {

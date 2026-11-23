@@ -4,15 +4,15 @@
 
 namespace elman::metal {
 Tensor lower_packed_linear(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto input = inputs[0];
-  auto weight = inputs[1];
-  auto bias = inputs[2];
+  Tensor input = inputs[0];
+  Tensor weight = inputs[1];
+  Tensor bias = inputs[2];
   const int rank = weight.shape.count;
   weight = m.cast(m.transpose(weight, rank - 2, rank - 1), input.dataType);
   if (input.shape.count == 1) {
     input = m.reshape(input, @[ @1, input.shape[0] ]);
   }
-  auto result = m.matmul(input, weight);
+  Tensor result = m.matmul(input, weight);
   if (bias) {
     result = m.add(result, m.cast(bias, input.dataType));
   }
@@ -22,7 +22,7 @@ Tensor lower_packed_linear(Graph m, const Operands& inputs, const KernelParams& 
   }
   const int rows = p.output_count() / columns;
   result = m.reshape(result, @[ @(rows), @(columns) ]);
-  auto* partitions = [NSMutableArray<MPSGraphTensor*> array];
+  NSMutableArray<MPSGraphTensor*>* partitions = [NSMutableArray<MPSGraphTensor*> array];
   int start = 0;
   for (int group = 0; group < p.attribute(operator_attr::packed_linear::kCount); ++group) {
     const int count = p.attribute(operator_attr::packed_linear::kWidths + group);

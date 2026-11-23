@@ -5,7 +5,7 @@
 namespace elman {
 void validate_low_precision_pointwise(LowPrecisionPointwise op, const BufferPtr& output,
                                       const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     const int arity = low_precision_pointwise_arity(op);
     require(inputs.size() >= size_t(arity) && inputs.size() <= 4, "Invalid low precision pointwise operand count");
     for (size_t i = arity; i < inputs.size(); ++i) require(!inputs[i], "Unexpected low precision pointwise operand");
@@ -19,7 +19,7 @@ void validate_low_precision_pointwise(LowPrecisionPointwise op, const BufferPtr&
     std::vector<int> shape;
     for (int i = 0; i < arity; ++i) {
         require(bool(inputs[i]), "Missing low precision pointwise operand");
-        const auto input = KernelInput(i);
+        const KernelInput input = KernelInput(i);
         const int rank = p.input_rank(input);
         require(rank >= 0 && rank <= 8, "Invalid low precision pointwise input rank");
         const bool scalar = arity == 2 && !low_precision_pointwise_boolean(op) &&
@@ -59,8 +59,8 @@ void validate_low_precision_pointwise(LowPrecisionPointwise op, const BufferPtr&
     require(count == output->count && p.output_count() == int(count), "Low precision pointwise output differs from storage");
     for (int i = 0; i < arity; ++i) {
         if (!output->bytes || !inputs[i]->bytes) continue;
-        const auto a = reinterpret_cast<uintptr_t>(output->raw_pointer());
-        const auto b = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
+        const uintptr_t a = reinterpret_cast<uintptr_t>(output->raw_pointer());
+        const uintptr_t b = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
         const bool overlap = a <= b ? b - a < output->bytes : a - b < inputs[i]->bytes;
         if (!overlap) continue;
         require(a == b && output->dtype == inputs[i]->dtype && output->count == inputs[i]->count &&

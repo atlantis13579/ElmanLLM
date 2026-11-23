@@ -1,4 +1,5 @@
 #include "Inference/LLM/Generation.h"
+#include "Core/LocalFunction.h"
 #include "Inference/LLM/PagedKVCache.h"
 #include "Inference/LLM/Qwen2Graph.h"
 #include "Inference/LLM/Qwen2PagedGraph.h"
@@ -25,7 +26,7 @@ using Clock = std::chrono::steady_clock;
 ExecutionStream inference_stream(Backend backend) {
     // A worker reuses its queue and vendor context across sequential requests.
     thread_local std::map<std::pair<Backend, int>, ExecutionStream> streams;
-    auto key = std::make_pair(backend, detail::allocation_device(backend));
+    std::pair<Backend, int> key = std::make_pair(backend, detail::allocation_device(backend));
     auto found = streams.find(key);
     if (found == streams.end()) found = streams.emplace(key, ExecutionStream(backend)).first;
     return found->second;
@@ -50,7 +51,7 @@ void require(bool condition, const std::string& message) {
 }
 Json integers(const std::vector<int32_t>& values) {
     Json::Array result;
-    for (auto value : values) result.emplace_back(value);
+    for (int value : values) result.emplace_back(value);
     return result;
 }
 int integer(const std::string& value) {
@@ -69,14 +70,14 @@ uint64_t seed_number(const std::string& value) {
     require(!value.empty() && std::all_of(value.begin(), value.end(), [](char c) { return c >= '0' && c <= '9'; }),
             "seed must be an unsigned decimal integer");
     size_t used = 0;
-    auto result = std::stoull(value, &used);
+    unsigned long long result = std::stoull(value, &used);
     require(used == value.size(), "invalid seed");
     return result;
 }
 size_t memory_mib(const std::string& value) {
     require(!value.empty() && std::all_of(value.begin(), value.end(), [](char c) { return c >= '0' && c <= '9'; }),
             "memory MiB must be an unsigned decimal integer");
-    auto result = std::stoull(value);
+    unsigned long long result = std::stoull(value);
     require(result <= std::numeric_limits<size_t>::max(), "memory value exceeds size_t");
     return checked_memory_mul(size_t(result), 1024 * 1024);
 }
@@ -88,7 +89,7 @@ Json memory_json(const MemoryReport& report) {
 }
 Json device_memory_json(const std::vector<DeviceMemoryReport>& reports) {
     Json::Array result;
-    for (const auto& item : reports) result.emplace_back(Json::Object{{"ordinal", item.ordinal}, {"memory", memory_json(item.memory)}});
+    for (const DeviceMemoryReport& item : reports) result.emplace_back(Json::Object{{"ordinal", item.ordinal}, {"memory", memory_json(item.memory)}});
     return result;
 }
 void merge_memory(MemoryReport& memory, const MemoryReport& report) {
@@ -177,8 +178,8 @@ struct GenerationSession::Impl {
                 model.execution_stages() == 1 && model.tensor_parallel_size() == 1 && model.tiled_attention_enabled()),
                 "CUDA Graph requires single-device Qwen with tiled attention");
         if (cache_pool) {
-            auto shape = cache_pool->shape();
-            const auto& c = model.config();
+            PagedKVShape shape = cache_pool->shape();
+            const DecoderConfig& c = model.config();
             require(cache_pool->backend() == model.backend() && cache_pool->dtype() == model.dtype() &&
                     shape.layers == c.layers && shape.heads == c.kv_heads && shape.dimension == c.head_dim(),
                     "shared cache pool does not match model");
@@ -219,7 +220,7 @@ struct GenerationSession::Impl {
     void initialize() {
         if (initialized) return;
         if (options.paged_cache) {
-            const auto& c = model.config();
+            const DecoderConfig& c = model.config();
             int total = int(input.size()) + count;
             if (!cache_pool) cache_pool = std::make_shared<PagedKVPool>(
                 PagedKVShape{c.layers, c.kv_heads, c.head_dim(), 16, int((size_t(total) + 15) / 16)},
@@ -230,7 +231,7 @@ struct GenerationSession::Impl {
     }
     int32_t select() {
         int vocabulary = model.config().vocabulary;
-        auto last = contiguous_view(output.logits, {1, vocabulary}, output.logits.numel() - vocabulary);
+        Tensor last = contiguous_view(output.logits, {1, vocabulary}, output.logits.numel() - vocabulary);
         if (options.do_sample) return sample_tokens(last,
             Tensor::from_int_data({1, int(history.size())}, history, model.backend()), options.sampling, rng).front();
         return greedy_token(last);
@@ -267,18 +268,18 @@ struct GenerationSession::Impl {
         if (cancelled.load()) { finish("cancelled"); return 0; }
         initialize();
         bool prefill = state == GenerationState::Prefill;
-        auto start = Clock::now();
+        std::chrono::steady_clock::time_point start = Clock::now();
         int consumed = 1;
         try {
-            const auto logits = options.full_logits ? Qwen2Logits::All : Qwen2Logits::Last;
+            const DecoderLogits logits = options.full_logits ? Qwen2Logits::All : Qwen2Logits::Last;
             if (prefill) {
                 int offset = result.prefill_tokens, total = int(input.size());
                 consumed = std::min(budget, total - offset);
                 if (options.prefill_chunk_size) consumed = std::min(consumed, options.prefill_chunk_size);
                 int end = offset + consumed;
-                auto ids = Tensor::from_int_data({1, consumed},
+                Tensor ids = Tensor::from_int_data({1, consumed},
                     std::vector<int32_t>(input.begin() + offset, input.begin() + end));
-                auto selection = end == total ? logits : Qwen2Logits::None;
+                DecoderLogits selection = end == total ? logits : Qwen2Logits::None;
                 output = cache ? model.forward_paged(ids, *cache, {}, {}, false, selection) :
                     model.forward(ids, {}, {}, offset ? &output.cache : nullptr, false, selection);
             } else if (options.cuda_graph && cache) {
@@ -287,7 +288,7 @@ struct GenerationSession::Impl {
                 PagedKVBatch batch({cache.get()});
                 const std::vector<int32_t> tokens{result.ids.back()};
                 if (!paged_graph) {
-                    const auto capture_start = Clock::now();
+                    const std::chrono::steady_clock::time_point capture_start = Clock::now();
                     paged_graph = std::make_unique<Qwen2PagedGraph>(dynamic_cast<const Qwen2&>(model), batch, capacity, tokens);
                     result.graph_capture_ms += elapsed(capture_start);
                     result.graph_commands = paged_graph->commands();
@@ -300,7 +301,7 @@ struct GenerationSession::Impl {
                 }
             } else if (options.cuda_graph) {
                 if (!graph) {
-                    const auto capture_start = Clock::now();
+                    const std::chrono::steady_clock::time_point capture_start = Clock::now();
                     graph = std::make_unique<Qwen2Graph>(dynamic_cast<const Qwen2&>(model), options.max_context, output.cache);
                     result.graph_capture_ms = elapsed(capture_start);
                     result.graph_commands = graph->commands(); result.graph_nodes = graph->nodes();
@@ -310,7 +311,7 @@ struct GenerationSession::Impl {
                 output.logits = graph->decode(result.ids.back());
                 ++result.graph_replays;
             } else {
-                auto ids = Tensor::from_int_data({1, 1}, {result.ids.back()});
+                Tensor ids = Tensor::from_int_data({1, 1}, {result.ids.back()});
                 output = cache ? model.forward_paged(ids, *cache, {}, {}, false, logits) :
                     model.forward(ids, {}, {}, &output.cache, false, logits);
             }
@@ -344,7 +345,7 @@ void GenerationSession::cancel() {
     if (!impl_->busy && !finished()) impl_->finish("cancelled");
 }
 int GenerationSession::step(int token_budget) {
-    auto& s = *impl_;
+    GenerationSession::Impl& s = *impl_;
     DeviceScope owner(s.model.backend(), s.device);
     s.check_owner();
     require(token_budget > 0, "step token budget must be positive");
@@ -359,7 +360,7 @@ int GenerationSession::step(int token_budget) {
         // that a later step will fit if other requests consume the remaining RAM.
         int chunk = s.state == GenerationState::Decode ? 1 :
             std::min(token_budget, s.options.prefill_chunk_size ? s.options.prefill_chunk_size : token_budget);
-        auto plan = plan_decoder_generation(s.model.config(), s.model.backend(), s.model.dtype(), s.input.size(), size_t(s.count),
+        DecoderMemoryPlan plan = plan_decoder_generation(s.model.config(), s.model.backend(), s.model.dtype(), s.input.size(), size_t(s.count),
             s.options.do_sample, s.model.tiled_attention_enabled(), s.model.packed_projections(), s.options.paged_cache,
             chunk, s.options.full_logits, s.model.quantization_workspace_bytes());
         if (s.paged_graph && s.state == GenerationState::Decode &&
@@ -367,27 +368,27 @@ int GenerationSession::step(int token_budget) {
             s.paged_graph.reset();
         if (!s.graph && !s.paged_graph) add_graph_memory(plan, s.model.config(), s.model.dtype(), s.options, s.model.quantization_workspace_bytes());
         if (s.prefixes) {
-            auto bytes=s.prefixes->publication_bytes();
+            size_t bytes=s.prefixes->publication_bytes();
             plan.host_additional_bytes=checked_memory_add(plan.host_additional_bytes,bytes);
             if (s.model.backend()==Backend::CPU) plan.additional_bytes=checked_memory_add(plan.additional_bytes,bytes);
         }
         plan.host_additional_bytes = checked_memory_add(plan.host_additional_bytes,
             staging_allowance(s.model.backend(), s.options.asynchronous, s.options.pinned_staging));
         DecoderMemoryAdmission admission(s.model, s.options.memory, plan);
-        auto stream = inference_stream(s.model.backend());
+        ExecutionStream stream = inference_stream(s.model.backend());
         FailedTransferGuard transfers{stream, &s.model};
         StreamScope execution(stream, s.options.asynchronous, s.options.pinned_staging);
         admission.enable_pools(s.options.reuse_memory);
         int consumed = s.advance(token_budget);
         s.model.synchronize();
         stream.synchronize();
-        auto report = admission.report();
+        MemoryReport report = admission.report();
         merge_memory(s.result.memory, report);
-        const auto reports = admission.device_reports();
+        const std::vector<DeviceMemoryReport> reports = admission.device_reports();
         if (s.result.device_memory.empty()) s.result.device_memory = reports;
         else for (size_t i = 0; i < reports.size(); ++i) merge_memory(s.result.device_memory[i].memory, reports[i].memory);
-        auto stats = admission.allocation_stats();
-        auto& allocations = s.result.allocations;
+        AllocationPoolStats stats = admission.allocation_stats();
+        AllocationPoolStats& allocations = s.result.allocations;
         allocations.requests += stats.requests;
         allocations.allocations += stats.allocations;
         allocations.reuses += stats.reuses;
@@ -405,7 +406,7 @@ int GenerationSession::step(int token_budget) {
 }
 
 GenerationBatchResult step_generation_batch(const std::vector<GenerationSession*>& sessions, const GenerationBatchOptions& options) {
-    const auto started=Clock::now();
+    const std::chrono::steady_clock::time_point started=Clock::now();
     require(options.token_budget>0, "batch token budget must be positive");
     require(sessions.size()<=size_t(std::numeric_limits<int>::max()), "request batch exceeds Int32");
     MemoryReservation descriptors(Backend::CPU,checked_memory_mul(sessions.size(),256));
@@ -413,9 +414,9 @@ GenerationBatchResult step_generation_batch(const std::vector<GenerationSession*
     result.consumed.resize(sessions.size()); result.errors.resize(sessions.size()); result.publications.resize(sessions.size());
     std::vector<GenerationSession::Impl*> all, active;
     std::vector<size_t> indices;
-    for (auto* session : sessions) {
+    for (GenerationSession* session : sessions) {
         require(session!=nullptr, "null generation session");
-        auto* s=session->impl_.get(); s->check_owner();
+        GenerationSession::Impl* s=session->impl_.get(); s->check_owner();
         require(!s->busy, "cannot reenter a batched session");
         require(std::find(all.begin(),all.end(),s)==all.end(), "duplicate generation session");
         all.push_back(s);
@@ -425,12 +426,12 @@ GenerationBatchResult step_generation_batch(const std::vector<GenerationSession*
                                      "batched sessions must share one model and pool handle");
         indices.push_back(all.size()-1); active.push_back(s);
     }
-    for (auto* s : all) if (!s->finished() && s->cancelled.load()) s->finish("cancelled");
+    for (GenerationSession::Impl* s : all) if (!s->finished() && s->cancelled.load()) s->finish("cancelled");
     if (active.empty()) { result.elapsed_ms=elapsed(started); return result; }
     require(size_t(options.token_budget)>=active.size(), "batch token budget cannot fit every active row");
     int query=options.token_budget/int(active.size());
     MemoryBudget budget=options.memory;
-    for (auto* s : active) {
+    for (GenerationSession::Impl* s : active) {
         query=std::min(query,s->pending_input_tokens());
         if (s->options.memory.limit_bytes && (!budget.limit_bytes || s->options.memory.limit_bytes<budget.limit_bytes))
             budget.limit_bytes=s->options.memory.limit_bytes;
@@ -439,7 +440,7 @@ GenerationBatchResult step_generation_batch(const std::vector<GenerationSession*
     // A concurrent cancellation after membership selection is applied at the
     // committed step boundary; it must not change the shape of the group.
     if (!query) {
-        for (auto* s : active) if (s->cancelled.load()) s->finish("cancelled");
+        for (GenerationSession::Impl* s : active) if (s->cancelled.load()) s->finish("cancelled");
         result.elapsed_ms=elapsed(started); return result;
     }
     const DecoderModel& model=active.front()->model;
@@ -447,7 +448,7 @@ GenerationBatchResult step_generation_batch(const std::vector<GenerationSession*
     bool sampled=false, pinned_staging=options.pinned_staging;
     bool decode_only = true;
     Qwen2Logits selection=Qwen2Logits::None;
-    for (auto* s : active) {
+    for (GenerationSession::Impl* s : active) {
         decode_only &= s->state == GenerationState::Decode;
         pinned_staging &= s->options.pinned_staging;
         size_t length=s->cache ? size_t(s->cache->length()) : 0;
@@ -462,10 +463,10 @@ GenerationBatchResult step_generation_batch(const std::vector<GenerationSession*
             std::min(size_t(s->cache_pool->shape().blocks),(s->input.size()+size_t(s->count)+15)/16),sizeof(CacheBlock)));
         if (s->prefixes) leases=checked_memory_add(leases,s->prefixes->publication_bytes());
     }
-    for (auto* s : active) s->busy=true;
+    for (GenerationSession::Impl* s : active) s->busy=true;
     bool published=false;
     try {
-        auto plan=plan_qwen_batch(model.config(),model.backend(),model.dtype(),active.size(),size_t(query),previous+size_t(query),
+        QwenBatchMemoryPlan plan=plan_qwen_batch(model.config(),model.backend(),model.dtype(),active.size(),size_t(query),previous+size_t(query),
                                   selection,sampled,model.tiled_attention_enabled(),16,model.quantization_workspace_bytes(selection));
         const Qwen2* graph_model = nullptr;
         int graph_capacity = 0;
@@ -475,7 +476,7 @@ GenerationBatchResult step_generation_batch(const std::vector<GenerationSession*
                     "Batch decode graph requires the CUDA Qwen paged backend");
             const int limit = options.graph_context_limit > 0 ? options.graph_context_limit : model.config().max_positions;
             graph_capacity = Qwen2PagedGraph::context_bucket(static_cast<int>(previous) + 1, limit);
-            auto& graph = *options.decode_graph;
+            std::unique_ptr<Qwen2PagedGraph>& graph = *options.decode_graph;
             if (graph && !graph->matches(int(active.size()), graph_capacity)) graph.reset();
             if (!graph) plan.additional_bytes = checked_memory_add(plan.additional_bytes,
                 Qwen2PagedGraph::memory_bound(*graph_model, int(active.size()), graph_capacity));
@@ -487,26 +488,26 @@ GenerationBatchResult step_generation_batch(const std::vector<GenerationSession*
         plan.host_additional_bytes=checked_memory_add(plan.host_additional_bytes,
             staging_allowance(model.backend(),options.asynchronous,pinned_staging));
         MemoryAdmission admission(model.backend(),budget,plan.additional_bytes,plan.host_additional_bytes);
-        auto stream=inference_stream(model.backend());
+        ExecutionStream stream=inference_stream(model.backend());
         FailedTransferGuard transfers{stream};
         StreamScope execution(stream,options.asynchronous,pinned_staging);
         AllocationPool allocations(model.backend(),admission.report().estimated_peak_bytes,options.reuse_memory);
         std::vector<int32_t> tokens; tokens.reserve(active.size()*query);
         std::vector<PagedKVCache*> caches;
-        for (auto* s : active) {
+        for (GenerationSession::Impl* s : active) {
             s->initialize(); caches.push_back(s->cache.get());
             if (s->state==GenerationState::Decode) tokens.push_back(s->result.ids.back());
             else tokens.insert(tokens.end(),s->input.begin()+s->result.prefill_tokens,s->input.begin()+s->result.prefill_tokens+query);
         }
-        const auto forward_started=Clock::now();
+        const std::chrono::steady_clock::time_point forward_started=Clock::now();
         Qwen2Output output;
         {
             PagedKVBatch batch(caches);
             if (graph_model) {
-                auto& graph = *options.decode_graph;
+                std::unique_ptr<Qwen2PagedGraph>& graph = *options.decode_graph;
                 try {
                     if (!graph) {
-                        auto started_graph = Clock::now();
+                        std::chrono::steady_clock::time_point started_graph = Clock::now();
                         graph = std::make_unique<Qwen2PagedGraph>(*graph_model, batch, graph_capacity, tokens);
                         result.graph_captures = 1;
                         result.graph_capture_ms = elapsed(started_graph);
@@ -527,17 +528,17 @@ GenerationBatchResult step_generation_batch(const std::vector<GenerationSession*
             }
         }
         published=true;
-        const auto forward_ms=elapsed(forward_started);
+        const double forward_ms=elapsed(forward_started);
         result.query_tokens=query; result.input_tokens=int(active.size())*query;
         for (size_t row=0; row<active.size(); ++row) {
-            auto* s=active[row]; bool prefill=s->state==GenerationState::Prefill;
+            GenerationSession::Impl* s=active[row]; bool prefill=s->state==GenerationState::Prefill;
             s->publication={};
-            auto processing=Clock::now(); result.consumed[indices[row]]=query;
+            std::chrono::steady_clock::time_point processing=Clock::now(); result.consumed[indices[row]]=query;
             try {
                 s->output={};
                 bool ready=!prefill || s->result.prefill_tokens+query==int(s->input.size());
                 if (ready && !s->cancelled.load()) {
-                    auto shape = output.logits.shape();
+                    Shape shape = output.logits.shape();
                     const size_t row_elements = output.logits.numel() / shape[0];
                     shape[0] = 1;
                     s->output.logits = contiguous_view(output.logits, shape, row * row_elements);
@@ -553,7 +554,7 @@ GenerationBatchResult step_generation_batch(const std::vector<GenerationSession*
         }
         stream.synchronize();
         result.memory=admission.report(); result.allocations=allocations.stats();
-        for (auto* s : active) {
+        for (GenerationSession::Impl* s : active) {
             if (graph_model) {
                 s->result.graph_commands = result.graph_commands;
                 s->result.graph_nodes = result.graph_nodes;
@@ -561,7 +562,7 @@ GenerationBatchResult step_generation_batch(const std::vector<GenerationSession*
                 s->result.graph_replays += result.graph_replays;
                 s->result.graph_capture_ms += result.graph_capture_ms;
             }
-            auto& memory=s->result.memory; const auto& report=result.memory;
+            MemoryReport& memory=s->result.memory; const MemoryReport& report=result.memory;
             memory.budget_bytes=std::max(memory.budget_bytes,report.budget_bytes);
             memory.host_budget_bytes=std::max(memory.host_budget_bytes,report.host_budget_bytes);
             memory.estimated_peak_bytes=std::max(memory.estimated_peak_bytes,report.estimated_peak_bytes);
@@ -571,7 +572,7 @@ GenerationBatchResult step_generation_batch(const std::vector<GenerationSession*
             s->busy=false;
         }
     } catch (...) {
-        for (auto* s : active) { if (published && !s->finished()) s->finish("error",true); s->busy=false; }
+        for (GenerationSession::Impl* s : active) { if (published && !s->finished()) s->finish("error",true); s->busy=false; }
         throw;
     }
     result.elapsed_ms=elapsed(started);
@@ -591,14 +592,14 @@ GenerationResult generate(const DecoderModel& model, const std::vector<int32_t>&
     int count = validate_request(model.config(), input, options);
     GenerationResult result;
     if (count == 0) return result;
-    auto plan = plan_decoder_generation(model.config(), model.backend(), model.dtype(), input.size(), size_t(count),
+    DecoderMemoryPlan plan = plan_decoder_generation(model.config(), model.backend(), model.dtype(), input.size(), size_t(count),
                                      options.do_sample, model.tiled_attention_enabled(), model.packed_projections(), options.paged_cache,
                                      options.prefill_chunk_size, options.full_logits, model.quantization_workspace_bytes());
     add_graph_memory(plan, model.config(), model.dtype(), options, model.quantization_workspace_bytes());
     plan.host_additional_bytes = checked_memory_add(plan.host_additional_bytes,
         staging_allowance(model.backend(), options.asynchronous, options.pinned_staging));
     DecoderMemoryAdmission admission(model, options.memory, plan);
-    auto stream = inference_stream(model.backend());
+    ExecutionStream stream = inference_stream(model.backend());
     FailedTransferGuard transfers{stream, &model};
     StreamScope execution(stream, options.asynchronous, options.pinned_staging);
     admission.enable_pools(options.reuse_memory);
@@ -629,11 +630,11 @@ GenerationResult generate_text(const DecoderModel& model, const HuggingFaceToken
     TokenizerStream decoder(tokenizer, true);
     TextStopFilter filter(stops);
     std::string text;
-    auto emit = [&](const std::string& piece) {
+    LocalFunction emit{[&](const std::string& piece) {
         text += piece;
         if (on_text && !piece.empty()) on_text(piece);
-    };
-    auto result = generate(model, input, options, [&](int32_t id) {
+    }};
+    GenerationResult result = generate(model, input, options, [&](int32_t id) {
         emit(filter.push(decoder.push(id)));
         return !filter.stopped();
     });
@@ -687,8 +688,8 @@ int generate_command(int argc, char** argv) {
             require(device_ordinals.empty() && !value.empty(), "--devices requires one nonempty comma-separated list");
             size_t begin = 0;
             do {
-                const auto end = value.find(',', begin);
-                const auto token = value.substr(begin, end == std::string::npos ? end : end - begin);
+                const size_t end = value.find(',', begin);
+                const std::string token = value.substr(begin, end == std::string::npos ? end : end - begin);
                 require(!token.empty() && std::all_of(token.begin(), token.end(), [](char c) { return c >= '0' && c <= '9'; }),
                     "device ordinals must be nonnegative decimal integers");
                 device_ordinals.push_back(integer(token));
@@ -710,7 +711,7 @@ int generate_command(int argc, char** argv) {
         else throw std::invalid_argument("Unknown generation option: " + key);
     }
     require(!input_path.empty(), "generate requires --input JSON");
-    const auto supplied_path = std::filesystem::absolute(model_path).lexically_normal();
+    const std::filesystem::path supplied_path = std::filesystem::absolute(model_path).lexically_normal();
     require(std::filesystem::exists(supplied_path), "Model path does not exist: " + model_path);
     if (std::filesystem::is_regular_file(supplied_path)) {
         require(supplied_path.filename() == "model.safetensors" || supplied_path.filename() == "model.safetensors.index.json",
@@ -724,7 +725,7 @@ int generate_command(int argc, char** argv) {
     require(options.max_new_tokens >= 0 && options.max_context > 0, "invalid output or context limit");
     require(options.prefill_chunk_size >= 0, "prefill_chunk_size must be nonnegative");
     require(options.do_sample || !sampling_set, "sampling options require --sample");
-    auto backend = parse_backend(backend_name_);
+    Backend backend = parse_backend(backend_name_);
     require(backend_available(backend), "backend is unavailable");
     require(device_ordinals.empty() || backend == Backend::CUDA, "--devices requires CUDA");
     require(simulated_devices == 0 || (simulated_devices >= 2 && backend == Backend::CUDA && device_ordinals.size() <= 1),
@@ -736,24 +737,24 @@ int generate_command(int argc, char** argv) {
     if (tensor_parallel) {
         require(device_ordinals.empty() && !simulated_devices && !options.paged_cache && !options.cuda_graph,
                 "Tensor parallel generation requires eager contiguous caches with one device per rank");
-        const auto ranks = process_group_environment();
+        const ProcessGroupOptions ranks = process_group_environment();
         require(ranks.size > 1, "Launch tensor parallel generation with two or more ranks");
         parallel = std::make_shared<ProcessGroup>(ranks);
         if (backend == Backend::CUDA) ordinal = ranks.local_rank;
     }
     const bool primary = !parallel || parallel->rank() == 0;
     DeviceScope input_device(backend, ordinal);
-    auto dtype = parse_dtype(dtype_name_.empty() ? (backend == Backend::CUDA ? "bfloat16" : "float32") : dtype_name_);
+    DType dtype = parse_dtype(dtype_name_.empty() ? (backend == Backend::CUDA ? "bfloat16" : "float32") : dtype_name_);
     require(dtype == DType::Float32 || dtype == DType::Float16 || dtype == DType::BFloat16, "dtype must be float32, float16 or bfloat16");
-    auto requests = Json::read(input_path);
-    auto items = requests.is_array() ? requests.array() : Json::Array{requests};
+    Json requests = Json::read(input_path);
+    Json::Array items = requests.is_array() ? requests.array() : Json::Array{requests};
     require(!items.empty(), "request array is empty");
     std::unique_ptr<HuggingFaceTokenizer> tokenizer;
     if (std::any_of(items.begin(), items.end(), [](const Json& item) { return !item.contains("input_ids"); }))
         tokenizer = std::make_unique<HuggingFaceTokenizer>(model_path);
-    auto generation_path = std::filesystem::path(model_path) / "generation_config.json";
+    std::filesystem::path generation_path = std::filesystem::path(model_path) / "generation_config.json";
     if (std::filesystem::exists(generation_path)) {
-        auto config = Json::read(generation_path.string());
+        Json config = Json::read(generation_path.string());
         if (options.do_sample) {
             if (!temperature_set) options.sampling.temperature = config.number_or("temperature", 1);
             if (!top_k_set) options.sampling.top_k = config.int_or("top_k", 0);
@@ -761,34 +762,34 @@ int generate_command(int argc, char** argv) {
             if (!penalty_set) options.sampling.repetition_penalty = config.number_or("repetition_penalty", 1);
         }
         if (config.contains("eos_token_id") && !config.at("eos_token_id").is_null()) {
-            const auto& eos = config.at("eos_token_id");
-            if (eos.is_array()) for (const auto& value : eos.array()) options.eos_ids.push_back(value.integer());
+            const Json& eos = config.at("eos_token_id");
+            if (eos.is_array()) for (const Json& value : eos.array()) options.eos_ids.push_back(value.integer());
             else options.eos_ids.push_back(eos.integer());
         }
     } else if (tokenizer && tokenizer->eos_id() >= 0) options.eos_ids.push_back(tokenizer->eos_id());
     if (options.do_sample) validate_sampling(options.sampling);
     std::vector<std::vector<int32_t>> inputs;
     std::vector<std::vector<std::string>> request_stops;
-    for (const auto& item : items) {
+    for (const Json& item : items) {
         require(int(item.contains("prompt")) + int(item.contains("messages")) + int(item.contains("input_ids")) == 1,
             "each request needs exactly one of prompt, messages or input_ids");
         if (item.contains("input_ids")) {
             std::vector<int32_t> ids;
-            for (const auto& token : item.at("input_ids").array()) ids.push_back(token.integer());
+            for (const Json& token : item.at("input_ids").array()) ids.push_back(token.integer());
             inputs.push_back(std::move(ids));
             require(!stream && stops.empty() && !item.contains("stop"), "input_ids requests return IDs and do not support text streaming/stops");
         } else inputs.push_back(item.contains("prompt") ? tokenizer->encode(item.at("prompt").string()) :
                                 tokenizer->encode_chat(item.at("messages").array()));
-        auto strings = stops;
+        std::vector<std::string> strings = stops;
         if (item.contains("stop")) {
-            const auto& value = item.at("stop");
-            if (value.is_array()) for (const auto& stop : value.array()) strings.push_back(stop.string());
+            const Json& value = item.at("stop");
+            if (value.is_array()) for (const Json& stop : value.array()) strings.push_back(stop.string());
             else strings.push_back(value.string());
         }
         TextStopFilter validate_stops(strings);
         request_stops.push_back(std::move(strings));
     }
-    auto model_config = read_decoder_config(model_path);
+    DecoderConfig model_config = read_decoder_config(model_path);
     require(simulated_devices <= model_config.layers, "simulated stages exceed the number of layers");
     require(!model_config.latent_cache_rank || !options.paged_cache, "DeepSeek generation uses its compressed contiguous cache");
     if (model_config.latent_cache_rank) packed_projections = false;
@@ -796,20 +797,20 @@ int generate_command(int argc, char** argv) {
     require(!options.cuda_graph || (backend == Backend::CUDA && !model_config.latent_cache_rank &&
         device_ordinals.size() <= 1 && tiled_attention && options.max_context >= 2),
         "--cuda-graph requires single-device Qwen, tiled attention and context >= 2");
-    auto load_plans = parallel
+    std::vector<DeviceLoadPlan> load_plans = parallel
         ? std::vector<DeviceLoadPlan>{plan_qwen_tensor_parallel_load(model_path, backend, dtype, packed_projections, parallel->rank(), parallel->size())}
         : plan_decoder_load(model_path, backend, dtype, packed_projections, device_ordinals);
-    const auto& load_plan = load_plans.front().memory;
+    const DecoderMemoryPlan& load_plan = load_plans.front().memory;
     // Reject invalid or unaffordable requests before allocating model weights.
-    for (const auto& input : inputs) {
-        auto count = validate_request(model_config, input, options);
-        auto plan = plan_decoder_generation(model_config, backend, dtype, input.size(), size_t(count), options.do_sample, tiled_attention, packed_projections,
+    for (const std::vector<int>& input : inputs) {
+        int count = validate_request(model_config, input, options);
+        DecoderMemoryPlan plan = plan_decoder_generation(model_config, backend, dtype, input.size(), size_t(count), options.do_sample, tiled_attention, packed_projections,
             options.paged_cache, options.prefill_chunk_size, options.full_logits, load_plan.weight_workspace_bytes);
         add_graph_memory(plan, model_config, dtype, options, load_plan.weight_workspace_bytes);
         plan.host_additional_bytes = checked_memory_add(plan.host_additional_bytes,
             staging_allowance(backend, options.asynchronous, options.pinned_staging));
-        auto preflight_plans = load_plans;
-        for (auto& local : preflight_plans) {
+        std::vector<DeviceLoadPlan> preflight_plans = load_plans;
+        for (DeviceLoadPlan& local : preflight_plans) {
             local.memory.parameter_bytes = checked_memory_add(local.memory.parameter_bytes,
                 checked_memory_mul(plan.additional_bytes, size_t(std::max(1, simulated_devices))));
             const size_t stages = simulated_devices ? size_t(simulated_devices) : device_ordinals.size();
@@ -818,10 +819,10 @@ int generate_command(int argc, char** argv) {
         }
         DecoderMemoryAdmission preflight(backend, options.memory, preflight_plans, false);
     }
-    auto start = Clock::now();
+    std::chrono::steady_clock::time_point start = Clock::now();
     MemoryReport load_memory;
     std::vector<DeviceMemoryReport> load_device_memory;
-    auto owned_model = [&] {
+    std::unique_ptr<DecoderModel> owned_model = [&] {
         DecoderMemoryAdmission admission(backend, options.memory, load_plans, true);
         DecoderLoadOptions settings;
         settings.fused_pointwise = fused_pointwise;
@@ -834,16 +835,16 @@ int generate_command(int argc, char** argv) {
         settings.devices = device_ordinals;
         settings.simulated_devices = simulated_devices;
         settings.tensor_parallel = parallel;
-        auto loaded = load_decoder(model_path, backend, dtype, settings);
+        std::unique_ptr<DecoderModel> loaded = load_decoder(model_path, backend, dtype, settings);
         load_memory = admission.report();
         load_device_memory = admission.device_reports();
         return loaded;
     }();
-    const auto& model = *owned_model;
+    const DecoderModel& model = *owned_model;
     if (parallel) parallel->barrier();
     double load_ms = elapsed(start);
     Json::Array results;
-    auto record_result = [&](const std::string& name, const std::vector<int32_t>& input, const GenerationResult& result) {
+    LocalFunction record_result{[&](const std::string& name, const std::vector<int32_t>& input, const GenerationResult& result) {
         if (!primary || output_path.empty()) return;
         results.emplace_back(Json::Object{{"name", name},
             {"input_ids", integers(input)}, {"generated_ids", integers(result.ids)}, {"text", result.text},
@@ -857,12 +858,12 @@ int generate_command(int argc, char** argv) {
                 {"retained_bytes", double(result.graph_retained_bytes)}}},
             {"prefill_tokens", result.prefill_tokens}, {"prefill_chunks", result.prefill_chunks},
             {"allocations", allocation_json(result.allocations)}});
-    };
+    }};
     for (size_t i = 0; i < items.size(); ++i) {
         std::function<void(const std::string&)> on_text;
         if (stream && primary) on_text = [](const std::string& piece) { std::cout << piece << std::flush; };
         const bool token_input = items[i].contains("input_ids");
-        auto result = token_input ? generate(model, inputs[i], options) :
+        GenerationResult result = token_input ? generate(model, inputs[i], options) :
             generate_text(model, *tokenizer, inputs[i], options, request_stops[i], on_text);
         record_result(items[i].string_or("name", std::to_string(i)), inputs[i], result);
         if (primary) {

@@ -1,4 +1,5 @@
 #include "Arguments.h"
+#include "Core/LocalFunction.h"
 #include "ToolIO.h"
 
 #include <algorithm>
@@ -34,11 +35,11 @@ Options parse(const std::vector<std::string>& arguments) {
     Options options;
     for (size_t i = 0; i < arguments.size(); ++i) {
         const std::string_view argument = arguments[i];
-        const auto equals = argument.find('=');
-        const auto key = argument.substr(0, equals);
+        const size_t equals = argument.find('=');
+        const std::string_view key = argument.substr(0, equals);
         if (equals == std::string_view::npos && ++i == arguments.size())
             throw std::invalid_argument("Missing value for " + std::string(key));
-        const auto value = equals == std::string_view::npos ? std::string_view(arguments[i]) : argument.substr(equals + 1);
+        const std::string_view value = equals == std::string_view::npos ? std::string_view(arguments[i]) : argument.substr(equals + 1);
         if (key == "--model") options.source = fs::u8path(value);
         else if (key == "--output") options.destination = fs::u8path(value);
         else if (key == "--group-size") options.group_size = tools::integer_argument(value, key);
@@ -67,7 +68,7 @@ void write_bytes(std::ostream& out, const uint8_t* bytes, size_t count) {
 void copy_weight(std::ofstream& out, const SafetensorsWeights& source, const std::string& name, uint64_t bytes) {
     std::vector<uint8_t> buffer(static_cast<size_t>(std::min<uint64_t>(bytes, 1024 * 1024)));
     for (uint64_t offset = 0; offset < bytes;) {
-        const auto count = static_cast<size_t>(std::min<uint64_t>(buffer.size(), bytes - offset));
+        const size_t count = static_cast<size_t>(std::min<uint64_t>(buffer.size(), bytes - offset));
         source.read_bytes(name, offset, buffer.data(), count);
         write_bytes(out, buffer.data(), count);
         offset += count;
@@ -97,17 +98,17 @@ uint8_t quantize(float value, float inverse_scale) {
 
 Errors quantize_matrix(std::ofstream& out, const SafetensorsWeights& source,
                        const std::string& name, const Options& options, int rows, int columns, int groups, uint64_t code_bytes) {
-    const auto payload = out.tellp();
+    const std::streampos payload = out.tellp();
     Errors errors;
     for (int start = 0; start < rows;) {
         const int count = std::min(options.chunk_rows, rows - start);
-        const auto values = source.load_slice(name, 0, start, count, Backend::CPU).data();
+        const std::vector<float> values = source.load_slice(name, 0, start, count, Backend::CPU).data();
         std::vector<uint8_t> codes(values.size()), scales(size_t(count) * groups * 2);
         std::vector<Errors> by_row(static_cast<size_t>(count));
         parallel_for_cpu(count, 1, [&](int64_t begin, int64_t end) {
             for (int64_t row = begin; row < end; ++row) {
-                const auto base = static_cast<size_t>(row) * columns;
-                auto& metrics = by_row[static_cast<size_t>(row)];
+                const size_t base = static_cast<size_t>(row) * columns;
+                Errors& metrics = by_row[static_cast<size_t>(row)];
                 for (int group = 0; group < groups; ++group) {
                     const int first = group * options.group_size;
                     const int last = first + std::min(options.group_size, columns - first);
@@ -122,13 +123,13 @@ Errors quantize_matrix(std::ofstream& out, const SafetensorsWeights& source,
                     const float scale = numeric::bfloat_to_float(encoded);
                     if (!std::isfinite(scale) || !(scale > 0.f))
                         throw std::runtime_error("BF16 scale cannot represent source range: " + name);
-                    const auto scale_position = (static_cast<size_t>(row) * groups + group) * 2;
+                    const size_t scale_position = (static_cast<size_t>(row) * groups + group) * 2;
                     scales[scale_position] = static_cast<uint8_t>(encoded);
                     scales[scale_position + 1] = static_cast<uint8_t>(encoded >> 8);
                     const float inverse_scale = 1.f / scale;
                     for (int col = first; col < last; ++col) {
                         const float value = values[base + col];
-                        const auto code = quantize(value, inverse_scale);
+                        const uint8_t code = quantize(value, inverse_scale);
                         codes[base + col] = code;
                         const float reconstructed = numeric::bfloat_to_float(numeric::float_to_bfloat((int(code) - 8) * scale));
                         const float difference = reconstructed - value;
@@ -140,16 +141,16 @@ Errors quantize_matrix(std::ofstream& out, const SafetensorsWeights& source,
                 }
             }
         });
-        const auto packed_size = (codes.size() + 1) / 2;
+        const size_t packed_size = (codes.size() + 1) / 2;
         for (size_t i = 0; i < packed_size; ++i) {
-            const auto high = 2 * i + 1 < codes.size() ? codes[2 * i + 1] : 0;
+            const int high = 2 * i + 1 < codes.size() ? codes[2 * i + 1] : 0;
             codes[i] = static_cast<uint8_t>(codes[2 * i] | (high << 4));
         }
         out.seekp(payload + static_cast<std::streamoff>(uint64_t(start) * columns / 2));
         write_bytes(out, codes.data(), packed_size);
         out.seekp(payload + static_cast<std::streamoff>(code_bytes + uint64_t(start) * groups * 2));
         write_bytes(out, scales.data(), scales.size());
-        for (const auto& metrics : by_row) errors.add(metrics);
+        for (const Errors& metrics : by_row) errors.add(metrics);
         start += count;
     }
     const uint8_t zero_point[] = {8, 0, 0, 0};
@@ -159,50 +160,52 @@ Errors quantize_matrix(std::ofstream& out, const SafetensorsWeights& source,
 
 void export_weights(const Options& options) {
     if (fs::exists(options.destination)) throw std::invalid_argument("Choose a new output directory");
-    const auto config = Json::read(options.source / "config.json");
-    const auto model = config.at("model_type").string();
+    const Json config = Json::read(options.source / "config.json");
+    const std::string model = config.at("model_type").string();
     if (model != "qwen2" && model != "deepseek_v2" && model != "deepseek_v3")
         throw std::invalid_argument("Unsupported decoder weight layout: " + model);
     if (!fs::exists(options.source / "model.safetensors.index.json")) {
-        const auto path = fs::canonical(options.source / "model.safetensors");
+        const std::filesystem::path path = fs::canonical(options.source / "model.safetensors");
         if (path.parent_path() != options.source || !fs::is_regular_file(path))
             throw std::invalid_argument("Source weights must be a file directly inside the model directory");
     }
     const SafetensorsWeights source(options.source);
     if (source.tensors().empty()) throw std::invalid_argument("No source weights found");
-    const auto binary_hash = tools::sha256_file(tools::executable_path());
+    const std::string binary_hash = tools::sha256_file(tools::executable_path());
     fs::create_directories(options.destination.parent_path());
     if (!fs::create_directory(options.destination)) throw std::runtime_error("Output directory already exists");
 
     Json::Object weight_map, quantized, files, metrics;
     uint64_t total_size = 0;
-    const auto manifest_path = options.destination / "export-manifest.json";
+    const std::filesystem::path manifest_path = options.destination / "export-manifest.json";
     Json::Object manifest{{"status", "in-progress"}, {"source", options.source.u8string()},
                          {"generator", "elman_quantize_weights"}, {"generator_sha256", binary_hash},
                          {"group_size", options.group_size}};
-    auto save_manifest = [&] {
+    LocalFunction save_manifest{[&] {
         manifest["files"] = files;
         manifest["weights"] = metrics;
         tools::write_json_atomically(manifest_path, manifest);
-    };
+    }};
     save_manifest();
 
     size_t ordinal = 0;
-    for (const auto& [name, info] : source.tensors()) {
+    for (const std::pair<const std::string, SafetensorInfo>& entry : source.tensors()) {
+        const std::string& name = entry.first;
+        const SafetensorInfo& info = entry.second;
         if (!is_compute_float(info.dtype)) throw std::invalid_argument("Unsupported decoder weight dtype: " + name);
         std::ostringstream numbered;
         numbered << "weights-" << std::setfill('0') << std::setw(5) << ordinal << ".safetensors";
-        const auto filename = numbered.str();
-        const auto path = options.destination / filename;
+        const std::string filename = numbered.str();
+        const std::filesystem::path path = options.destination / filename;
         const std::string gate = ".mlp.gate.weight";
         const bool matrix = info.shape.size() == 2 &&
             (name.size() < gate.size() || name.compare(name.size() - gate.size(), gate.size(), gate) != 0);
-        const auto elements = shape_element_count(info.shape);
+        const size_t elements = shape_element_count(info.shape);
         Json::Object record{{"quantized", matrix}, {"elements", double(elements)}};
         std::vector<SafetensorSpec> entries;
         if (!matrix) {
             entries.push_back({name, info.dtype, info.shape});
-            write_file_atomically(path, [&](const auto& pending) {
+            write_file_atomically(path, [&](const fs::path& pending) {
                 std::ofstream out(pending, std::ios::binary);
                 write_safetensors_header(out, entries, {{"format", "pt"}});
                 copy_weight(out, source, name, info.bytes);
@@ -215,11 +218,11 @@ void export_weights(const Options& options) {
             const int groups = 1 + (columns - 1) / options.group_size;
             const uint64_t code_bytes = (uint64_t(elements) + 1) / 2;
             if (code_bytes > uint64_t(std::numeric_limits<int>::max())) throw std::overflow_error("Packed matrix is too large: " + name);
-            const auto code = name + ".codes", scale = name + ".scales", zero = name + ".zero_points";
+            const std::string code = name + ".codes", scale = name + ".scales", zero = name + ".zero_points";
             entries = {{code, DType::UInt8, {static_cast<int>(code_bytes)}},
                        {scale, DType::BFloat16, {rows, groups}}, {zero, DType::Int32, {}}};
             Errors errors;
-            write_file_atomically(path, [&](const auto& pending) {
+            write_file_atomically(path, [&](const fs::path& pending) {
                 std::ofstream out(pending, std::ios::binary);
                 write_safetensors_header(out, entries, {{"format", "pt"}});
                 errors = quantize_matrix(out, source, name, options, rows, columns, groups, code_bytes);
@@ -232,9 +235,9 @@ void export_weights(const Options& options) {
             record["squared_error"] = errors.squared;
             record["max_error"] = double(errors.maximum);
         }
-        for (const auto& entry : entries) {
+        for (const SafetensorSpec& entry : entries) {
             if (!weight_map.emplace(entry.name, filename).second) throw std::runtime_error("Duplicate exported weight: " + entry.name);
-            const auto bytes = dtype_storage_bytes(entry.dtype, shape_element_count(entry.shape));
+            const size_t bytes = dtype_storage_bytes(entry.dtype, shape_element_count(entry.shape));
             if (bytes > 9007199254740991ull - total_size) throw std::overflow_error("Export size exceeds exact JSON integer range");
             total_size += bytes;
         }
@@ -243,13 +246,13 @@ void export_weights(const Options& options) {
         save_manifest();
         std::cout << ++ordinal << '/' << source.tensors().size() << ' ' << name << std::endl;
     }
-    for (auto name : {"config.json", "generation_config.json", "tokenizer.json", "tokenizer_config.json",
+    for (const char* name : {"config.json", "generation_config.json", "tokenizer.json", "tokenizer_config.json",
                       "special_tokens_map.json", "added_tokens.json", "LICENSE"}) {
         if (fs::is_regular_file(options.source / name)) fs::copy_file(options.source / name, options.destination / name);
     }
     tools::write_json_atomically(options.destination / "model.safetensors.index.json",
         Json::Object{{"metadata", Json::Object{{"total_size", double(total_size)}}}, {"weight_map", std::move(weight_map)}});
-    const auto quantized_count = quantized.size();
+    const size_t quantized_count = quantized.size();
     tools::write_json_atomically(options.destination / "quantization.json", Json::Object{{"format", "elman-affine-v1"},
         {"algorithm", "groupwise-symmetric-rtn"}, {"group_size", options.group_size}, {"tensors", std::move(quantized)}});
     manifest["status"] = "exported-unvalidated";
@@ -272,7 +275,7 @@ int main(int argc, char** argv) {
             usage();
             return 0;
         }
-        const auto options = parse(arguments);
+        const Options options = parse(arguments);
         set_cpu_thread_count(options.threads);
         export_weights(options);
         return 0;

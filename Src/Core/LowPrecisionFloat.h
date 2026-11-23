@@ -85,23 +85,32 @@ ELMAN_LOW_FLOAT_HD inline float float8_to_float(uint8_t value, DType dtype) {
     while (!(fraction & (1u << mantissa))) { fraction <<= 1; --exponent; }
     return low_bits_float(sign | (uint32_t(exponent + 127) << 23) | ((fraction & ((1u << mantissa) - 1)) << (23 - mantissa)));
 }
+template<class Float>
+ELMAN_LOW_FLOAT_HD inline uint8_t encode_float4(Float value, uint8_t sign) {
+    if (value != value) return sign;
+    const Float magnitude = sign ? -value : value;
+    // E2M1 midpoint ties select the even low encoding bit.
+    const uint8_t code = magnitude <= .25f ? 0 : magnitude < .75f ? 1 :
+        magnitude <= 1.25f ? 2 : magnitude < 1.75f ? 3 : magnitude <= 2.5f ? 4 :
+        magnitude < 3.5f ? 5 : magnitude <= 5.f ? 6 : 7;
+    return uint8_t(sign | code);
+}
+ELMAN_LOW_FLOAT_HD inline uint8_t float_to_float4(float value) {
+    return encode_float4(value, uint8_t((low_float_bits(value) >> 28) & 8));
+}
 ELMAN_LOW_FLOAT_HD inline uint8_t double_to_float4(double value) {
     union { double value; uint64_t bits; } encoded;
     encoded.value = value;
-    const uint8_t sign = uint8_t((encoded.bits >> 60) & 8);
-    if (value != value) return sign;
-    const double magnitude = sign ? -value : value;
-    // E2M1 midpoint ties select the even low encoding bit.
-    const uint8_t code = magnitude <= .25 ? 0 : magnitude < .75 ? 1 :
-        magnitude <= 1.25 ? 2 : magnitude < 1.75 ? 3 : magnitude <= 2.5 ? 4 :
-        magnitude < 3.5 ? 5 : magnitude <= 5. ? 6 : 7;
-    return uint8_t(sign | code);
+    return encode_float4(value, uint8_t((encoded.bits >> 60) & 8));
+}
+ELMAN_LOW_FLOAT_HD inline float float4_to_float(uint8_t code) {
+    const unsigned exponent = (code >> 1) & 3;
+    const float fraction = float(code & 1) * .5f;
+    const float magnitude = exponent ? (1.f + fraction) * float(1u << (exponent - 1)) : fraction;
+    return code & 8 ? -magnitude : magnitude;
 }
 ELMAN_LOW_FLOAT_HD inline double float4_to_double(uint8_t code) {
-    const unsigned exponent = (code >> 1) & 3;
-    const double fraction = double(code & 1) * .5;
-    const double magnitude = exponent ? (1. + fraction) * double(1u << (exponent - 1)) : fraction;
-    return code & 8 ? -magnitude : magnitude;
+    return float4_to_float(code);
 }
 
 } // namespace numeric

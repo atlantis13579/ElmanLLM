@@ -5,11 +5,11 @@
 
 namespace elman::metal {
 Tensor lower_avg_pool2d_grad(Graph m, const Operands& inputs, const KernelParams& p) {
-  auto a = inputs[0];
-  auto b = inputs[1];
+  Tensor a = inputs[0];
+  Tensor b = inputs[1];
   using namespace operator_attr::pool2d;
   const int px = p.attribute(kPaddingWidth), py = p.attribute(kPaddingHeight);
-  auto* descriptor =
+  MPSGraphPooling2DOpDescriptor* descriptor =
       [MPSGraphPooling2DOpDescriptor descriptorWithKernelWidth:p.attribute(kKernelWidth)
                                                   kernelHeight:p.attribute(kKernelHeight)
                                                      strideInX:p.attribute(kStrideWidth)

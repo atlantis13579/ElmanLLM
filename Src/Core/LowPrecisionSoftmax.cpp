@@ -3,7 +3,7 @@
 
 namespace elman {
 void validate_low_precision_softmax(const BufferPtr& output, const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool value, const char* message) { if (!value) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool value, const char* message) { if (!value) throw std::invalid_argument(message); };
     const int mode = p.attribute(1);
     require(mode >= 0 && mode <= 2, "Invalid low precision softmax mode");
     const int arity = mode == 2 ? 2 : 1;
@@ -38,7 +38,7 @@ void validate_low_precision_softmax(const BufferPtr& output, const std::vector<B
                     p.input_stride(KernelInput::B, d) == p.input_stride(KernelInput::A, d), "Invalid softmax upstream layout");
     }
     for (int i = 0; i < arity; ++i) if (output->bytes && inputs[i]->bytes) {
-        const auto a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
+        const uintptr_t a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
         const bool overlap = a <= b ? b - a < output->bytes : a - b < inputs[i]->bytes;
         require(!overlap || (mode == 0 && a == b), "Overlapping low precision softmax buffers");
     }

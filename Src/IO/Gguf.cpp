@@ -63,7 +63,7 @@ T bit_value(Bits bits) {
 }
 
 double number(BinaryInput& input, uint32_t type) {
-    const auto bits = input.le(metadata_width(type));
+    const uint64_t bits = input.le(metadata_width(type));
     switch (type) {
         case 1: return bit_value<int8_t>(uint8_t(bits));
         case 3: return bit_value<int16_t>(uint16_t(bits));
@@ -76,13 +76,13 @@ double number(BinaryInput& input, uint32_t type) {
 }
 
 void skip_array(BinaryInput& input) {
-    const auto type = uint32_t(input.le(4));
-    const auto count = input.le(8);
+    const uint32_t type = uint32_t(input.le(4));
+    const uint64_t count = input.le(8);
     if (type == 8) {
         require(count <= input.remaining() / 8, "Invalid GGUF metadata string array");
         for (uint64_t i = 0; i < count; ++i) input.skip(input.le(8));
     } else {
-        const auto width = metadata_width(type);
+        const size_t width = metadata_width(type);
         require(count <= input.remaining() / width, "Invalid GGUF metadata array");
         input.skip(count * width);
     }
@@ -91,7 +91,7 @@ void skip_array(BinaryInput& input) {
 float half(Bytes bytes, size_t offset) { return numeric::half_to_float(uint16_t(bytes.le(offset, 2))); }
 
 void decode_block(uint32_t type, Bytes bytes, float* values) {
-    const auto* q = bytes.data;
+    const uint8_t* q = bytes.data;
     if (type <= 8) {
         const float scale = half(bytes, 0);
         if (type == 8) {
@@ -102,7 +102,7 @@ void decode_block(uint32_t type, Bytes bytes, float* values) {
         const bool five = type == 6 || type == 7;
         const float offset = affine ? half(bytes, 2) : 0.0f;
         const int header = affine ? 4 : 2;
-        const auto high = five ? uint32_t(bytes.le(header, 4)) : 0;
+        const uint32_t high = five ? uint32_t(bytes.le(header, 4)) : 0;
         for (int i = 0; i < 32; ++i) {
             const int code = ((q[header + (five ? 4 : 0) + i % 16] >> (4 * (i / 16))) & 15) |
                              int(((high >> i) & 1) << 4);
@@ -128,7 +128,7 @@ void decode_block(uint32_t type, Bytes bytes, float* values) {
         }
     } else if (type == 12 || type == 13) {
         const float scale = half(bytes, 0), minimum = half(bytes, 2);
-        const auto* scales = q + 4;
+        const uint8_t* scales = q + 4;
         for (int group = 0; group < 8; ++group) {
             const int s = group < 4 ? scales[group] & 63 : (scales[group + 4] & 15) | ((scales[group - 4] >> 6) << 4);
             const int m = group < 4 ? scales[group + 4] & 63 : (scales[group + 4] >> 4) | ((scales[group] >> 6) << 4);
@@ -155,14 +155,14 @@ void decode_block(uint32_t type, Bytes bytes, float* values) {
 GgufFile::GgufFile(const std::filesystem::path& path) : path_(path) {
     BinaryInput input(path);
     require(input.text(4) == "GGUF", "Invalid little-endian GGUF signature");
-    const auto version = input.le(4), tensor_count = input.le(8), metadata_count = input.le(8);
+    const uint64_t version = input.le(4), tensor_count = input.le(8), metadata_count = input.le(8);
     require(version == 2 || version == 3, "Unsupported GGUF version");
     require(metadata_count <= input.remaining() / 12, "Invalid GGUF metadata count");
     std::set<std::string> keys;
     uint64_t alignment = 32;
     for (uint64_t i = 0; i < metadata_count; ++i) {
-        const auto key = input.text(input.le(8));
-        const auto type = uint32_t(input.le(4));
+        const std::string key = input.text(input.le(8));
+        const uint32_t type = uint32_t(input.le(4));
         require(!key.empty() && keys.insert(key).second, "Invalid or duplicate GGUF metadata key");
         if (key == "general.alignment") {
             require(type == 4, "Invalid GGUF alignment type");
@@ -175,18 +175,18 @@ GgufFile::GgufFile(const std::filesystem::path& path) : path_(path) {
     require(tensor_count && tensor_count <= input.remaining() / 32, "Invalid GGUF tensor count");
     std::vector<std::pair<uint64_t, uint64_t>> ranges;
     for (uint64_t i = 0; i < tensor_count; ++i) {
-        const auto name = input.text(input.le(8));
-        const auto rank = input.le(4);
+        const std::string name = input.text(input.le(8));
+        const uint64_t rank = input.le(4);
         require(!name.empty() && rank >= 1 && rank <= 4, "Invalid GGUF tensor descriptor");
         Shape shape(static_cast<size_t>(rank));
         for (auto it = shape.rbegin(); it != shape.rend(); ++it) {
-            const auto dimension = input.le(8);
+            const uint64_t dimension = input.le(8);
             require(dimension && dimension <= uint64_t(std::numeric_limits<int>::max()), "Invalid GGUF dimension");
             *it = int(dimension);
         }
-        const auto type = uint32_t(input.le(4));
-        const auto offset = input.le(8);
-        const auto format = encoding(type);
+        const uint32_t type = uint32_t(input.le(4));
+        const uint64_t offset = input.le(8);
+        const Encoding format = encoding(type);
         const uint64_t count = shape_element_count(shape);
         require(shape.back() % format.block == 0 && offset % alignment == 0 &&
                 count / format.block <= (std::numeric_limits<uint64_t>::max() - offset) / format.bytes,
@@ -197,21 +197,21 @@ GgufFile::GgufFile(const std::filesystem::path& path) : path_(path) {
         types_.emplace(name, type);
         ranges.emplace_back(offset, offset + storage);
     }
-    const auto padding = (alignment - input.position() % alignment) % alignment;
+    const uint64_t padding = (alignment - input.position() % alignment) % alignment;
     input.skip(padding);
     data_start_ = input.position();
     std::sort(ranges.begin(), ranges.end());
     uint64_t end = 0;
-    for (const auto& range : ranges) {
+    for (const std::pair<uint64_t, uint64_t>& range : ranges) {
         require(range.first >= end && range.second <= input.remaining(), "Overlapping or truncated GGUF tensor data");
         end = range.second;
     }
 }
 
 std::vector<uint8_t> GgufFile::read(const std::string& name) const {
-    const auto& info = tensors_.at(name);
-    const auto type = types_.at(name);
-    const auto format = encoding(type);
+    const SafetensorInfo& info = tensors_.at(name);
+    const unsigned int type = types_.at(name);
+    const Encoding format = encoding(type);
     BinaryInput input(path_);
     input.seek(data_start_ + info.offset);
     if (format.block == 1) return input.bytes(info.bytes);
@@ -219,7 +219,7 @@ std::vector<uint8_t> GgufFile::read(const std::string& name) const {
     std::vector<uint8_t> compressed(format.bytes * 1024);
     float values[256];
     for (uint64_t offset = 0; offset < info.bytes;) {
-        const auto count = size_t(std::min<uint64_t>(1024, (info.bytes - offset) / format.bytes));
+        const size_t count = size_t(std::min<uint64_t>(1024, (info.bytes - offset) / format.bytes));
         input.read(compressed.data(), count * format.bytes);
         for (size_t i = 0; i < count; ++i) {
             decode_block(type, {compressed.data() + i * format.bytes, format.bytes}, values);
@@ -232,7 +232,7 @@ std::vector<uint8_t> GgufFile::read(const std::string& name) const {
 }
 
 Tensor GgufFile::load(const std::string& name, Backend backend) const {
-    const auto& info = tensors_.at(name);
+    const SafetensorInfo& info = tensors_.at(name);
     return Tensor::from_raw(info.shape, info.dtype, read(name), backend);
 }
 

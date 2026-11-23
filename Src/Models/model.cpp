@@ -6,11 +6,13 @@
 
 namespace elman {
 std::unique_ptr<Model> create_resnet(const Json& definition, Backend backend, uint32_t seed);
+std::unique_ptr<Model> create_spatial_policy_value(const Json& definition, Backend backend, uint32_t seed);
+std::unique_ptr<Model> create_continuous_actor_critic(const Json& definition, Backend backend, uint32_t seed);
 namespace {
 
 std::vector<int> integers(const Json& object, const std::string& key) {
     std::vector<int> result;
-    for (const auto& item : object.at(key).array()) result.push_back(item.integer());
+    for (const Json& item : object.at(key).array()) result.push_back(item.integer());
     return result;
 }
 void require(bool condition, const std::string& message) {
@@ -51,7 +53,7 @@ public:
         kernels_ = integers(definition, "kernels");
         strides_ = integers(definition, "strides");
         paddings_ = integers(definition, "paddings");
-        auto hidden = integers(definition, "hidden_features");
+        std::vector<int> hidden = integers(definition, "hidden_features");
         classes_ = definition.at("num_classes").integer();
         pool_kernel_ = definition.int_or("pool_kernel", 3);
         pool_stride_ = definition.int_or("pool_stride", 2);
@@ -156,31 +158,31 @@ public:
     Tensor forward(const Tensor& input, bool training, uint32_t seed) override {
         require(input.shape().size() == 2 && input.shape()[1] <= context_ && input.shape()[1] > 0, "GPT2 input must be [batch, sequence] within context length");
         int batch = input.shape()[0], length = input.shape()[1], head_width = width_ / heads_;
-        auto tokens = reshape(input, {batch * length});
+        Tensor tokens = reshape(input, {batch * length});
         Tensor value = reshape(index_select(active(token_embedding_, training), 0, tokens), {batch, length, width_});
         std::vector<float> positions(length);
         for (int i = 0; i < length; ++i) positions[i] = static_cast<float>(i);
-        auto position_ids = Tensor::from_data({length}, positions, backend_, false, DType::Int32);
+        Tensor position_ids = Tensor::from_data({length}, positions, backend_, false, DType::Int32);
         value = add(value, index_select(active(position_embedding_, training), 0, position_ids));
         value = dropout(value, dropout_, seed++, training);
         std::vector<float> mask(static_cast<size_t>(length) * length, 0);
         for (int row = 0; row < length; ++row) for (int col = row + 1; col < length; ++col) mask[row * length + col] = -1e9f;
-        auto causal_mask = Tensor::from_data({1, 1, length, length}, mask, backend_);
-        for (auto& block : blocks_) {
-            auto norm = layer_norm(value, active(block.ln1_weight, training), active(block.ln1_bias, training), epsilon_);
-            auto qkv = add(matmul(norm, active(block.qkv_weight, training)), active(block.qkv_bias, training));
-            auto query = permute(reshape(slice(qkv, 2, 0, width_), {batch, length, heads_, head_width}), {0, 2, 1, 3});
-            auto key = permute(reshape(slice(qkv, 2, width_, 2 * width_), {batch, length, heads_, head_width}), {0, 2, 1, 3});
-            auto val = permute(reshape(slice(qkv, 2, 2 * width_, 3 * width_), {batch, length, heads_, head_width}), {0, 2, 1, 3});
+        Tensor causal_mask = Tensor::from_data({1, 1, length, length}, mask, backend_);
+        for (GPT2::Block& block : blocks_) {
+            Tensor norm = layer_norm(value, active(block.ln1_weight, training), active(block.ln1_bias, training), epsilon_);
+            Tensor qkv = add(matmul(norm, active(block.qkv_weight, training)), active(block.qkv_bias, training));
+            Tensor query = permute(reshape(slice(qkv, 2, 0, width_), {batch, length, heads_, head_width}), {0, 2, 1, 3});
+            Tensor key = permute(reshape(slice(qkv, 2, width_, 2 * width_), {batch, length, heads_, head_width}), {0, 2, 1, 3});
+            Tensor val = permute(reshape(slice(qkv, 2, 2 * width_, 3 * width_), {batch, length, heads_, head_width}), {0, 2, 1, 3});
             // Preserve GPT2's reciprocal-multiply scaling, including on CPU.
-            auto scores = mul(matmul(query, transpose(key, 2, 3)), 1.0f / std::sqrt(static_cast<float>(head_width)));
-            auto attention = dropout(attention_softmax(scores, causal_mask, 1, 3), dropout_, seed++, training);
-            auto attended = reshape(permute(matmul(attention, val), {0, 2, 1, 3}), {batch, length, width_});
-            auto projected = add(matmul(attended, active(block.projection_weight, training)), active(block.projection_bias, training));
+            Tensor scores = mul(matmul(query, transpose(key, 2, 3)), 1.0f / std::sqrt(static_cast<float>(head_width)));
+            Tensor attention = dropout(attention_softmax(scores, causal_mask, 1, 3), dropout_, seed++, training);
+            Tensor attended = reshape(permute(matmul(attention, val), {0, 2, 1, 3}), {batch, length, width_});
+            Tensor projected = add(matmul(attended, active(block.projection_weight, training)), active(block.projection_bias, training));
             value = add(value, dropout(projected, dropout_, seed++, training));
             norm = layer_norm(value, active(block.ln2_weight, training), active(block.ln2_bias, training), epsilon_);
-            auto hidden = gelu(add(matmul(norm, active(block.fc_weight, training)), active(block.fc_bias, training)));
-            auto feedforward = add(matmul(hidden, active(block.mlp_projection_weight, training)), active(block.mlp_projection_bias, training));
+            Tensor hidden = gelu(add(matmul(norm, active(block.fc_weight, training)), active(block.fc_bias, training)));
+            Tensor feedforward = add(matmul(hidden, active(block.mlp_projection_weight, training)), active(block.mlp_projection_bias, training));
             value = add(value, dropout(feedforward, dropout_, seed++, training));
         }
         value = layer_norm(value, active(final_weight_, training), active(final_bias_, training), epsilon_);
@@ -215,18 +217,20 @@ Tensor Model::constant_parameter(const std::string& name, const Shape& shape, fl
 }
 size_t Model::parameter_count() const {
     size_t count = 0;
-    for (const auto& parameter : parameters_) count += parameter.value.numel();
+    for (const Parameter& parameter : parameters_) count += parameter.value.numel();
     return count;
 }
 std::unique_ptr<Model> create_model(const Json& definition, Backend backend, uint32_t seed) {
     require(definition.at("format").string() == "elman.model", "unsupported model format");
     require(definition.at("version").integer() == 1, "unsupported model version");
-    const auto architecture = definition.at("architecture").string();
+    const std::string architecture = definition.at("architecture").string();
     if (architecture == "linear_regression") return std::make_unique<AffineModel>(definition, backend, seed, true);
     if (architecture == "logistic_regression") return std::make_unique<AffineModel>(definition, backend, seed, false);
     if (architecture == "alexnet") return std::make_unique<AlexNet>(definition, backend, seed);
     if (architecture == "gpt2") return std::make_unique<GPT2>(definition, backend, seed);
     if (architecture == "resnet") return create_resnet(definition, backend, seed);
+    if (architecture == "spatial_policy_value") return create_spatial_policy_value(definition, backend, seed);
+    if (architecture == "continuous_actor_critic") return create_continuous_actor_critic(definition, backend, seed);
     throw std::runtime_error("Unsupported model architecture: " + architecture);
 }
 

@@ -1,4 +1,5 @@
 #include "Inference/InferenceSession.h"
+#include "Core/LocalFunction.h"
 #include "Inference/GraphSession.h"
 #include "Inference/Importers/Keras.h"
 #include "Inference/Importers/SavedModel.h"
@@ -20,7 +21,9 @@ namespace {
 
 void validate_signature(const TensorSignature& signature) {
   if (signature.empty()) throw std::invalid_argument("Inference requires named tensor ports");
-  for (const auto& [name, spec] : signature) {
+  for (const TensorSignature::value_type& entry : signature) {
+    const std::string& name = entry.first;
+    const TensorSpec& spec = entry.second;
     if (!spec.any_dtype) dtype_info(spec.dtype);
     if (name.empty() || spec.shape.size() > 8 ||
         std::any_of(spec.shape.begin(), spec.shape.end(), [](int dim) { return dim < -1; }))
@@ -32,11 +35,13 @@ void validate_tensors(const NamedTensors& tensors, const TensorSignature& signat
                       Backend backend, int device, const char* role) {
   if (tensors.size() != signature.size())
     throw std::invalid_argument(std::string("Unexpected inference ") + role + " count");
-  for (const auto& [name, spec] : signature) {
+  for (const TensorSignature::value_type& entry : signature) {
+    const std::string& name = entry.first;
+    const TensorSpec& spec = entry.second;
     auto found = tensors.find(name);
     if (found == tensors.end() || !found->second.defined())
       throw std::invalid_argument(std::string("Missing inference ") + role + " " + name);
-    const auto& value = found->second;
+    const Tensor& value = found->second;
     if ((!spec.any_dtype && value.dtype() != spec.dtype) || value.backend() != backend || value.device() != device ||
         (!spec.any_rank && value.shape().size() != spec.shape.size())) {
       throw std::invalid_argument(std::string("Invalid inference ") + role + " dtype, device or rank for " + name);
@@ -59,13 +64,22 @@ InferenceSession::InferenceSession(Backend backend, int device, TensorSignature 
   validate_signature(outputs_);
 }
 
+NamedTensors InferenceSession::run_with_grad(const NamedTensors& inputs) const {
+  validate_tensors(inputs, inputs_, backend_, device_, "input");
+  DeviceScope owner(backend_, device_);
+  auto outputs = forward_(inputs);
+  validate_tensors(outputs, outputs_, backend_, device_, "output");
+  return outputs;
+}
+
 NamedTensors InferenceSession::run(const NamedTensors& inputs) const {
   validate_tensors(inputs, inputs_, backend_, device_, "input");
   DeviceScope owner(backend_, device_);
   graph::RecordingGuard no_grad;
-  auto outputs = forward_(inputs);
+  std::map<std::string, Tensor> outputs = forward_(inputs);
   validate_tensors(outputs, outputs_, backend_, device_, "output");
-  for (auto& [name, output] : outputs) {
+  for (NamedTensors::value_type& entry : outputs) {
+    Tensor& output = entry.second;
     if (output.requires_grad()) output = output.detach();
   }
   return outputs;
@@ -77,29 +91,29 @@ void load_inference_parameters(const std::filesystem::path& path, Model& model, 
     load_checkpoint(path.string(), model, definition);
     return;
   }
-  const auto buffers = model.checkpoint_buffers();
-  const auto& parameters = model.parameters();
-  const auto tensors = load_tensor_archive(path, backend, parameters.size() == 1 ? parameters.front().name : "input");
+  const std::vector<Parameter> buffers = model.checkpoint_buffers();
+  const std::vector<Parameter>& parameters = model.parameters();
+  const TensorArchive tensors = load_tensor_archive(path, backend, parameters.size() == 1 ? parameters.front().name : "input");
   if (tensors.size() != parameters.size() + buffers.size())
     throw std::invalid_argument("Inference weights count does not match model parameters and buffers");
-  auto check = [&](const Parameter& target) {
+  LocalFunction check{[&](const Parameter& target) {
     const auto found = tensors.find(target.name);
     if (found == tensors.end() || found->second.dtype() != target.value.dtype() || found->second.shape() != target.value.shape())
       throw std::invalid_argument("Missing or incompatible inference weight " + target.name);
-  };
-  for (const auto& target : parameters) check(target);
-  for (const auto& target : buffers) check(target);
-  for (auto& target : model.parameters()) target.value.assign_raw(tensors.at(target.name).raw_data());
-  for (auto target : buffers) target.value.assign_raw(tensors.at(target.name).raw_data());
+  }};
+  for (const Parameter& target : parameters) check(target);
+  for (const Parameter& target : buffers) check(target);
+  for (Parameter& target : model.parameters()) target.value.assign_raw(tensors.at(target.name).raw_data());
+  for (Parameter target : buffers) target.value.assign_raw(tensors.at(target.name).raw_data());
 }
 
 InferenceSession load_model_session(const std::string& model_path, const std::string& checkpoint_path,
                                     Backend backend, int device) {
   DeviceScope owner(backend, device);
-  const auto definition = Json::read(model_path);
+  const Json definition = Json::read(model_path);
   std::shared_ptr<Model> model = create_model(definition, backend);
   load_inference_parameters(std::filesystem::u8path(checkpoint_path), *model, definition, backend);
-  auto shape = model->sample_shape();
+  Shape shape = model->sample_shape();
   shape.insert(shape.begin(), -1);
   const bool language = model->architecture() == "gpt2";
   if (language) shape.back() = -1;
@@ -128,8 +142,8 @@ int infer_tensors_command(int argc, char** argv) {
   }
   if (input_path.empty() || output_path.empty())
     throw std::invalid_argument("infer-tensors requires --input and --output");
-  const auto model = std::filesystem::u8path(argv[2]);
-  const auto extension = model_file_extension(model);
+  const std::filesystem::path model = std::filesystem::u8path(argv[2]);
+  const std::string extension = model_file_extension(model);
   const bool tflite = extension == ".tflite";
   const bool keras = extension == ".keras" || extension == ".h5" || extension == ".hdf5";
   const bool scripted = extension == ".pt" || extension == ".pth" || extension == ".torchscript" || extension == ".ptc";
@@ -141,15 +155,15 @@ int infer_tensors_command(int argc, char** argv) {
   if (graph && !checkpoint.empty())
     throw std::invalid_argument("Graph models specify their own initializers");
   const int device = current_device(backend);
-  auto session = tflite ? load_tflite_session(model, backend, device) :
+  InferenceSession session = tflite ? load_tflite_session(model, backend, device) :
                  keras ? load_keras_session(model, backend, device) :
                  scripted ? load_torchscript_session(model, backend, device) :
                  saved ? load_saved_model_session(model, backend, device, signature.empty() ? "serving_default" : signature) :
                  graph ? load_graph_session(model, backend, device) :
                          load_model_session(argv[2], checkpoint, backend, device);
-  const auto name = session.inputs().size() == 1 ? session.inputs().begin()->first : "input";
+  const std::string name = session.inputs().size() == 1 ? session.inputs().begin()->first : "input";
   DeviceScope owner(backend, device);
-  const auto tensors = load_tensor_archive(std::filesystem::u8path(input_path), backend, name);
+  const TensorArchive tensors = load_tensor_archive(std::filesystem::u8path(input_path), backend, name);
   save_safetensors(std::filesystem::u8path(output_path), session.run(tensors));
   return 0;
 }

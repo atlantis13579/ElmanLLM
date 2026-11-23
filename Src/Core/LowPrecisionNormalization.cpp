@@ -1,10 +1,11 @@
 #include "Operators/low_precision_normalization.h"
+#include "Core/LocalFunction.h"
 #include <cstring>
 #include <stdexcept>
 namespace elman {
 void validate_low_precision_normalization(LowPrecisionNormalization op, const BufferPtr& output,
                                           const std::vector<BufferPtr>& inputs, const KernelParams& p) {
-    auto require = [](bool value, const char* message) { if (!value) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool value, const char* message) { if (!value) throw std::invalid_argument(message); };
     const int mode = low_precision_normalization_mode(op, p);
     const bool named_gradient = low_precision_normalization_base(op) != op;
     op = low_precision_normalization_base(op);
@@ -22,7 +23,7 @@ void validate_low_precision_normalization(LowPrecisionNormalization op, const Bu
         output->backend == Backend::CPU && output->dtype == DType::Float32;
     require(is_low_precision_float(output->dtype) || native_float, "Normalization requires a low precision output or private CPU Float32 LayerNorm");
     require(p.attribute(10) == int(native_float), "Invalid native normalization mode");
-    auto present = [&](int i) { return size_t(i) < inputs.size() && bool(inputs[i]); };
+    LocalFunction present{[&](int i) { return size_t(i) < inputs.size() && bool(inputs[i]); }};
     for (int i = 0; i < 4; ++i) {
         const bool needed = i == 0 || (((batch && mode == 0) || mode == 1) && i < 3) || (mode >= 2 && i == 1);
         require(!needed || present(i), "Missing normalization operand");
@@ -32,7 +33,7 @@ void validate_low_precision_normalization(LowPrecisionNormalization op, const Bu
         }
         require(i < 3 && (mode < 2 || i < 2), "Unexpected normalization operand");
         require(inputs[i]->dtype == output->dtype, "Normalization dtypes differ");
-        const auto input = KernelInput(i); const int rank = p.input_rank(input);
+        const KernelInput input = KernelInput(i); const int rank = p.input_rank(input);
         require(rank >= 0 && rank <= 8, "Invalid normalization input rank");
         size_t count = 1, prefix = 1;
         for (int d = rank - 1; d >= 0; --d) {
@@ -73,7 +74,7 @@ void validate_low_precision_normalization(LowPrecisionNormalization op, const Bu
     require(output_count == output->count && p.output_count() == int(output_count), "Invalid normalization output count");
     for (int i = 1; i < 3; ++i) {
         if (!present(i)) continue;
-        const auto input = KernelInput(i);
+        const KernelInput input = KernelInput(i);
         const bool gradient = mode >= 2 || (mode == 1 && i == 2);
         require(p.input_rank(input) == (gradient ? rank : dimensions), "Invalid normalization parameter rank");
         for (int d = 0; d < p.input_rank(input); ++d) {

@@ -1,4 +1,5 @@
 #include "Backend.h"
+#include "Core/LocalFunction.h"
 #include "Core/TensorDispatch.h"
 #include "Backends/MetalDTypeSupport.h"
 #include "Core/CommandGraph.h"
@@ -145,7 +146,7 @@ std::string backend_name(Backend backend) {
 }
 
 Backend parse_backend(const std::string& name) {
-  for (const auto& implementation : implementations) {
+  for (const BackendOps& implementation : implementations) {
     if (name == implementation.name) {
       return implementation.id;
     }
@@ -154,13 +155,13 @@ Backend parse_backend(const std::string& name) {
 }
 
 bool backend_available(Backend backend) {
-  const auto& implementation = find_backend(backend);
+  const BackendOps& implementation = find_backend(backend);
   return implementation.available && implementation.available();
 }
 
 BufferPtr backend_allocate(Backend backend, size_t count, DType dtype) {
   dtype_info(dtype);
-  const auto& implementation = find_backend(backend);
+  const BackendOps& implementation = find_backend(backend);
   if (!implementation.allocate) {
     throw std::runtime_error("Backend not compiled: " +
                              std::string(implementation.name));
@@ -194,7 +195,7 @@ BufferPtr detail::allocate_dispatch_output(const std::string& op, Backend backen
     const auto it = full_writes.find(op);
     if (it != full_writes.end()) {
       const bool optional_bias = op == "linear" || op == "packed_linear";
-      const auto required = it->second;
+      const uint64_t required = it->second;
       if ((inputs.size() == required || (optional_bias && inputs.size() == required + 1)) &&
           std::all_of(inputs.begin(), inputs.begin() + required, [](const Tensor& t) {
             return t.defined() && t.numel() != 0;
@@ -216,11 +217,11 @@ BufferPtr backend_view(const BufferPtr& source, size_t offset, size_t count) {
   struct View final : Buffer {
     View(const BufferPtr& source, size_t count, size_t offset) : Buffer(source, count, offset) {}
     void* raw_pointer() override {
-      auto data = allocation().raw_pointer();
+      void* data = allocation().raw_pointer();
       return storage_offset_bytes() ? static_cast<uint8_t*>(data) + storage_offset_bytes() : data;
     }
     const void* raw_pointer() const override {
-      auto data = allocation().raw_pointer();
+      const void* data = allocation().raw_pointer();
       return storage_offset_bytes() ? static_cast<const uint8_t*>(data) + storage_offset_bytes() : data;
     }
   };
@@ -228,11 +229,11 @@ BufferPtr backend_view(const BufferPtr& source, size_t offset, size_t count) {
 }
 BufferPtr backend_workspace(Backend backend, size_t bytes) {
 #ifdef ELMAN_HAS_CUDA
-  if (backend == Backend::CUDA) if (auto recorded = detail::replay_cuda_graph_workspace(bytes)) return recorded;
+  if (backend == Backend::CUDA) if (BufferPtr recorded = detail::replay_cuda_graph_workspace(bytes)) return recorded;
 #endif
-  const auto& implementation = find_backend(backend);
+  const BackendOps& implementation = find_backend(backend);
   if (!implementation.allocate) throw std::runtime_error("Workspace backend not compiled");
-  auto buffer = detail::pooled_allocate(backend, bytes, DType::UInt8, MemoryKind::Workspace, implementation.workspace, implementation.clear);
+  BufferPtr buffer = detail::pooled_allocate(backend, bytes, DType::UInt8, MemoryKind::Workspace, implementation.workspace, implementation.clear);
 #ifdef ELMAN_HAS_CUDA
   if (backend == Backend::CUDA) {
     detail::record_cuda_graph_workspace(buffer);
@@ -242,7 +243,7 @@ BufferPtr backend_workspace(Backend backend, size_t bytes) {
   return buffer;
 }
 int detail::allocation_device(Backend backend) {
-  const auto& implementation = find_backend(backend);
+  const BackendOps& implementation = find_backend(backend);
   if (!implementation.allocate) throw std::runtime_error("Allocation backend not compiled");
   return implementation.device ? implementation.device() : -1;
 }
@@ -251,7 +252,7 @@ void backend_upload(const BufferPtr& buffer, const std::vector<float>& values) {
   if (!buffer || values.size() != buffer->count) {
     throw std::invalid_argument("Upload size mismatch");
   }
-  const auto& implementation = find_backend(buffer->backend);
+  const BackendOps& implementation = find_backend(buffer->backend);
   if (!implementation.upload) {
     throw std::runtime_error("Backend not compiled: " +
                              std::string(implementation.name));
@@ -263,7 +264,7 @@ std::vector<float> backend_download(const BufferPtr& buffer) {
   if (!buffer) {
     throw std::invalid_argument("Undefined buffer");
   }
-  const auto& implementation = find_backend(buffer->backend);
+  const BackendOps& implementation = find_backend(buffer->backend);
   if (!implementation.download) {
     throw std::runtime_error("Backend not compiled: " +
                              std::string(implementation.name));
@@ -275,7 +276,7 @@ void backend_upload_int(const BufferPtr& buffer, const std::vector<int32_t>& val
   if (!buffer || (buffer->dtype != DType::Int32 && buffer->dtype != DType::Bool && !is_packed_integer(buffer->dtype)) || values.size() != buffer->count) {
     throw std::invalid_argument("Integer upload requires a matching integer or bool buffer");
   }
-  const auto& implementation = find_backend(buffer->backend);
+  const BackendOps& implementation = find_backend(buffer->backend);
   if (!implementation.upload_int) throw std::runtime_error("Integer upload backend unavailable");
   implementation.upload_int(buffer, values);
 }
@@ -284,14 +285,14 @@ std::vector<int32_t> backend_download_int(const BufferPtr& buffer) {
   if (!buffer || (buffer->dtype != DType::Int32 && buffer->dtype != DType::Bool && !is_packed_integer(buffer->dtype))) {
     throw std::invalid_argument("Integer download requires an integer or bool buffer");
   }
-  const auto& implementation = find_backend(buffer->backend);
+  const BackendOps& implementation = find_backend(buffer->backend);
   if (!implementation.download_int) throw std::runtime_error("Integer download backend unavailable");
   return implementation.download_int(buffer);
 }
 
 void backend_upload_raw(const BufferPtr& buffer, const std::vector<uint8_t>& bytes) {
   if (!buffer || bytes.size() != buffer->bytes) throw std::invalid_argument("Raw upload size mismatch");
-  auto function = find_backend(buffer->backend).upload_raw;
+  void (*function)(const BufferPtr&, const std::vector<uint8_t>&) = find_backend(buffer->backend).upload_raw;
   if (!function) throw std::runtime_error("Raw upload backend unavailable");
   function(buffer, bytes);
 }
@@ -305,7 +306,7 @@ void backend_upload_int64(const BufferPtr& buffer, const std::vector<int64_t>& v
 std::vector<int64_t> backend_download_int64(const BufferPtr& buffer) {
   if (!buffer || buffer->dtype != DType::Int64)
     throw std::invalid_argument("Int64 download requires Int64 storage");
-  auto bytes = backend_download_raw(buffer);
+  std::vector<uint8_t> bytes = backend_download_raw(buffer);
   if (bytes.size() != dtype_storage_bytes(DType::Int64, buffer->count))
     throw std::invalid_argument("Int64 download size mismatch");
   std::vector<int64_t> values(buffer->count);
@@ -314,7 +315,7 @@ std::vector<int64_t> backend_download_int64(const BufferPtr& buffer) {
 }
 std::vector<uint8_t> backend_download_raw(const BufferPtr& buffer) {
   if (!buffer) throw std::invalid_argument("Undefined buffer");
-  auto function = find_backend(buffer->backend).download_raw;
+  std::vector<uint8_t> (*function)(const BufferPtr&) = find_backend(buffer->backend).download_raw;
   if (!function) throw std::runtime_error("Raw download backend unavailable");
   return function(buffer);
 }
@@ -329,25 +330,25 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
   if (output->backend == Backend::Metal) metal::validate_operator_dtypes(op, params);
   if (op == "paged_attention") {
     validate_paged_attention(output, inputs, params);
-    const auto& implementation = find_backend(output->backend);
+    const BackendOps& implementation = find_backend(output->backend);
     if (!implementation.dispatch) throw std::runtime_error("Paged attention backend is unavailable");
     implementation.dispatch(op, output, inputs, params);
     ++counts[backend_index(output->backend)];
     return;
   }
-  const auto complex_operation = complex_pointwise_operation(op, params);
+  const ComplexPointwise complex_operation = complex_pointwise_operation(op, params);
   if (complex_operation != ComplexPointwise::None) {
     validate_complex_pointwise(complex_operation, output, inputs, params);
-    const auto& implementation = find_backend(output->backend);
+    const BackendOps& implementation = find_backend(output->backend);
     if (!implementation.dispatch) throw std::runtime_error("Complex backend is unavailable");
     implementation.dispatch(op, output, inputs, params);
     ++counts[backend_index(output->backend)];
     return;
   }
-  const auto quantization = affine_quantization_operation(op);
+  const AffineQuantization quantization = affine_quantization_operation(op);
   if (quantization != AffineQuantization::None) {
     validate_affine_quantization(quantization, output, inputs, params);
-    const auto& implementation = find_backend(output->backend);
+    const BackendOps& implementation = find_backend(output->backend);
     if (!implementation.dispatch) throw std::runtime_error("Affine quantization backend is unavailable");
     implementation.dispatch(op, output, inputs, params);
     ++counts[backend_index(output->backend)];
@@ -356,43 +357,43 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
   if (execute_packed_integer(op, output, inputs, params)) return;
   if (packed_integer_cast_operation(op, params)) {
     validate_packed_integer_cast(output, inputs, params);
-    const auto& implementation = find_backend(output->backend);
+    const BackendOps& implementation = find_backend(output->backend);
     if (!implementation.dispatch) throw std::runtime_error("Packed integer backend is unavailable");
     implementation.dispatch(op, output, inputs, params);
     ++counts[backend_index(output->backend)];
     return;
   }
-  const auto low_attention = low_precision_attention_operation(op, params);
-  const auto low_random = low_precision_random_operation(op, params);
-  const auto low_fused = low_precision_fused_operation(op, params);
-  const auto low_loss = low_precision_loss_operation(op, params);
-  const auto low_spatial = low_precision_spatial_operation(op, params);
-  const auto low_indexing = low_precision_indexing_operation(op, params);
-  const auto low_normalization = low_precision_normalization_operation(op, params);
-  const auto low_softmax = low_precision_softmax_operation(op, params);
-  const auto low_matrix = low_precision_matrix_operation(op, params);
-  const auto low_reduction = low_precision_reduction_operation(op, params);
+  const LowPrecisionAttention low_attention = low_precision_attention_operation(op, params);
+  const LowPrecisionRandom low_random = low_precision_random_operation(op, params);
+  const LowPrecisionFused low_fused = low_precision_fused_operation(op, params);
+  const LowPrecisionLoss low_loss = low_precision_loss_operation(op, params);
+  const LowPrecisionSpatial low_spatial = low_precision_spatial_operation(op, params);
+  const LowPrecisionIndexing low_indexing = low_precision_indexing_operation(op, params);
+  const LowPrecisionNormalization low_normalization = low_precision_normalization_operation(op, params);
+  const LowPrecisionSoftmax low_softmax = low_precision_softmax_operation(op, params);
+  const LowPrecisionMatrix low_matrix = low_precision_matrix_operation(op, params);
+  const LowPrecisionReduction low_reduction = low_precision_reduction_operation(op, params);
   const bool low_precision_cast = low_precision_cast_operation(op, params);
-  const auto low_operation = low_precision_pointwise_operation(op, params);
-  const auto double_operation = low_operation == LowPrecisionPointwise::None ? float64_pointwise_operation(op, params) : Float64Pointwise::None;
-  const auto double_reduction = float64_reduction_operation(op, params);
-  const auto double_matrix = float64_matrix_operation(op, params);
-  const auto double_softmax = float64_softmax_operation(op, params);
-  const auto double_indexing = float64_indexing_operation(op, params);
-  const auto double_spatial = float64_spatial_operation(op, params);
-  const auto double_loss = float64_loss_operation(op, params);
-  const auto double_attention = float64_attention_operation(op, params);
-  const auto double_random = float64_random_operation(op, params);
+  const LowPrecisionPointwise low_operation = low_precision_pointwise_operation(op, params);
+  const Float64Pointwise double_operation = low_operation == LowPrecisionPointwise::None ? float64_pointwise_operation(op, params) : Float64Pointwise::None;
+  const Float64Reduction double_reduction = float64_reduction_operation(op, params);
+  const Float64Matrix double_matrix = float64_matrix_operation(op, params);
+  const Float64Softmax double_softmax = float64_softmax_operation(op, params);
+  const Float64Indexing double_indexing = float64_indexing_operation(op, params);
+  const Float64Spatial double_spatial = float64_spatial_operation(op, params);
+  const Float64Loss double_loss = float64_loss_operation(op, params);
+  const Float64Attention double_attention = float64_attention_operation(op, params);
+  const Float64Random double_random = float64_random_operation(op, params);
   const bool double_categorical = float64_categorical_operation(op, params);
   const bool low_categorical = low_precision_categorical_operation(op, params);
   const bool low_optimizer = op == "optimizer_step";
-  const auto double_normalization = float64_normalization_operation(op, params);
-  const auto integer_operation = integer_pointwise_operation(op, params);
-  const auto integer_matrix = integer_matrix_operation(op, params);
-  const auto storage_layout = storage_layout_operation(op, output->dtype);
+  const Float64Normalization double_normalization = float64_normalization_operation(op, params);
+  const IntegerPointwise integer_operation = integer_pointwise_operation(op, params);
+  const IntegerMatrix integer_matrix = integer_matrix_operation(op, params);
+  const StorageLayout storage_layout = storage_layout_operation(op, output->dtype);
   const bool integer_extrema = (op == "max" || op == "min" || op == "amax" || op == "amin") &&
                                is_standard_integer(output->dtype);
-  auto require_kernel_dtype = [&](DType dtype) {
+  LocalFunction require_kernel_dtype{[&](DType dtype) {
     if (low_random != LowPrecisionRandom::None || low_attention != LowPrecisionAttention::None || low_fused != LowPrecisionFused::None || low_loss != LowPrecisionLoss::None || low_spatial != LowPrecisionSpatial::None || low_indexing != LowPrecisionIndexing::None || (op == "argsort" && is_low_precision_float(dtype)) || low_normalization != LowPrecisionNormalization::None || low_precision_cast || low_operation != LowPrecisionPointwise::None || low_reduction != LowPrecisionReduction::None || low_matrix != LowPrecisionMatrix::None || low_softmax != LowPrecisionSoftmax::None) return;
     if (storage_layout != StorageLayout::None) return;
     if (integer_operation != IntegerPointwise::None) return;
@@ -417,7 +418,7 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
     if (op == "index_copy" && dtype == DType::Int64) return;
     if (!is_compute_float(dtype) && dtype != DType::Int32 && dtype != DType::Bool)
       throw std::invalid_argument(op + ": arithmetic kernel is not implemented for " + dtype_name(dtype));
-  };
+  }};
   require_kernel_dtype(output->dtype);
   if (params.output_dtype() != int(output->dtype)) throw std::invalid_argument("Output dtype descriptor mismatch");
   for (size_t i = 0; i < inputs.size(); ++i) {
@@ -429,7 +430,7 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
         throw std::invalid_argument("Input dtype descriptor mismatch");
     }
   }
-  for (const auto& input : inputs) {
+  for (const BufferPtr& input : inputs) {
     if (input && input->backend != output->backend) {
       throw std::invalid_argument("Mixed-backend operation");
     }
@@ -480,7 +481,7 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
   if (storage_layout != StorageLayout::None)
     validate_storage_layout(storage_layout, output, inputs, params);
   if (op == "argsort") {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     require(!inputs.empty() && inputs.size() <= 4 && inputs[0], "Argsort requires one input");
     for (size_t i = 1; i < inputs.size(); ++i) require(!inputs[i], "Unexpected argsort operand");
     require(output->dtype == DType::Int32, "Argsort requires Int32 indices");
@@ -501,12 +502,12 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
     require(forward == inputs[0]->count && forward == output->count && params.output_count() == int(forward),
             "Argsort shape differs from storage");
     if (output->bytes && inputs[0]->bytes) {
-      const auto a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[0]->raw_pointer());
+      const uintptr_t a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(inputs[0]->raw_pointer());
       require(a <= b ? b - a >= output->bytes : a - b >= inputs[0]->bytes, "Argsort output overlaps its input");
     }
   }
   if (((op == "sum" || op == "prod" || op == "cumsum") && output->dtype == DType::Int64) || integer_extrema) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     require(!inputs.empty() && inputs.size() <= 4 && inputs[0] && is_standard_integer(inputs[0]->dtype),
             "Integer reduction requires one integer input");
     for (size_t i = 1; i < inputs.size(); ++i) require(!inputs[i], "Unexpected integer reduction operand");
@@ -549,14 +550,14 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
     require(output_count == output->count && params.output_count() == int(output_count),
             "Integer reduction output storage differs from shape");
     if (output->bytes && inputs[0]->bytes) {
-      auto first = reinterpret_cast<uintptr_t>(output->raw_pointer());
-      auto second = reinterpret_cast<uintptr_t>(inputs[0]->raw_pointer());
+      uintptr_t first = reinterpret_cast<uintptr_t>(output->raw_pointer());
+      uintptr_t second = reinterpret_cast<uintptr_t>(inputs[0]->raw_pointer());
       bool overlap = first <= second ? second - first < output->bytes : first - second < inputs[0]->bytes;
       require(!overlap, "Integer reduction output overlaps its input");
     }
   }
   if (op == "group_norm_weight_grad" && double_normalization == Float64Normalization::None && low_normalization == LowPrecisionNormalization::None) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     require(inputs.size() >= 2 && inputs.size() <= 4 && inputs[0] && inputs[1], "Group norm weight gradient requires values and gradients");
     for (size_t i = 2; i < inputs.size(); ++i) require(!inputs[i], "Unexpected group norm weight gradient operand");
     require(is_compute_float(inputs[0]->dtype) && inputs[1]->dtype == inputs[0]->dtype &&
@@ -581,13 +582,13 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
     require(params.output_rank() == 1 && params.output_shape(0) == channels && params.output_count() == channels &&
             output->count == size_t(channels), "Invalid group norm weight gradient output");
     for (size_t i = 0; i < 2; ++i) if (output->bytes && inputs[i]->bytes) {
-      auto first = reinterpret_cast<uintptr_t>(output->raw_pointer()), second = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
+      uintptr_t first = reinterpret_cast<uintptr_t>(output->raw_pointer()), second = reinterpret_cast<uintptr_t>(inputs[i]->raw_pointer());
       bool overlap = first <= second ? second - first < output->bytes : first - second < inputs[i]->bytes;
       require(!overlap, "Group norm weight gradient output overlaps an input");
     }
   }
   if (op == "index_copy") {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     require((storage_layout == StorageLayout::IndexCopy || is_compute_float(output->dtype) || output->dtype == DType::Int32 || output->dtype == DType::Bool) &&
             inputs.size() >= 3 && inputs.size() <= 4 && inputs[0] && inputs[1] && inputs[2] && (inputs.size() == 3 || !inputs[3]),
             "Index copy requires destination, indices and source");
@@ -595,7 +596,7 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
             (inputs[1]->dtype == DType::Int32 || inputs[1]->dtype == DType::Int64), "Invalid index copy dtype");
     KernelParams p = params;
     for (int i = 0; i < 3; ++i) {
-      auto input = static_cast<KernelInput>(i);
+      KernelInput input = static_cast<KernelInput>(i);
       int rank = p.input_rank(input);
       require(rank >= 0 && rank <= 8 && (i != 1 || rank <= 1), "Invalid index copy rank");
       size_t count = 1;
@@ -613,7 +614,7 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
     for (int axis = 0; axis < rank; ++axis)
       require(p.output_shape(axis) == p.input_shape(KernelInput::A, axis), "Index copy output dimensions differ");
     // Treat scalar operands as having a virtual length-one axis.
-    for (auto input : {KernelInput::A, KernelInput::B, KernelInput::C}) if (!p.input_rank(input)) {
+    for (KernelInput input : {KernelInput::A, KernelInput::B, KernelInput::C}) if (!p.input_rank(input)) {
       int slot = KernelParams::input_slot(input);
       p.v[slot] = 1;
       p.v[slot + KernelParams::kInputShapeOffset] = 1;
@@ -631,9 +632,9 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
     for (int dimension = 0; dimension < rank; ++dimension)
       if (dimension != axis) require(p.input_shape(KernelInput::A, dimension) == p.input_shape(KernelInput::C, dimension),
                                     "Index copy slice shapes differ");
-    auto overlaps = [](const BufferPtr& a, const BufferPtr& b) {
+    bool (*const overlaps)(const BufferPtr&, const BufferPtr&) = [](const BufferPtr& a, const BufferPtr& b) {
       if (!a->bytes || !b->bytes) return false;
-      auto first = reinterpret_cast<uintptr_t>(a->raw_pointer()), second = reinterpret_cast<uintptr_t>(b->raw_pointer());
+      uintptr_t first = reinterpret_cast<uintptr_t>(a->raw_pointer()), second = reinterpret_cast<uintptr_t>(b->raw_pointer());
       return first <= second ? second - first < a->bytes : first - second < b->bytes;
     };
     require(!overlaps(output, inputs[0]) || output->raw_pointer() == inputs[0]->raw_pointer(),
@@ -643,7 +644,7 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
     // Empty slices bypass index-value checks.
     if (inputs[2]->count) {
       MemoryReservation host(Backend::CPU, checked_memory_add(inputs[1]->bytes, checked_memory_mul(inputs[1]->count, sizeof(int32_t))));
-      auto bytes = backend_download_raw(inputs[1]);
+      std::vector<uint8_t> bytes = backend_download_raw(inputs[1]);
       std::vector<int32_t> values(inputs[1]->count);
       for (size_t i = 0; i < values.size(); ++i) {
         int64_t value;
@@ -657,19 +658,19 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
     }
     p.v[KernelParams::kAttributeSlot + operator_attr::index_copy::kAxis] = axis;
     p.v[KernelParams::kAttributeSlot + operator_attr::index_copy::kHasDuplicates] = int(duplicate);
-    const auto& implementation = find_backend(output->backend);
+    const BackendOps& implementation = find_backend(output->backend);
     if (!implementation.dispatch) throw std::runtime_error("Index copy backend not compiled");
     implementation.dispatch(op, output, inputs, p);
     ++counts[backend_index(output->backend)];
     return;
   }
   if (op == "packed_linear" && low_matrix == LowPrecisionMatrix::None) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     require((is_arithmetic_float(output->dtype) || (is_standard_integer(output->dtype) && output->dtype != DType::Bool)) && params.output_rank() == 1 &&
             inputs.size() >= 2 && inputs[0] && inputs[1], "Packed linear requires numeric input and weight");
     require(inputs.size() < 4 || !inputs[3], "Packed linear accepts at most three defined inputs");
     for (int i = 0; i < 3; ++i) {
-      auto input = static_cast<KernelInput>(i);
+      KernelInput input = static_cast<KernelInput>(i);
       bool present = size_t(i) < inputs.size() && bool(inputs[i]);
       int rank = params.input_rank(input);
       if (!present) { require(i == 2 && rank == -1, "Missing packed linear input descriptor"); continue; }
@@ -707,11 +708,11 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
             params.output_count() == int(count) && params.output_shape(0) == int(count), "Invalid packed linear output shape");
   }
   if (op == "tiled_attention" && low_attention == LowPrecisionAttention::None) {
-    auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     require(is_arithmetic_float(output->dtype) && params.output_rank() == 4 && inputs.size() == 4,
             "Tiled attention requires four floating inputs and a rank-four output");
     for (int i = 0; i < 4; ++i) {
-      auto input = static_cast<KernelInput>(i);
+      KernelInput input = static_cast<KernelInput>(i);
       int rank = params.input_rank(input);
       require(inputs[i] && inputs[i]->dtype == output->dtype && rank >= 0 && rank <= 4 && (i == 3 || rank == 4),
               "Invalid tiled attention input rank or dtype");
@@ -724,9 +725,9 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
       }
       require(count == inputs[i]->count, "Tiled attention input shape differs from its storage");
     }
-    auto q = [&](int d) { return params.input_shape(KernelInput::A, d); };
-    auto k = [&](int d) { return params.input_shape(KernelInput::B, d); };
-    auto v = [&](int d) { return params.input_shape(KernelInput::C, d); };
+    LocalFunction q{[&](int d) { return params.input_shape(KernelInput::A, d); }};
+    LocalFunction k{[&](int d) { return params.input_shape(KernelInput::B, d); }};
+    LocalFunction v{[&](int d) { return params.input_shape(KernelInput::C, d); }};
     require(q(1) > 0 && k(1) > 0 && q(1) % k(1) == 0 && k(1) == v(1) &&
             q(0) == k(0) && q(0) == v(0) && q(3) == k(3) && k(2) == v(2),
             "Incompatible tiled attention batch, head or feature dimensions");
@@ -788,7 +789,7 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
         throw std::invalid_argument("RMS normalization output shape must equal its input");
     for (int k = 1; k < int(inputs.size()); ++k) {
       if (!inputs[k]) continue;
-      auto source = static_cast<KernelInput>(k);
+      KernelInput source = static_cast<KernelInput>(k);
       if (!is_compute_float(inputs[k]->dtype) || (rounding && inputs[k]->dtype != output->dtype) ||
           params.input_rank(source) != trailing)
         throw std::invalid_argument("RMS affine inputs require floating dtype and normalized shape; rounding mode 1 requires matching dtypes");
@@ -802,7 +803,7 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
     if (!is_arithmetic_float(output->dtype) || rank < 0 || rank > 8 || inputs.size() < size_t(arity))
       throw std::invalid_argument("Invalid fused pointwise output or inputs");
     for (int k = 0; k < arity; ++k) {
-      auto source = static_cast<KernelInput>(k);
+      KernelInput source = static_cast<KernelInput>(k);
       int input_rank = params.input_rank(source);
       if (!inputs[k] || inputs[k]->dtype != output->dtype || input_rank < 0 || input_rank > rank)
         throw std::invalid_argument("Fused pointwise inputs require matching floating dtypes and broadcastable ranks");
@@ -852,7 +853,7 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
     ++counts[backend_index(output->backend)];
     return;
   }
-  const auto& implementation = find_backend(output->backend);
+  const BackendOps& implementation = find_backend(output->backend);
   if (!implementation.dispatch) {
     throw std::runtime_error("Backend not compiled: " +
                              std::string(implementation.name));
