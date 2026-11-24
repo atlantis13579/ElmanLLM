@@ -61,8 +61,9 @@ differentiation, model training, checkpoint loading, and inference.
 
 - Text generation: Qwen2 and DeepSeek V2/V3, including grouped-query attention,
   rotary positions, DeepSeek latent attention and sparse experts.
-- Image generation: Stable Diffusion and FLUX.2 Klein.
+- Image generation: Stable Diffusion and FLUX.2.
 - Speech recognition: Whisper.
+- Others: AlphaZero-style spatial policy/value networks.
 
 ## Command line
 
