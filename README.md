@@ -6,25 +6,63 @@ differentiation, model training, checkpoint loading, and inference.
 
 ## Capabilities
 
-- Elementwise, reduction, indexing, matrix, normalization, loss, convolution,
-  and pooling operations.
-- Automatic gradients with graph mutation checks.
-- Linear/logistic regression, AlexNet and GPT2 model definitions, SGD and Adam family optimizers, and
-  checkpoint based inference.
-- Native Qwen2 inference with official DeepSeek-R1-Distill-Qwen-1.5B weights,
-  grouped-query attention, rotary positions, KV caching, greedy generation,
-  UTF-8 streaming and stop strings.
-- Affine INT4 weights, sampled generation, paged KV storage, chunked prefill,
-  continuous batching and prefix reuse.
-- An HTTP API and a standalone browser workspace for streaming chat and image
-  generation with Stable Diffusion or FLUX.2 Klein.
-- Native DeepSeek latent attention and sparse experts, layer placement across
-  CUDA devices, single-card partition simulation, and complete Qwen decode CUDA
-  Graphs.
-- Independently trainable byte BPE tokenization and an official Hugging Face
-  tokenizer/chat-template import path for DeepSeek.
-- A backend interface that keeps tensor and model code independent of the
-  native implementations.
+### Tensor types and operators
+
+- Tensor operations cover elementwise arithmetic and comparisons, shape transforms,
+  indexing and scatter/gather, reductions, matrix multiplication, convolution,
+  pooling, normalization, losses, random sampling, and dropout.
+- Specialized operators include attention, rotary embeddings, quantized affine
+  transforms, and packed low-bit linear projections. Supported data types include
+  floating-point, integer, Boolean, complex, and quantized formats; availability
+  varies by operation and backend.
+
+### Automatic differentiation
+
+- Dynamic computation graphs provide reverse-mode automatic differentiation,
+  gradient accumulation, and graph mutation checks.
+
+### Execution backends
+
+- CPU, NVIDIA CUDA, and Apple Metal are available through a common backend
+  interface. CUDA supports execution across multiple devices, including layer placement
+  tensor parallelism. Apple execution uses Metal and MPSGraph.
+
+### Training
+
+- Train and evaluate regression, classification, and language-model tasks through
+  the native training API or JSON configurations. Declarative JSON tensor graphs
+  can also be trained; PPO and policy/value components support reinforcement
+  learning.
+- The training loop supports SGD, Adam, and AdamW; gradient clipping and
+  accumulation; constant or cosine learning-rate schedules with warmup; checkpoint
+  save/resume; and FP32, FP16, or BF16 precision. FP16 training uses dynamic loss
+  scaling.
+- Multi-process data-parallel training uses TCP collectives.
+
+### Inference
+
+- Run model or tensor-graph inference, generate text with greedy or sampled
+  decoding, synthesize images with diffusion, and transcribe audio with Whisper.
+- Decoder inference supports KV caching and chunked prefill. Qwen2 serving adds
+  continuous batching, paged KV storage, and prompt-prefix reuse; CUDA Qwen2 also
+  supports captured decode graphs.
+- Quantized weights and fused attention, normalization, and projection paths
+  provide additional inference options where supported.
+
+### Reinforcement learning
+
+- PPO supports continuous-action actor-critic training with rollouts from pluggable
+  environments, generalized advantage estimation, clipped policy updates, value
+  loss, and minibatch optimization across multiple epochs.
+- The RL toolkit also provides discounted returns and categorical policy-gradient
+  losses for discrete-action policies, including legal-action masking.
+
+### Model architectures
+
+- Text generation: Qwen2 and DeepSeek V2/V3, including grouped-query attention,
+  rotary positions, DeepSeek latent attention and sparse experts.
+- Image generation: Stable Diffusion and FLUX.2 Klein.
+- Speech recognition: Whisper.
 
 ## Command line
 
@@ -61,43 +99,6 @@ Hugging Face CLI before starting the server. [FLUX.2 Klein 4B model card](https:
 hf download black-forest-labs/FLUX.2-klein-4B --revision e7b7dc27f91deacad38e78976d1f2b499d76a294 --local-dir Models/FLUX.2-klein-4B --include "LICENSE.md" --include "flux-2-klein-4b.safetensors" --include "text_encoder/*" --include "tokenizer/*" --include "vae/*"
 ```
 
-The FLUX.2 web workspace defaults to 512 × 512 and four denoising steps.
-The `POST /sdapi/v1/txt2img` endpoint also accepts a prompt and optional
-width, height, steps, and seed. The image dimensions must be divisible by 16.
-
-### Policy-value serving
-
-Start a policy and value model with `elman --server-config PATH`, using a model definition and service configuration supplied by the client project.
-The client connects directly over TCP for prediction, optimizer updates and checkpoint requests.
-The client owns observations, trajectories, targets and the checkpoint schedule. [Protocol and training records](Docs/PolicyValue.md)
-
-### Browser workspace
-
-The HTTP serving examples set `http.web_root` to the repository's `Web`
-directory. Open the model server's URL to use the browser workspace. Pass
-`--open` to launch your default browser after the model and listener are ready.
-
-```sh
-elman --server-config Configs/Serving/Flux2Server.json --open
-```
-
-Elman serves static files directly from disk on each request. Edit the
-frontend and refresh the browser while the server is running. For a custom
-frontend, set `http.web_root` to its static output directory, with
-`index.html` as the entry point. Relative paths resolve from the serving
-configuration. Omit `http.web_root` for API-only serving.
-
-The workspace uses the current origin for API requests. Set `?api=http://127.0.0.1:8082`
-when serving it from an independent frontend server without a proxy.
-Add that frontend's exact origin, including its scheme and port, to
-`http.cors_origins`. The examples allow `http://127.0.0.1:8000`.
-
-| Endpoint | Frontend integration |
-| --- | --- |
-| `GET /health` | Get the model name, type, and supported features. |
-| `POST /v1/chat/completions` | Send JSON with `model`, `messages`, and `stream: true`. The SSE stream sends text in `choices[0].delta.content` and ends with `[DONE]`. |
-| `POST /sdapi/v1/txt2img` | Send JSON with a `prompt` and use `Accept: text/event-stream` for `progress`, `preview`, and `result` events. Set `live_preview: true` to request previews. Preview images and final `result.images` are base64-encoded BMPs. |
-
 ### Training and evaluation
 
 Set `data.path` in the training configuration to the dataset CSV before running
@@ -116,20 +117,28 @@ Elman runs DeepSeek-R1-Distill-Qwen-1.5B directly from its official weights and
 streams the answer through the browser workspace. The serving path combines
 tokenization, Qwen2 decoding, KV caching, and an HTTP chat API.
 
-### FLUX.2 Image Generation
+<img width="1280" height="720" alt="DeepSeek" src="https://github.com/user-attachments/assets/d2e1a5f8-2efc-498c-bde2-471042453396" />
+
+### Image Generation
 
 The browser workspace generates images with FLUX.2 Klein 4B using Elman's
 flow-matching sampler. It shows denoising progress and previews before the final
 image is ready.
 
-### Gaussian Splatting with EvansRenderer
+<img width="1280" height="720" alt="Flux2" src="https://github.com/user-attachments/assets/e93f1477-32ec-4e70-a012-ab03e9471332" />
 
-Elman trains the Utah Teapot as a set of 3D Gaussians. [EvansRenderer](https://github.com/atlantis13579/EvansRenderer)
-loads the trained model, projects and blends the splats, and renders a rotating
+### Gaussian Splatting
+
+Trains the Utah Teapot as a set of 3D Gaussians. Visualize in [EvansRenderer](https://github.com/atlantis13579/EvansRenderer).
+EvansRenderer loads the trained model, projects and blends the splats, and renders a rotating
 view of the teapot.
 
-### Robotics Reinforcement Learning with Riemann Physics
+https://github.com/user-attachments/assets/5a8be4db-2606-49c4-b3b1-829cd3e29512
 
-Elman's policy and value training drives the eight-legged robot in
-[Riemann Physics](https://github.com/atlantis13579/Riemann). Riemann Physics supplies the
+### Robotics Reinforcement Learning
+
+Elman's policy and weights training drives the eight-legged robot in
+[Riemann](https://github.com/atlantis13579/Riemann) Physics Playground. Riemann supplies the
 articulated-body physics and visualizes the robot during PPO training.
+
+https://github.com/user-attachments/assets/fc05cc57-90a3-454e-8f67-ed14fcc1db9a
