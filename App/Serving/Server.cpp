@@ -1,4 +1,5 @@
 #include "Server.h"
+#include "IO/Gguf.h"
 #include "Core/LocalFunction.h"
 
 #include "Http/Http.h"
@@ -194,13 +195,15 @@ void run_server(const std::filesystem::path& config_path, bool open_web) {
     if (type != "llm" && !image) throw std::invalid_argument("model.type must be llm, diffusion, flux2 or policy_value");
     if (image && config.contains("chat")) throw std::invalid_argument("chat settings require model.type llm");
     std::filesystem::path directory = resolve(base, model.at("path").string());
-    if (directory.empty() || !std::filesystem::is_directory(directory))
-        throw std::invalid_argument("Model directory does not exist: " + directory.u8string());
+    const auto gguf = image ? std::filesystem::path{} : find_gguf_model(directory);
+    if (directory.empty() || (gguf.empty() && !std::filesystem::is_directory(directory)))
+        throw std::invalid_argument("Model directory or GGUF file does not exist: " + directory.u8string());
     if (!directory.has_filename()) directory = directory.parent_path();
     const std::string name = model.string_or("name", directory.filename().u8string());
     if (name.empty()) throw std::invalid_argument("Model name must be nonempty");
     const Backend backend = parse_backend(model.string_or("backend", "cpu"));
     const DType dtype = parse_dtype(model.string_or("dtype",
+        !gguf.empty() && backend != Backend::CPU ? "float16" :
         backend == Backend::CUDA ? (image && !flux2 ? "float16" : "bfloat16") : "float32"));
     if (!backend_available(backend) || !is_compute_float(dtype))
         throw std::invalid_argument("Unavailable server backend or compute dtype");

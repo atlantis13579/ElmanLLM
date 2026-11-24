@@ -707,6 +707,37 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
     require(count == output->count && count <= size_t(std::numeric_limits<int>::max()) &&
             params.output_count() == int(count) && params.output_shape(0) == int(count), "Invalid packed linear output shape");
   }
+  if (op == "gated_delta") {
+    const auto require = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
+    require(inputs.size() >= 3 && output->dtype == DType::Float32 && params.output_rank() == 1,
+            "Gated delta requires a Float32 packed output");
+    for (int i = 0; i < 3; ++i) {
+      const auto slot = static_cast<KernelInput>(i);
+      require(inputs[i] && inputs[i]->dtype == DType::Float32 && params.input_rank(slot) == 4,
+              "Gated delta requires three Float32 rank-four operands");
+      size_t count = 1;
+      for (int axis = 3; axis >= 0; --axis) {
+        require(params.input_shape(slot, axis) > 0 && params.input_stride(slot, axis) == int(count),
+                "Invalid gated delta input descriptor");
+        count = checked_memory_mul(count, size_t(params.input_shape(slot, axis)));
+        require(count <= size_t(std::numeric_limits<int>::max()), "Gated delta input exceeds indexing range");
+      }
+      require(count == inputs[i]->count, "Gated delta input shape differs from storage");
+    }
+    const int batch = params.input_shape(KernelInput::A, 0), time = params.input_shape(KernelInput::A, 1);
+    const int heads = params.input_shape(KernelInput::A, 2), width = params.attribute(0), columns = params.attribute(1);
+    require(width > 0 && columns > 0 && int64_t(width) * 2 + columns == params.input_shape(KernelInput::A, 3),
+            "Invalid gated delta feature dimensions");
+    require(params.input_shape(KernelInput::B, 0) == batch && params.input_shape(KernelInput::B, 1) == time &&
+        params.input_shape(KernelInput::B, 2) == heads && params.input_shape(KernelInput::B, 3) == 2 &&
+        params.input_shape(KernelInput::C, 0) == batch && params.input_shape(KernelInput::C, 1) == heads &&
+        params.input_shape(KernelInput::C, 2) == width && params.input_shape(KernelInput::C, 3) == columns,
+        "Invalid gated delta gate or state shape");
+    const size_t count = checked_memory_mul(checked_memory_mul(size_t(batch), size_t(heads)),
+        checked_memory_mul(size_t(columns), size_t(time) + width));
+    require(count <= size_t(std::numeric_limits<int>::max()) && count == output->count &&
+        params.output_count() == int(count) && params.output_shape(0) == int(count), "Invalid gated delta output shape");
+  }
   if (op == "tiled_attention" && low_attention == LowPrecisionAttention::None) {
     void (*const require)(bool, const char*) = [](bool valid, const char* message) { if (!valid) throw std::invalid_argument(message); };
     require(is_arithmetic_float(output->dtype) && params.output_rank() == 4 && inputs.size() == 4,

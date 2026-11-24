@@ -4,6 +4,7 @@
 #include "Text/Unicode.h"
 
 namespace elman {
+class GgufFile;
 
 // Imports the NFC/isolated-regex/ByteLevel BPE pipeline used by the pinned
 // DeepSeek/Qwen tokenizer. Neural weights are not involved in tokenization.
@@ -21,6 +22,7 @@ public:
     size_t vocabulary_size() const { return decoded_.size(); }
     const std::string& chat_template() const { return chat_template_; }
     const std::string& bos_token() const { return bos_token_; }
+    const std::vector<int32_t>& stop_ids() const { return stop_ids_; }
 private:
     friend class TokenizerStream;
     struct AddedToken { int32_t id; std::string text; bool special; };
@@ -30,8 +32,12 @@ private:
     std::vector<AddedToken> added_;
     std::unique_ptr<UnicodeRegexSplit> splitter_;
     bool add_bos_ = false, add_eos_ = false;
+    bool normalize_ = true, qwen35_chat_ = false;
     int32_t bos_ = -1, eos_ = -1, pad_ = -1;
     std::string bos_token_, chat_template_;
+    std::vector<int32_t> stop_ids_;
+    void import_gguf(const GgufFile& file);
+    std::string render_qwen35_chat(const Json::Array& messages, bool generation) const;
     void ordinary(const std::string& text, std::vector<int32_t>& result) const;
 };
 

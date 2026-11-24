@@ -194,7 +194,7 @@ struct ChatService::Impl {
         require(options.max_new_tokens >= 0, "Default output token limit must be nonnegative");
         defaults.max_context = options.scheduler.max_context; defaults.max_new_tokens = options.max_new_tokens;
         defaults.memory = options.scheduler.memory; defaults.prefill_chunk_size = options.scheduler.prefill_chunk_size;
-        if (tokenizer && tokenizer->eos_id() >= 0) defaults.eos_ids.push_back(tokenizer->eos_id());
+        if (tokenizer) defaults.eos_ids = tokenizer->stop_ids();
         std::filesystem::path path = std::filesystem::path(options.model_directory) / "generation_config.json";
         if (std::filesystem::exists(path)) {
             Json generation = Json::read(path.string());

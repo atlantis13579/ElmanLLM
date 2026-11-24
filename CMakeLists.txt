@@ -1,15 +1,16 @@
 cmake_minimum_required(VERSION 3.24)
 project(Elman VERSION 0.1.0 LANGUAGES CXX)
+include(GNUInstallDirs)
+include(CMakePackageConfigHelpers)
 get_filename_component(ELMAN_BUILD_VARIANT "${CMAKE_BINARY_DIR}" NAME)
 
 option(ELMAN_ENABLE_CUDA "Build the native CUDA backend" OFF)
+option(ELMAN_ENABLE_MKL "Accelerate CPU Float32 operations with oneMKL" OFF)
 option(ELMAN_ENABLE_METAL "Build the Apple Metal backend using MPSGraph" ${APPLE})
-option(ELMAN_BUILD_TESTS "Build numerical and integration tests" ON)
-set(ELMAN_LLM_MODEL_DIR "" CACHE PATH "Optional model/tokenizer directory for the native chat test")
-set(ELMAN_CUBLAS_ROOT "" CACHE PATH "Optional cuBLAS runtime and import-library root")
-set(ELMAN_CUDNN_ROOT "" CACHE PATH "Optional cuDNN 9 root for CUDA convolution")
-set(ELMAN_MKL_ROOT "" CACHE PATH "Optional oneMKL root for native CPU Float32 GEMM")
-set(ELMAN_SLEEF_ROOT "" CACHE PATH "Optional static SLEEF root for AVX2 CPU Float32 math")
+foreach(legacy_option ELMAN_BUILD_TESTS ELMAN_CUBLAS_ROOT ELMAN_CUDNN_ROOT ELMAN_MKL_ROOT
+        ELMAN_SLEEF_ROOT ELMAN_LLM_MODEL_DIR)
+    unset(${legacy_option} CACHE)
+endforeach()
 
 if(ELMAN_ENABLE_METAL)
     if(NOT APPLE)
@@ -28,6 +29,9 @@ endif()
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+if(MSVC)
+    add_compile_options($<$<COMPILE_LANGUAGE:CXX>:/MP8> $<$<COMPILE_LANGUAGE:CXX>:/utf-8>)
+endif()
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/Binaries/${CMAKE_SYSTEM_NAME}/${ELMAN_BUILD_VARIANT}")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Lib")
 set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/Lib")
@@ -49,7 +53,6 @@ endif()
 file(GLOB CPU_OPERATORS CONFIGURE_DEPENDS "Src/Operators/CPU/*.cpp")
 set(ELMAN_SOURCES
     Src/Training/GraphTraining.cpp
-    Src/Serving/GenerationScheduler.cpp
     Src/Backends/Cpu.cpp
     Src/Backends/CpuGemm.cpp
     Src/Backends/CpuMath.cpp
@@ -102,11 +105,15 @@ set(ELMAN_SOURCES
     Src/Core/CommandGraph.cpp
     Src/Core/Tensor.cpp
     Src/Operators/inference_ops.cpp
+    Src/Operators/audio_ops.cpp
+    Src/Operators/recurrent_ops.cpp
     Src/Operators/flux2_ops.cpp
     Src/Operators/upsample.cpp
     Src/Inference/Diffusion/Ddim.cpp
     Src/Models/ClipText.cpp
-    Src/Runtime/DiffusionCommand.cpp
+    Src/Models/Audio/Whisper.cpp
+    Src/Inference/Audio/WhisperSession.cpp
+    Src/Inference/Audio/WhisperAlignment.cpp
     Src/Inference/Diffusion/StableDiffusion.cpp
     Src/Models/Diffusion/UNet.cpp
     Src/Models/Diffusion/Vae.cpp
@@ -147,6 +154,8 @@ set(ELMAN_SOURCES
     Src/Inference/LLM/MemoryPlan.cpp
     Src/Inference/LLM/Sampling.cpp
     Src/IO/Checkpoint.cpp
+    Src/IO/CTranslate2.cpp
+    Src/IO/Wave.cpp
     Src/IO/AtomicFile.cpp
     Src/IO/Jpeg.cpp
     Src/IO/Png.cpp
@@ -168,6 +177,7 @@ set(ELMAN_SOURCES
     Src/Models/LLM/DeepSeek.cpp
     Src/Models/LLM/DecoderFactory.cpp
     Src/Models/LLM/Qwen2.cpp
+    Src/Models/LLM/Qwen35.cpp
     Src/Models/ResNet.cpp
     Src/Reinforcement/SpatialPolicyValue.cpp
     Src/Layers/Module.cpp
@@ -187,6 +197,8 @@ set(ELMAN_SOURCES
     Src/Optimizer/Sgd.cpp
     Src/Runtime/RunContext.cpp
     Src/Text/Tokenizer.cpp
+    Src/Text/WhisperTokenizer.cpp
+    Src/Text/Qwen35Chat.cpp
     Src/Text/HuggingFaceTokenizer.cpp
     Src/Text/DeepSeekChat.cpp
     Src/Text/ClipTokenizer.cpp
@@ -214,10 +226,14 @@ if(ELMAN_ENABLE_CUDA)
     endif()
 endif()
 
-add_library(elman_core STATIC ${ELMAN_SOURCES})
+add_library(elman_core SHARED ${ELMAN_SOURCES})
+add_library(Elman::Core ALIAS elman_core)
+set_target_properties(elman_core PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON EXPORT_NAME Core)
 find_package(Threads REQUIRED)
 target_link_libraries(elman_core PRIVATE Threads::Threads)
-target_include_directories(elman_core PUBLIC "${PROJECT_SOURCE_DIR}/Src")
+target_include_directories(elman_core PUBLIC
+    $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Src>
+    $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/Elman>)
 if(ELMAN_ENABLE_METAL)
     file(GLOB METAL_OPERATORS CONFIGURE_DEPENDS "Src/Operators/Metal/*_metal.mm")
     target_sources(elman_core PRIVATE Src/Backends/Metal.mm Src/Backends/MPSGraph.mm ${METAL_OPERATORS})
@@ -228,34 +244,36 @@ if(ELMAN_ENABLE_METAL)
         target_link_libraries(elman_core PRIVATE "${ELMAN_${framework}_FRAMEWORK}")
     endforeach()
 endif()
-if(ELMAN_SLEEF_ROOT)
-    if(NOT CMAKE_SIZEOF_VOID_P EQUAL 8 OR NOT CMAKE_SYSTEM_PROCESSOR MATCHES "^(AMD64|amd64|x86_64|X86_64)$")
-        message(FATAL_ERROR "ELMAN_SLEEF_ROOT currently supports x86-64 AVX2 targets only")
-    endif()
-    find_library(ELMAN_SLEEF_LIBRARY NAMES sleef HINTS "${ELMAN_SLEEF_ROOT}/lib" NO_DEFAULT_PATH NO_CACHE REQUIRED)
-    find_path(ELMAN_SLEEF_INCLUDE sleef.h HINTS "${ELMAN_SLEEF_ROOT}/include" NO_DEFAULT_PATH NO_CACHE REQUIRED)
-    target_sources(elman_core PRIVATE Src/Backends/CpuMathAvx2.cpp)
-    set_source_files_properties(Src/Backends/CpuMathAvx2.cpp PROPERTIES
-        INCLUDE_DIRECTORIES "${ELMAN_SLEEF_INCLUDE}" COMPILE_DEFINITIONS SLEEF_STATIC_LIBS)
-    set_source_files_properties(Src/Backends/CpuMath.cpp PROPERTIES COMPILE_DEFINITIONS ELMAN_HAS_SLEEF)
-    target_link_libraries(elman_core PRIVATE "${ELMAN_SLEEF_LIBRARY}")
-    if(MSVC)
-        set_source_files_properties(Src/Backends/CpuMathAvx2.cpp PROPERTIES COMPILE_OPTIONS "/arch:AVX2")
-    else()
-        set_source_files_properties(Src/Backends/CpuMathAvx2.cpp PROPERTIES COMPILE_OPTIONS "-mavx2;-mfma")
-    endif()
-endif()
-if(ELMAN_MKL_ROOT)
-    find_library(ELMAN_MKL_LIBRARY NAMES mkl_rt HINTS "${ELMAN_MKL_ROOT}/lib" "${ELMAN_MKL_ROOT}/lib/intel64" NO_DEFAULT_PATH NO_CACHE REQUIRED)
-    find_path(ELMAN_MKL_INCLUDE mkl.h HINTS "${ELMAN_MKL_ROOT}/include" NO_DEFAULT_PATH NO_CACHE REQUIRED)
+if(ELMAN_ENABLE_MKL)
+    find_path(ELMAN_MKL_INCLUDE mkl.h HINTS "$ENV{MKLROOT}/include" "${ELMAN_MKL_INSTALL_ROOT}/include" NO_CACHE REQUIRED)
+    get_filename_component(ELMAN_MKL_INSTALL_ROOT "${ELMAN_MKL_INCLUDE}" DIRECTORY)
+    set(ELMAN_MKL_INSTALL_ROOT "${ELMAN_MKL_INSTALL_ROOT}" CACHE INTERNAL "Discovered oneMKL installation" FORCE)
+    find_library(ELMAN_MKL_LIBRARY NAMES mkl_rt HINTS "${ELMAN_MKL_INSTALL_ROOT}/lib" "${ELMAN_MKL_INSTALL_ROOT}/lib/intel64" NO_CACHE REQUIRED)
     set_source_files_properties(Src/Backends/CpuGemm.cpp PROPERTIES
         INCLUDE_DIRECTORIES "${ELMAN_MKL_INCLUDE}" COMPILE_DEFINITIONS ELMAN_HAS_MKL)
     target_link_libraries(elman_core PRIVATE "${ELMAN_MKL_LIBRARY}")
     if(WIN32)
-        file(GLOB ELMAN_MKL_RUNTIME "${ELMAN_MKL_ROOT}/bin/*.dll")
-        if(NOT ELMAN_MKL_RUNTIME)
-            message(FATAL_ERROR "ELMAN_MKL_ROOT requires runtime DLLs under bin")
-        endif()
+        # Match the Intel OpenMP layer selected by CpuGemm.cpp. Do not ship the
+        # alternate threading layers, debug/stub OpenMP or allocator interposer.
+        set(ELMAN_MKL_RUNTIME)
+        foreach(component mkl_rt mkl_core mkl_intel_thread mkl_def mkl_vml_def libiomp5md)
+            file(GLOB component_runtime CONFIGURE_DEPENDS
+                "${ELMAN_MKL_INSTALL_ROOT}/bin/${component}.dll"
+                "${ELMAN_MKL_INSTALL_ROOT}/bin/${component}.[0-9]*.dll")
+            list(LENGTH component_runtime component_count)
+            if(NOT component_count EQUAL 1)
+                message(FATAL_ERROR "oneMKL requires exactly one ${component} runtime DLL under ${ELMAN_MKL_INSTALL_ROOT}/bin")
+            endif()
+            list(APPEND ELMAN_MKL_RUNTIME ${component_runtime})
+        endforeach()
+        # Dispatch happens at run time. Retain kernels for all supported CPUs,
+        # including the VML conditional-reproducibility implementation.
+        file(GLOB ELMAN_MKL_KERNEL_RUNTIME CONFIGURE_DEPENDS
+            "${ELMAN_MKL_INSTALL_ROOT}/bin/mkl_avx*.dll"
+            "${ELMAN_MKL_INSTALL_ROOT}/bin/mkl_mc*.dll"
+            "${ELMAN_MKL_INSTALL_ROOT}/bin/mkl_vml_*.dll")
+        list(APPEND ELMAN_MKL_RUNTIME ${ELMAN_MKL_KERNEL_RUNTIME})
+        list(REMOVE_DUPLICATES ELMAN_MKL_RUNTIME)
         add_custom_command(TARGET elman_core POST_BUILD
             COMMAND ${CMAKE_COMMAND} -E make_directory "${ELMAN_TEST_RUNTIME_DIRECTORY}"
             COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ELMAN_MKL_RUNTIME} "${ELMAN_TEST_RUNTIME_DIRECTORY}" VERBATIM)
@@ -273,10 +291,11 @@ else()
 endif()
 if(ELMAN_ENABLE_CUDA)
     target_compile_definitions(elman_core PUBLIC ELMAN_HAS_CUDA)
-    if(ELMAN_CUDNN_ROOT)
-        find_path(ELMAN_CUDNN_INCLUDE cudnn.h HINTS "${ELMAN_CUDNN_ROOT}" PATH_SUFFIXES include NO_DEFAULT_PATH NO_CACHE REQUIRED)
-        find_library(ELMAN_CUDNN_LIBRARY NAMES cudnn HINTS "${ELMAN_CUDNN_ROOT}"
-            PATH_SUFFIXES lib lib64 lib/x64 NO_DEFAULT_PATH NO_CACHE REQUIRED)
+    get_filename_component(ELMAN_CUDA_LIBRARY_DIR "${CUDA_cublas_LIBRARY}" DIRECTORY)
+    find_path(ELMAN_CUDNN_INCLUDE cudnn.h HINTS ${CUDAToolkit_INCLUDE_DIRS} "$ENV{CUDNN_ROOT}/include" NO_CACHE)
+    find_library(ELMAN_CUDNN_LIBRARY NAMES cudnn HINTS "${ELMAN_CUDA_LIBRARY_DIR}"
+        "$ENV{CUDNN_ROOT}/lib" "$ENV{CUDNN_ROOT}/lib/x64" NO_CACHE)
+    if(ELMAN_CUDNN_INCLUDE AND ELMAN_CUDNN_LIBRARY)
         target_sources(elman_core PRIVATE Src/Backends/CudaConvolution.cu)
         set_source_files_properties(Src/Backends/CudaConvolution.cu PROPERTIES INCLUDE_DIRECTORIES "${ELMAN_CUDNN_INCLUDE}")
         set_source_files_properties(Src/Backends/CudaConvolution.cu
@@ -284,52 +303,51 @@ if(ELMAN_ENABLE_CUDA)
             Src/Operators/CUDA/conv2d_weight_grad_cuda.cu PROPERTIES COMPILE_DEFINITIONS ELMAN_HAS_CUDNN)
         target_link_libraries(elman_core PRIVATE "${ELMAN_CUDNN_LIBRARY}")
         if(WIN32)
-            file(GLOB ELMAN_CUDNN_RUNTIME "${ELMAN_CUDNN_ROOT}/bin/cudnn*.dll" "${ELMAN_CUDNN_ROOT}/bin/x64/cudnn*.dll")
+            file(GLOB ELMAN_CUDNN_RUNTIME "${CUDAToolkit_BIN_DIR}/cudnn*.dll"
+                "${CUDAToolkit_BIN_DIR}/x64/cudnn*.dll"
+                "$ENV{CUDNN_ROOT}/bin/cudnn*.dll" "$ENV{CUDNN_ROOT}/bin/x64/cudnn*.dll")
             if(NOT ELMAN_CUDNN_RUNTIME)
-                message(FATAL_ERROR "ELMAN_CUDNN_ROOT requires cuDNN runtime DLLs under bin or bin/x64")
+                message(FATAL_ERROR "cuDNN headers and library found, but no runtime DLL is available")
             endif()
             add_custom_command(TARGET elman_core POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E make_directory "${ELMAN_TEST_RUNTIME_DIRECTORY}"
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ELMAN_CUDNN_RUNTIME} "${ELMAN_TEST_RUNTIME_DIRECTORY}" VERBATIM)
         endif()
     endif()
-    if(ELMAN_CUBLAS_ROOT)
-        unset(ELMAN_CUBLAS_LIBRARY CACHE)
-        unset(ELMAN_CUBLASLT_LIBRARY CACHE)
-        find_library(ELMAN_CUBLAS_LIBRARY NAMES cublas HINTS "${ELMAN_CUBLAS_ROOT}/lib" "${ELMAN_CUBLAS_ROOT}/lib/x64" NO_DEFAULT_PATH NO_CACHE REQUIRED)
-        find_library(ELMAN_CUBLASLT_LIBRARY NAMES cublasLt HINTS "${ELMAN_CUBLAS_ROOT}/lib" "${ELMAN_CUBLAS_ROOT}/lib/x64" NO_DEFAULT_PATH NO_CACHE REQUIRED)
-        target_link_libraries(elman_core PRIVATE "${ELMAN_CUBLAS_LIBRARY}" "${ELMAN_CUBLASLT_LIBRARY}")
-        if(WIN32)
-            file(GLOB ELMAN_CUBLAS_RUNTIME "${ELMAN_CUBLAS_ROOT}/bin/cublas*.dll" "${ELMAN_CUBLAS_ROOT}/bin/x64/cublas*.dll")
-            if(NOT ELMAN_CUBLAS_RUNTIME)
-                message(FATAL_ERROR "ELMAN_CUBLAS_ROOT requires cuBLAS runtime DLLs under bin or bin/x64")
-            endif()
-            add_custom_command(TARGET elman_core POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E make_directory "${ELMAN_TEST_RUNTIME_DIRECTORY}"
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ELMAN_CUBLAS_RUNTIME} "${ELMAN_TEST_RUNTIME_DIRECTORY}" VERBATIM)
+    target_link_libraries(elman_core PRIVATE CUDA::cublas CUDA::cublasLt)
+    if(WIN32)
+        # Resolve cuBLAS from the installed CUDA Toolkit through PATH at run time.
+        file(GLOB ELMAN_CUBLAS_RUNTIME "${CUDAToolkit_BIN_DIR}/cublas64_*.dll"
+            "${CUDAToolkit_BIN_DIR}/x64/cublas64_*.dll")
+        file(GLOB ELMAN_CUBLASLT_RUNTIME "${CUDAToolkit_BIN_DIR}/cublasLt64_*.dll"
+            "${CUDAToolkit_BIN_DIR}/x64/cublasLt64_*.dll")
+        if(NOT ELMAN_CUBLAS_RUNTIME OR NOT ELMAN_CUBLASLT_RUNTIME)
+            message(FATAL_ERROR "CUDA requires cuBLAS and cuBLASLt runtime DLLs in the CUDA Toolkit")
         endif()
-    else()
-        target_link_libraries(elman_core PRIVATE CUDA::cublas CUDA::cublasLt)
     endif()
 endif()
 
 add_library(elman_serving STATIC
-    Src/Networking/TcpServer.cpp
-    Src/Networking/HttpServer.cpp
-    Src/Networking/HttpFiles.cpp
-    Src/Serving/Server.cpp
-    Src/Serving/GpuMonitor.cpp
-    Src/Serving/Http/ChatService.cpp
-    Src/Serving/Http/ChatResponse.cpp
-    Src/Serving/Http/Http.cpp
-    Src/Serving/Http/ImageService.cpp
-    Src/Reinforcement/Messages.cpp
-    Src/Reinforcement/PolicyValueServer.cpp)
+    App/Serving/GenerationScheduler.cpp
+    App/Networking/TcpServer.cpp
+    App/Networking/HttpServer.cpp
+    App/Networking/HttpFiles.cpp
+    App/Serving/Server.cpp
+    App/Serving/GpuMonitor.cpp
+    App/Serving/Http/ChatService.cpp
+    App/Serving/Http/ChatResponse.cpp
+    App/Serving/Http/Http.cpp
+    App/Serving/Http/ImageService.cpp
+    App/Reinforcement/Messages.cpp
+    App/Reinforcement/PolicyValueServer.cpp
+    App/Reinforcement/RoboticsPpoClient.cpp)
+target_include_directories(elman_serving PUBLIC "${PROJECT_SOURCE_DIR}/App")
 target_link_libraries(elman_serving PUBLIC elman_core PRIVATE Threads::Threads)
 if(WIN32)
     target_link_libraries(elman_serving PRIVATE ws2_32)
 endif()
 if(ELMAN_ENABLE_CUDA)
+    target_link_libraries(elman_serving PRIVATE CUDA::cudart_static)
     find_path(ELMAN_NVML_INCLUDE_DIR nvml.h PATHS ${CUDAToolkit_INCLUDE_DIRS} NO_DEFAULT_PATH NO_CACHE)
     if(ELMAN_NVML_INCLUDE_DIR)
         target_compile_definitions(elman_serving PRIVATE ELMAN_HAS_NVML)
@@ -338,24 +356,63 @@ if(ELMAN_ENABLE_CUDA)
     endif()
 endif()
 
-add_executable(elman Apps/Main.cpp)
+add_executable(elman App/Main.cpp
+    App/Commands/Diffusion.cpp
+    App/Commands/Generate.cpp
+    App/Commands/InferTensors.cpp
+    App/Commands/Tokenizer.cpp
+    App/Commands/Transcribe.cpp
+    App/Commands/Train.cpp)
 target_link_libraries(elman PRIVATE elman_serving)
+set_target_properties(elman PROPERTIES BUILD_RPATH_USE_ORIGIN ON)
 if(WIN32)
-    foreach(runtime ELMAN_MKL_RUNTIME ELMAN_CUDNN_RUNTIME ELMAN_CUBLAS_RUNTIME)
+    foreach(runtime ELMAN_MKL_RUNTIME ELMAN_CUDNN_RUNTIME)
         if(${runtime})
             add_custom_command(TARGET elman POST_BUILD COMMAND ${CMAKE_COMMAND} -E copy_if_different
                 ${${runtime}} "$<TARGET_FILE_DIR:elman>" VERBATIM)
         endif()
     endforeach()
-    set(ELMAN_APP_OUTPUT_DIRECTORY "${PROJECT_SOURCE_DIR}/Binaries/Windows")
-    set_target_properties(elman PROPERTIES RUNTIME_OUTPUT_DIRECTORY "${ELMAN_APP_OUTPUT_DIRECTORY}")
-    foreach(configuration DEBUG RELEASE RELWITHDEBINFO MINSIZEREL)
-        set_target_properties(elman PROPERTIES "RUNTIME_OUTPUT_DIRECTORY_${configuration}" "${ELMAN_APP_OUTPUT_DIRECTORY}")
-    endforeach()
     target_link_libraries(elman_serving PRIVATE shell32)
 endif()
 
-if(ELMAN_BUILD_TESTS)
-    enable_testing()
-    add_subdirectory(Tests)
+enable_testing()
+add_subdirectory(Tests)
+
+install(TARGETS elman_core elman EXPORT ElmanTargets
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+    ARCHIVE DESTINATION ${CMAKE_INSTALL_LIBDIR})
+set(ELMAN_RUNTIME_FILENAMES)
+if(WIN32)
+    foreach(runtime ELMAN_MKL_RUNTIME ELMAN_CUDNN_RUNTIME)
+        if(${runtime})
+            install(FILES ${${runtime}} DESTINATION ${CMAKE_INSTALL_BINDIR})
+            foreach(library IN LISTS ${runtime})
+                get_filename_component(filename "${library}" NAME)
+                list(APPEND ELMAN_RUNTIME_FILENAMES "${filename}")
+            endforeach()
+        endif()
+    endforeach()
+    list(REMOVE_DUPLICATES ELMAN_RUNTIME_FILENAMES)
+    configure_file(CMake/PruneRuntime.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/PruneRuntime.cmake" @ONLY)
+    add_custom_command(TARGET elman_core POST_BUILD
+        COMMAND ${CMAKE_COMMAND} "-DELMAN_RUNTIME_DIRECTORY=${ELMAN_TEST_RUNTIME_DIRECTORY}"
+            -P "${CMAKE_CURRENT_BINARY_DIR}/PruneRuntime.cmake" VERBATIM)
+    install(CODE "set(ELMAN_RUNTIME_DIRECTORY \"\$ENV{DESTDIR}\${CMAKE_INSTALL_PREFIX}/${CMAKE_INSTALL_BINDIR}\")
+        include(\"${CMAKE_CURRENT_BINARY_DIR}/PruneRuntime.cmake\")")
 endif()
+if(ELMAN_ENABLE_MKL AND EXISTS "${ELMAN_MKL_INSTALL_ROOT}/licenses")
+    install(DIRECTORY "${ELMAN_MKL_INSTALL_ROOT}/licenses/" DESTINATION ${CMAKE_INSTALL_DATADIR}/Elman/licenses/oneMKL)
+endif()
+install(DIRECTORY Src/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/Elman
+    FILES_MATCHING PATTERN "*.h" PATTERN "*.inc")
+install(DIRECTORY App/Web/ DESTINATION ${CMAKE_INSTALL_DATADIR}/Elman/Web)
+install(EXPORT ElmanTargets NAMESPACE Elman:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Elman)
+configure_package_config_file(CMake/ElmanConfig.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/ElmanConfig.cmake"
+    INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Elman
+    PATH_VARS CMAKE_INSTALL_BINDIR)
+write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/ElmanConfigVersion.cmake"
+    VERSION ${PROJECT_VERSION} COMPATIBILITY SameMajorVersion)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/ElmanConfig.cmake"
+              "${CMAKE_CURRENT_BINARY_DIR}/ElmanConfigVersion.cmake"
+    DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Elman)

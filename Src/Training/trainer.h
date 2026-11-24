@@ -3,7 +3,6 @@
 #include <string>
 
 #include "Models/Model.h"
-#include "Runtime/RunOptions.h"
 
 namespace elman {
 
@@ -20,6 +19,5 @@ struct TrainingRun {
 };
 
 int train_model(Model& model, const BatchDataset& data, const TrainingRun& run, ProcessGroup& group);
-int train(const std::string& configuration, const RunOptions& options = {});
 
 }  // namespace elman

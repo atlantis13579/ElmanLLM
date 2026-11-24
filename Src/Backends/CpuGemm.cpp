@@ -18,6 +18,11 @@ void initialize_blas() {
     static const bool ready = [] {
         if (mkl_set_interface_layer(MKL_INTERFACE_LP64) != MKL_INTERFACE_LP64)
             throw std::runtime_error("Cannot select the LP64 MKL interface");
+#ifdef _WIN32
+        // The Windows runtime package ships the Intel OpenMP threading layer.
+        if (mkl_set_threading_layer(MKL_THREADING_INTEL) != MKL_THREADING_INTEL)
+            throw std::runtime_error("Cannot select the Intel OpenMP MKL threading layer");
+#endif
         return true;
     }();
     (void)ready;

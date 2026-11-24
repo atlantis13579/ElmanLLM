@@ -154,6 +154,8 @@ void index_limits(Backend backend) {
 }
 
 void test_kernel_reference(elman::Backend backend) {
+    close("gated_delta",call(backend,"gated_delta",{3},
+        {{{1,2,1,3},{1,1,2,1,1,3}},{{1,2,1,2},{.5f,.5f,.5f,.5f}},{{1,1,1,1},{0}}},{1,1}),{1,1.75f,1.75f});
     index_limits(backend);
     spatial_forward_parity(backend);
     const Input quantized{{2,3},{-4,-2,0,2,4,6},DType::QInt8};

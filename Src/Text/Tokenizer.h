@@ -49,6 +49,5 @@ private:
                       std::vector<int32_t>& output, const std::array<int32_t, 256>* endings = nullptr) const;
 };
 
-int tokenizer_command(const std::string& command, int argc, char** argv);
 
 } // namespace elman

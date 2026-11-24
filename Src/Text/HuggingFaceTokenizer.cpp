@@ -1,7 +1,9 @@
 #include "Text/HuggingFaceTokenizer.h"
 #include "Core/LocalFunction.h"
+#include "IO/Gguf.h"
 
 #include <algorithm>
+#include <cmath>
 #include <filesystem>
 #include <limits>
 #include <map>
@@ -42,7 +44,11 @@ std::string token_content(const Json& config, const std::string& key) {
 }
 
 HuggingFaceTokenizer::HuggingFaceTokenizer(const std::string& directory) {
-    std::filesystem::path root = std::filesystem::path(directory);
+    std::filesystem::path root = std::filesystem::u8path(directory);
+    if (!std::filesystem::exists(root / "tokenizer.json")) {
+        const auto gguf = find_gguf_model(root);
+        if (!gguf.empty()) { import_gguf(GgufFile(gguf)); return; }
+    }
     Json definition = Json::read((root / "tokenizer.json").string());
     Json config = Json::read((root / "tokenizer_config.json").string());
     require(definition.at("version").string() == "1.0", "unsupported tokenizer format version");
@@ -127,6 +133,7 @@ HuggingFaceTokenizer::HuggingFaceTokenizer(const std::string& directory) {
         return found->second;
     }};
     bos_ = special_id("bos_token"); eos_ = special_id("eos_token"); pad_ = special_id("pad_token");
+    if (eos_ >= 0) stop_ids_.push_back(eos_);
     add_bos_ = config.bool_or("add_bos_token", false); add_eos_ = config.bool_or("add_eos_token", false);
     require((!add_bos_ || bos_ >= 0) && (!add_eos_ || eos_ >= 0), "missing configured BOS/EOS token");
     bos_token_ = token_content(config, "bos_token");
@@ -136,7 +143,7 @@ HuggingFaceTokenizer::HuggingFaceTokenizer(const std::string& directory) {
 
 void HuggingFaceTokenizer::ordinary(const std::string& text, std::vector<int32_t>& result) const {
     if (text.empty()) return;
-    for (const std::string& piece : splitter_->split(normalize_nfc(text))) {
+    for (const std::string& piece : splitter_->split(normalize_ ? normalize_nfc(text) : text)) {
         std::vector<int32_t> ids = bpe_.encode(piece, false);
         result.insert(result.end(), ids.begin(), ids.end());
     }
@@ -171,6 +178,60 @@ std::string HuggingFaceTokenizer::decode(const std::vector<int32_t>& ids, bool s
         if (!skip_special_tokens || !special_[id]) bytes += decoded_[id];
     }
     return replace_invalid_utf8(bytes);
+}
+
+void HuggingFaceTokenizer::import_gguf(const GgufFile& file) {
+    require(file.strings().at("tokenizer.ggml.model") == "gpt2" && file.strings().at("tokenizer.ggml.pre") == "qwen35",
+            "GGUF tokenizer requires Qwen3.5 ByteLevel BPE");
+    const auto& vocabulary = file.string_arrays().at("tokenizer.ggml.tokens");
+    const auto& types = file.number_arrays().at("tokenizer.ggml.token_type");
+    require(vocabulary.size() >= 256 && vocabulary.size() < size_t(std::numeric_limits<int32_t>::max()) &&
+            types.size() == vocabulary.size(), "invalid GGUF vocabulary");
+    const auto decoder = byte_decoder();
+    std::map<std::string, int32_t> ids;
+    bpe_.vocabulary_.resize(vocabulary.size()); decoded_.resize(vocabulary.size()); special_.resize(vocabulary.size());
+    for (size_t id = 0; id < vocabulary.size(); ++id) {
+        require(!vocabulary[id].empty() && ids.emplace(vocabulary[id], int32_t(id)).second, "duplicate or empty GGUF token");
+        const bool special = types[id] != 1;
+        special_[id] = special;
+        decoded_[id] = special ? vocabulary[id] : byte_token(vocabulary[id], decoder);
+        bpe_.vocabulary_[id] = decoded_[id];
+        if (special && types[id] != 5) added_.push_back({int32_t(id), vocabulary[id], true});
+    }
+    for (int byte = 0; byte < 256; ++byte) {
+        const auto found = ids.find(utf8(std::u16string(1, bytelevel_codepoints()[byte])));
+        require(found != ids.end(), "GGUF byte alphabet is incomplete"); bpe_.byte_ids_[byte] = found->second;
+    }
+    for (const auto& merge : file.string_arrays().at("tokenizer.ggml.merges")) {
+        const auto separator = merge.find(' ');
+        require(separator != std::string::npos && separator && separator + 1 < merge.size(), "Invalid GGUF BPE merge");
+        const auto a = ids.find(merge.substr(0, separator)), b = ids.find(merge.substr(separator + 1));
+        const auto output = ids.find(merge.substr(0, separator) + merge.substr(separator + 1));
+        require(a != ids.end() && b != ids.end() && output != ids.end(), "GGUF merge token is absent");
+        require(bpe_.ranks_.emplace(pair_key(a->second, b->second), bpe_.merges_.size()).second, "Duplicate GGUF merge");
+        bpe_.merges_.push_back({a->second, b->second, output->second});
+    }
+    auto configured_id = [&](const char* key) {
+        const auto found = file.numbers().find(key);
+        if (found == file.numbers().end()) return int32_t(-1);
+        require(found->second >= 0 && found->second < double(vocabulary.size()) && std::floor(found->second) == found->second,
+                "Invalid GGUF special token ID");
+        return int32_t(found->second);
+    };
+    bos_ = configured_id("tokenizer.ggml.bos_token_id"); eos_ = configured_id("tokenizer.ggml.eos_token_id");
+    pad_ = configured_id("tokenizer.ggml.padding_token_id");
+    if (eos_ >= 0) stop_ids_.push_back(eos_);
+    const auto message_end = ids.find("<|im_end|>");
+    require(message_end != ids.end() && ids.count("<|im_start|>"), "Missing ChatML delimiters");
+    if (message_end->second != eos_) stop_ids_.push_back(message_end->second);
+    if (bos_ >= 0) bos_token_ = vocabulary[bos_];
+    auto flag = [&](const char* name) { const auto item = file.numbers().find(name); return item != file.numbers().end() && item->second != 0; };
+    add_bos_ = flag("tokenizer.ggml.add_bos_token"); add_eos_ = flag("tokenizer.ggml.add_eos_token");
+    require((!add_bos_ || bos_ >= 0) && (!add_eos_ || eos_ >= 0), "Missing GGUF BOS/EOS token");
+    normalize_ = false; qwen35_chat_ = true;
+    chat_template_ = file.strings().at("tokenizer.chat_template");
+    splitter_ = std::make_unique<UnicodeRegexSplit>(
+        R"((?i:'s|'t|'re|'ve|'m|'ll|'d)|[^\r\n\p{L}\p{N}]?[\p{L}\p{M}]+|\p{N}| ?[^\s\p{L}\p{M}\p{N}]+[\r\n]*|\s*[\r\n]+|\s+(?!\S)|\s+)");
 }
 
 } // namespace elman

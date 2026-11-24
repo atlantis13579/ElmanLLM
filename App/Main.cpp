@@ -8,9 +8,10 @@
 #include <Windows.h>
 #endif
 
+#include "Commands/Commands.h"
 #include "Core/Backend.h"
 #include "Core/Device.h"
-#include "Runtime/DiffusionCommand.h"
+#include "Commands/Diffusion.h"
 #include "Inference/ModelEvaluation.h"
 #include "Inference/InferenceSession.h"
 #include "Inference/LLM/Generation.h"
@@ -19,6 +20,7 @@
 #include "Text/Tokenizer.h"
 
 #include "Serving/Server.h"
+#include "Reinforcement/RoboticsPpoClient.h"
 
 namespace {
 void usage() {
@@ -26,6 +28,7 @@ void usage() {
       << "Elman self-contained deep-learning framework\n"
       << "Usage:\n"
       << "  elman devices\n"
+      << "  elman robotics-ppo-client --port PORT\n"
       << "  elman train <training.json> [--backend cpu|cuda|metal] [--steps N]\n"
       << "        [--checkpoint FILE] [--resume FILE] [--output metrics.json]\n"
       << "  elman infer <training.json> [--backend DEVICE] [--checkpoint FILE] "
@@ -34,6 +37,8 @@ void usage() {
       << "        [--checkpoint FILE] [--signature NAME] [--backend cpu|cuda|metal]\n"
       << "  elman diffusion <model-directory> --prompt TEXT --output IMAGE.png\n"
       << "        [--backend cpu|cuda|metal] [--dtype TYPE] [--steps N] [--seed N]\n"
+      << "  elman transcribe <whisper-directory> --input AUDIO.wav --output TRANSCRIPT.json\n"
+      << "        [--backend cpu|cuda|metal] [--language auto|en|zh|...] [--beam-size N]\n"
       << "  elman tokenizer-train <tokenizer-training.json>\n"
       << "  elman tokenizer-encode <tokenizer.json> --input text.txt --output ids.json\n"
       << "  elman tokenizer-decode <tokenizer.json> --input ids.json --output text.txt\n";
@@ -62,8 +67,14 @@ int run(int argc, char** argv) {
       return elman::tokenizer_command(command, argc, argv);
     }
     if (command == "generate") return elman::generate_command(argc, argv);
+    if (command == "robotics-ppo-client") {
+      if (argc != 4 || std::string_view(argv[2]) != "--port")
+        throw std::invalid_argument("Use robotics-ppo-client --port PORT");
+      return elman::robotics_ppo_client(std::stoi(argv[3]));
+    }
     if (command == "infer-tensors") return elman::infer_tensors_command(argc, argv);
     if (command == "diffusion") return elman::diffusion_command(argc, argv);
+    if (command == "transcribe") return elman::transcribe_command(argc, argv);
     if (command == "--server-config") {
       const bool open_web = argc == 4 && std::string_view(argv[3]) == "--open";
       if (argc != 3 && !open_web) throw std::invalid_argument("Use --server-config <server.json> [--open]");

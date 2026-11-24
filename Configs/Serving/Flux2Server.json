@@ -9,7 +9,7 @@
   "http": {
     "host": "127.0.0.1",
     "port": 8082,
-    "web_root": "../../Web",
+    "web_root": "../../App/Web",
     "cors_origins": ["http://127.0.0.1:8000"]
   }
 }

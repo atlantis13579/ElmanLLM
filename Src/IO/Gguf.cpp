@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <cmath>
 #include <set>
 
 #include "Core/Float16.h"
@@ -75,16 +76,18 @@ double number(BinaryInput& input, uint32_t type) {
     }
 }
 
-void skip_array(BinaryInput& input) {
+void read_array(BinaryInput& input, std::vector<std::string>& strings, std::vector<double>& numbers) {
     const uint32_t type = uint32_t(input.le(4));
     const uint64_t count = input.le(8);
     if (type == 8) {
         require(count <= input.remaining() / 8, "Invalid GGUF metadata string array");
-        for (uint64_t i = 0; i < count; ++i) input.skip(input.le(8));
+        strings.reserve(size_t(count));
+        for (uint64_t i = 0; i < count; ++i) strings.push_back(input.text(input.le(8)));
     } else {
         const size_t width = metadata_width(type);
         require(count <= input.remaining() / width, "Invalid GGUF metadata array");
-        input.skip(count * width);
+        numbers.reserve(size_t(count));
+        for (uint64_t i = 0; i < count; ++i) numbers.push_back(number(input, type));
     }
 }
 
@@ -152,6 +155,18 @@ void decode_block(uint32_t type, Bytes bytes, float* values) {
 
 }  // namespace
 
+std::filesystem::path find_gguf_model(const std::filesystem::path& location) {
+    if (std::filesystem::is_regular_file(location)) return location.extension() == ".gguf" ? location : std::filesystem::path{};
+    if (!std::filesystem::is_directory(location)) return {};
+    std::filesystem::path result;
+    for (const auto& item : std::filesystem::directory_iterator(location)) {
+        if (!item.is_regular_file() || item.path().extension() != ".gguf") continue;
+        require(result.empty(), "Multiple GGUF files found; select a model file explicitly");
+        result = item.path();
+    }
+    return result;
+}
+
 GgufFile::GgufFile(const std::filesystem::path& path) : path_(path) {
     BinaryInput input(path);
     require(input.text(4) == "GGUF", "Invalid little-endian GGUF signature");
@@ -169,7 +184,7 @@ GgufFile::GgufFile(const std::filesystem::path& path) : path_(path) {
             alignment = input.le(4);
             require(alignment && !(alignment & (alignment - 1)), "Invalid GGUF alignment");
         } else if (type == 8) strings_.emplace(key, input.text(input.le(8)));
-        else if (type == 9) skip_array(input);
+        else if (type == 9) read_array(input, string_arrays_[key], number_arrays_[key]);
         else numbers_.emplace(key, number(input, type));
     }
     require(tensor_count && tensor_count <= input.remaining() / 32, "Invalid GGUF tensor count");
@@ -234,6 +249,36 @@ std::vector<uint8_t> GgufFile::read(const std::string& name) const {
 Tensor GgufFile::load(const std::string& name, Backend backend) const {
     const SafetensorInfo& info = tensors_.at(name);
     return Tensor::from_raw(info.shape, info.dtype, read(name), backend);
+}
+
+QuantizedTensor GgufFile::load_quantized(const std::string& name, Backend backend) const {
+    const auto& info = tensors_.at(name);
+    require(types_.at(name) == 8 && info.shape.size() == 2, "Native affine import requires a Q8_0 matrix");
+    const size_t blocks = size_t(info.bytes / 34);
+    std::vector<uint8_t> codes(blocks * 32);
+    std::vector<float> scales(blocks);
+    std::vector<int32_t> zeros(blocks);
+    BinaryInput input(path_);
+    input.seek(data_start_ + info.offset);
+    std::vector<uint8_t> buffer(34 * 4096);
+    for (size_t begin = 0; begin < blocks; begin += 4096) {
+        const size_t count = std::min<size_t>(4096, blocks - begin);
+        input.read(buffer.data(), count * 34);
+        for (size_t i = 0; i < count; ++i) {
+            const float scale = half({buffer.data() + i * 34, 34}, 0);
+            require(std::isfinite(scale), "Non-finite GGUF quantization scale");
+            const size_t block = begin + i;
+            scales[block] = scale == 0 ? 1.f : std::abs(scale);
+            zeros[block] = scale < 0 ? 127 : 128;
+            for (size_t j = 0; j < 32; ++j) {
+                const int code = bit_value<int8_t>(buffer[i * 34 + 2 + j]);
+                codes[block * 32 + j] = uint8_t(scale < 0 ? 127 - code : scale == 0 ? 128 : 128 + code);
+            }
+        }
+    }
+    const Shape metadata{info.shape[0], info.shape[1] / 32};
+    return QuantizedTensor(Tensor::from_raw(info.shape, DType::QUInt8, codes, backend),
+        Tensor::from_data(metadata, scales, backend), Tensor::from_int_data(metadata, zeros, backend), 32);
 }
 
 }  // namespace elman

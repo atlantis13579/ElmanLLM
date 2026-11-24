@@ -16,6 +16,33 @@ void launch_affine_quantization_cpu(AffineQuantization operation, uint32_t* out,
                                     const KernelParams& p) {
     const unsigned bits = quantized_storage_bits(DType(p.output_dtype()));
     if (!p.output_count()) return;
+    if (operation == AffineQuantization::Dequantize && p.attribute(0) == 32 &&
+        p.input_dtype(KernelInput::A) == int(DType::QUInt8) && p.input_dtype(KernelInput::B) == int(DType::Float32) &&
+        p.input_dtype(KernelInput::C) == int(DType::Int32) && p.output_dtype() == int(DType::Float32) &&
+        p.input_rank(KernelInput::A) == 2 && p.input_shape(KernelInput::A, 1) % 32 == 0) {
+        const int rows = p.input_shape(KernelInput::A, 0), groups = p.input_shape(KernelInput::A, 1) / 32;
+        bool contiguous = true;
+        for (auto parameter : {KernelInput::B, KernelInput::C})
+            contiguous = contiguous && p.input_rank(parameter) == 2 && p.input_shape(parameter, 0) == rows &&
+                p.input_shape(parameter, 1) == groups && p.input_stride(parameter, 0) == groups && p.input_stride(parameter, 1) == 1;
+        if (contiguous) {
+            const auto* codes = reinterpret_cast<const uint8_t*>(input);
+            const auto* factors = reinterpret_cast<const float*>(scales);
+            const auto* offsets = reinterpret_cast<const int32_t*>(zeros);
+            auto* output = reinterpret_cast<float*>(out);
+            parallel_for_cpu(int64_t(rows) * groups, 8192, [&](int64_t begin, int64_t end) {
+                for (int64_t group = begin; group < end; ++group) {
+                    const float factor = factors[group]; const int zero = offsets[group];
+                    const bool valid = std::isfinite(factor) && factor > 0 && zero >= 0 && zero <= 255;
+                    for (int column = 0; column < 32; ++column) {
+                        const auto index = group * 32 + column;
+                        output[index] = valid ? float(int(codes[index]) - zero) * factor : 0.f;
+                    }
+                }
+            });
+            return;
+        }
+    }
     const int rank = p.input_rank(KernelInput::A);
     const int columns = rank ? p.input_shape(KernelInput::A, rank - 1) : 1;
     const int groups = int((int64_t(columns) + p.attribute(0) - 1) / p.attribute(0));

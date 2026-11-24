@@ -29,6 +29,7 @@ public:
     bool is_null() const;
     bool is_object() const;
     bool is_array() const;
+    bool is_string() const { return std::holds_alternative<std::string>(value_); }
     bool contains(const std::string& key) const;
     const Json& at(const std::string& key) const;
     const Json& at(size_t index) const;

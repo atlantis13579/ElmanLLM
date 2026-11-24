@@ -1,0 +1,17 @@
+{
+  "model": {
+    "type": "llm",
+    "name": "Index-Translate-2B",
+    "path": "../Models/Index-Translate-2B.Q8_0.gguf",
+    "backend": "cuda"
+  },
+  "chat": {
+    "max_context": 4096,
+    "max_new_tokens": 768
+  },
+  "http": {
+    "host": "127.0.0.1",
+    "port": 8080,
+    "web_root": "../../App/Web"
+  }
+}

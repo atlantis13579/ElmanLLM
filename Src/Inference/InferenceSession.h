@@ -51,6 +51,5 @@ InferenceSession load_model_session(const std::string& model_path, const std::st
                                     Backend backend, int device);
 void load_inference_parameters(const std::filesystem::path& path, Model& model, const Json& definition,
                                Backend backend);
-int infer_tensors_command(int argc, char** argv);
 
 }  // namespace elman

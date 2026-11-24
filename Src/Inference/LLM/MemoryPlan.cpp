@@ -3,6 +3,7 @@
 #include "Inference/LLM/PagedKVCache.h"
 #include "IO/Safetensors.h"
 #include "IO/InferenceWeights.h"
+#include "IO/Gguf.h"
 #include "Models/LLM/DecoderFactory.h"
 #include "Core/TensorDispatch.h"
 #include <algorithm>
@@ -82,6 +83,29 @@ DecoderMemoryPlan plan_decoder_generation(
     require(prompt && prompt <= size_t(c.max_positions) && count <= size_t(c.max_positions) - prompt,
             "request exceeds context length");
     DecoderMemoryPlan result;
+    if (c.recurrent_layers) {
+        require(!paged_cache && c.recurrent_layers <= c.layers, "hybrid attention requires contiguous recurrent caches");
+        result.weight_workspace_bytes = weight_workspace_bytes;
+        if (!count) return result;
+        const size_t total = checked_memory_add(prompt, count), d = dtype_storage_bytes(dtype, 1);
+        const size_t rows = prefill_chunk_size ? std::min(prompt, size_t(prefill_chunk_size)) : prompt;
+        const size_t fixed = sum({mul({4, c.recurrent_state_elements}), mul({d, c.recurrent_history_elements})});
+        const auto cache = [&](size_t length) { return sum({fixed, mul({d, length, c.cache_elements_per_token()})}); };
+        const auto forward = [&](size_t query, size_t length) {
+            return sum({mul({128, query, size_t(c.hidden)}), mul({8 * d, query, size_t(c.intermediate)}),
+                mul({16, size_t(c.heads), std::min(query, size_t(64)), length}), mul({4, fixed}),
+                mul({d + 4, full_logits ? query : size_t(1), size_t(c.vocabulary)}), size_t(1024 * 1024)});
+        };
+        result.kv_cache_bytes = cache(total);
+        result.prefill_bytes = sum({mul({2, cache(prompt)}), forward(rows, prompt)});
+        result.decode_bytes = sum({mul({2, cache(total)}), forward(1, total)});
+        result.selection_bytes = sum({cache(total), mul({sampled ? size_t(100) : size_t(8), size_t(c.vocabulary)}),
+            sampled ? size_t(16 * 1024 * 1024) : size_t(0)});
+        result.host_additional_bytes = sum({mul({32, total}), mul({16, size_t(c.vocabulary)}), mul({16, rows, size_t(c.head_dim())})});
+        result.additional_bytes = sum({std::max({result.prefill_bytes, result.decode_bytes, result.selection_bytes}), weight_workspace_bytes,
+            backend == Backend::CPU ? result.host_additional_bytes : size_t(1024 * 1024)});
+        return result;
+    }
     if (c.latent_cache_rank) {
         require(!paged_cache, "latent cache cannot use the Qwen paged layout");
         result.weight_workspace_bytes = weight_workspace_bytes;
@@ -210,6 +234,30 @@ QwenBatchMemoryPlan plan_qwen_batch(const DecoderConfig& c, Backend backend, DTy
 DecoderMemoryPlan plan_decoder_weight_load(const std::string& directory, Backend backend, DType dtype,
                                            bool packed_projections) {
     require(is_compute_float(dtype), "unsupported compute dtype");
+    const auto gguf = find_gguf_model(std::filesystem::u8path(directory));
+    if (!gguf.empty()) {
+        const GgufFile file(gguf);
+        const auto config = read_decoder_config(directory);
+        DecoderMemoryPlan result;
+        size_t largest = 0;
+        for (const auto& item : file.tensors()) {
+            if (item.first.compare(0, 4, "blk.") == 0) {
+                const auto end = item.first.find('.', 4);
+                if (end != std::string::npos && std::stoi(item.first.substr(4, end - 4)) >= config.layers) continue;
+            }
+            const size_t elements = shape_element_count(item.second.shape);
+            const bool quantized = file.encoding_type(item.first) == 8 && item.second.shape.size() == 2;
+            const size_t bytes = quantized ? sum({elements, mul({8, elements / 32})}) :
+                dtype_storage_bytes(item.second.shape.size() == 1 ? DType::Float32 : dtype, elements);
+            result.parameter_bytes = sum({result.parameter_bytes, memory_allocation_bytes(backend, bytes)});
+            largest = std::max(largest, bytes);
+            if (quantized) result.weight_workspace_bytes = std::max(result.weight_workspace_bytes, dtype_storage_bytes(dtype, elements));
+        }
+        result.host_additional_bytes = sum({mul({3, largest}), size_t(64 * 1024 * 1024)});
+        result.additional_bytes = sum({result.parameter_bytes, largest,
+            backend == Backend::CPU ? result.host_additional_bytes : size_t(1024 * 1024)});
+        return result;
+    }
     InferenceWeights catalog(directory);
     const DecoderConfig decoder = read_decoder_config(directory);
     if (decoder.latent_cache_rank) packed_projections = false;
@@ -318,6 +366,7 @@ DeviceLoadPlan plan_qwen_tensor_parallel_load(const std::string& directory, Back
 std::vector<DeviceLoadPlan> plan_decoder_load(const std::string& directory, Backend backend, DType dtype,
     bool packed_projections, const std::vector<int>& devices) {
     const DecoderConfig config = read_decoder_config(directory);
+    require(!config.recurrent_layers || devices.size() <= 1, "hybrid attention loading requires one device");
     DecoderPlacement placement(backend, config.layers, devices);
     const DecoderMemoryPlan total = plan_decoder_weight_load(directory, backend, dtype, packed_projections);
     if (!placement.distributed()) return {{placement.input_device(), total}};

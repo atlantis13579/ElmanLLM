@@ -12,6 +12,7 @@ const char* outputs_end = u8"<\uff5ctool\u2581outputs\u2581end\uff5c>";
 }
 
 std::string HuggingFaceTokenizer::render_chat(const Json::Array& messages, bool generation) const {
+    if (qwen35_chat_) return render_qwen35_chat(messages, generation);
     if (chat_template_ != supported_template)
         throw std::invalid_argument("Unsupported chat template; expected pinned DeepSeek-R1-Distill-Qwen template");
     if (messages.empty()) throw std::invalid_argument("Chat requires at least one message");

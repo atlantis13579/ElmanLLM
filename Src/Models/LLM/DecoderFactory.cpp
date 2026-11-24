@@ -1,11 +1,15 @@
 #include "Models/LLM/DecoderFactory.h"
 #include "Models/LLM/Qwen2.h"
 #include "Models/LLM/DeepSeek.h"
+#include "Models/LLM/Qwen35.h"
+#include "Core/Device.h"
 #include <filesystem>
 #include <stdexcept>
 
 namespace elman {
 DecoderConfig read_decoder_config(const std::string& directory) {
+    const auto gguf = find_gguf_model(std::filesystem::u8path(directory));
+    if (!gguf.empty()) return Qwen35Config::from_gguf(GgufFile(gguf));
     Json value = Json::read((std::filesystem::path(directory) / "config.json").string());
     const std::string type = value.at("model_type").string();
     if (type == "qwen2") return Qwen2Config::from_json(value);
@@ -14,6 +18,13 @@ DecoderConfig read_decoder_config(const std::string& directory) {
 }
 std::unique_ptr<DecoderModel> load_decoder(const std::string& directory, Backend backend, DType dtype,
                                          const DecoderLoadOptions& options) {
+    const auto gguf = find_gguf_model(std::filesystem::u8path(directory));
+    if (!gguf.empty()) {
+        if (options.tensor_parallel || options.devices.size() > 1 || options.simulated_devices > 1 || options.direct_paged_attention)
+            throw std::invalid_argument("Qwen3.5 uses a single-device hybrid recurrent cache");
+        DeviceScope owner(backend, options.devices.empty() ? current_device(backend) : options.devices[0]);
+        return std::make_unique<Qwen35>(gguf, backend, dtype);
+    }
     Json value = Json::read((std::filesystem::path(directory) / "config.json").string());
     const std::string type = value.at("model_type").string();
     if (type == "qwen2") return std::make_unique<Qwen2>(directory, backend, dtype, options.fused_pointwise,

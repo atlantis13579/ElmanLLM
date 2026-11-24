@@ -163,6 +163,15 @@ Tensor Tensor::from_data(Shape shape, const std::vector<float>& data, Backend b,
   return Tensor(n);
 }
 Tensor Tensor::zeros(Shape s, Backend b, bool grad, DType dtype) {
+  if (b == Backend::CUDA) {
+    require(!grad || is_differentiable_float(dtype) || is_complex(dtype),
+            "Only implemented floating tensors can require gradients");
+    std::shared_ptr<TensorNode> node = std::make_shared<TensorNode>();
+    node->shape = std::move(s);
+    node->value = backend_allocate(b, shape_element_count(node->shape), dtype);
+    node->requires_grad = grad;
+    return Tensor(node);
+  }
   return from_data(s, std::vector<float>(shape_element_count(s), 0), b, grad, dtype);
 }
 Tensor Tensor::ones(Shape s, Backend b, bool grad, DType dtype) {

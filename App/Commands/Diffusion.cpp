@@ -1,4 +1,4 @@
-#include "Runtime/DiffusionCommand.h"
+#include "Commands/Diffusion.h"
 
 #include <algorithm>
 #include <charconv>

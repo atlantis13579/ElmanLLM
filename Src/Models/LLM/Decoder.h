@@ -14,10 +14,12 @@ struct DecoderConfig {
     int latent_cache_rank = 0, latent_rotary_dimension = 0;
     int attention_query_dimension = 0, attention_value_dimension = 0;
     int routed_expert_count = 0, active_experts = 0, execution_intermediate = 0;
+    int recurrent_layers = 0;
+    size_t recurrent_state_elements = 0, recurrent_history_elements = 0;
     int head_dim() const { return hidden / heads; }
     size_t cache_elements_per_token() const {
         return latent_cache_rank ? size_t(layers) * (size_t(latent_cache_rank) + latent_rotary_dimension) :
-            size_t(2) * layers * kv_heads * head_dim();
+            size_t(2) * (layers - recurrent_layers) * kv_heads * head_dim();
     }
 };
 

@@ -145,6 +145,8 @@ GenerationResult generate_text(const DecoderModel& model, const HuggingFaceToken
                                const std::vector<int32_t>& input, const GreedyOptions& options,
                                const std::vector<std::string>& stops = {},
                                const std::function<void(const std::string&)>& on_text = {});
-int generate_command(int argc, char** argv);
+
+// Counters for the calling thread's reusable inference stream on the current device.
+HostStagingStats generation_host_staging_stats(Backend backend);
 
 } // namespace elman
