@@ -35,7 +35,7 @@ void events(Backend backend) {
         } catch (const std::invalid_argument&) { rejected = true; }
         check(rejected, "Unrecorded event accepted");
     }
-    if (backend == Backend::CUDA) {
+    if (backend != Backend::CPU) {
         bool rejected = false;
         try { first.wait(ExecutionStream(Backend::CPU).record()); }
         catch (const std::invalid_argument&) { rejected = true; }
@@ -44,7 +44,7 @@ void events(Backend backend) {
     check(!asynchronous_execution(backend), "Unexpected initial execution binding");
     {
         StreamScope outer(first);
-        check(asynchronous_execution(backend) == (backend == Backend::CUDA), "Asynchronous binding missing");
+        check(asynchronous_execution(backend) == (backend != Backend::CPU), "Asynchronous binding missing");
         try {
             StreamScope inner(second, false);
             check(!asynchronous_execution(backend), "Synchronous override ignored");
@@ -52,7 +52,7 @@ void events(Backend backend) {
         } catch (const std::runtime_error& error) {
             if (std::string(error.what()) != "unwind stream") throw;
         }
-        check(asynchronous_execution(backend) == (backend == Backend::CUDA), "Exception did not restore parent binding");
+        check(asynchronous_execution(backend) == (backend != Backend::CPU), "Exception did not restore parent binding");
     }
     check(!asynchronous_execution(backend), "Scope did not restore default binding");
 }
@@ -183,7 +183,7 @@ void greedy_selection(Backend backend) {
 }
 int main(int argc, char** argv) {
     try {
-        if (argc != 2) throw std::invalid_argument("Usage: elman_execution_tests cpu|cuda");
+        if (argc != 2) throw std::invalid_argument("Usage: elman_execution_tests cpu|cuda|metal");
         Backend backend = elman::parse_backend(argv[1]);
         if (!elman::backend_available(backend)) return 77;
         events(backend); numerical(backend); matrices(backend); escaped(backend); threads(backend); greedy_selection(backend);

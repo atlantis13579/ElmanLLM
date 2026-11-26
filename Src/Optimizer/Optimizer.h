@@ -38,6 +38,7 @@ class Optimizer {
  private:
   std::string name_;
   OptimizerSettings settings_;
+  bool decay_matrix_parameters_only_ = false;
   TrainingState state_;
 };
 

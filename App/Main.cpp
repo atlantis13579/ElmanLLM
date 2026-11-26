@@ -28,6 +28,8 @@ void usage() {
       << "Elman self-contained deep-learning framework\n"
       << "Usage:\n"
       << "  elman devices\n"
+      << "  elman sample <training.json> [--backend DEVICE] [--checkpoint FILE] [--random-weights]\n"
+      << "        [--prompt TEXT] [--max-new-tokens N] [--seed N] [--temperature X] [--output FILE]\n"
       << "  elman robotics-ppo-client --port PORT\n"
       << "  elman train <training.json> [--backend cpu|cuda|metal] [--steps N]\n"
       << "        [--checkpoint FILE] [--resume FILE] [--output metrics.json]\n"
@@ -67,6 +69,7 @@ int run(int argc, char** argv) {
       return elman::tokenizer_command(command, argc, argv);
     }
     if (command == "generate") return elman::generate_command(argc, argv);
+    if (command == "sample") return elman::sample_command(argc, argv);
     if (command == "robotics-ppo-client") {
       if (argc != 4 || std::string_view(argv[2]) != "--port")
         throw std::invalid_argument("Use robotics-ppo-client --port PORT");

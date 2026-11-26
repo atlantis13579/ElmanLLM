@@ -3,35 +3,35 @@
 #include <unordered_map>
 #include "Core/Backend.h"
 #include "Backends/HostWords.h"
-#include "Operators/integer_pointwise.h"
-#include "Operators/packed_integer_cast.h"
-#include "Operators/float64_pointwise.h"
-#include "Operators/complex_pointwise.h"
-#include "Operators/float64_reduction.h"
-#include "Operators/float64_matrix.h"
-#include "Operators/float64_softmax.h"
-#include "Operators/float64_indexing.h"
-#include "Operators/float64_spatial.h"
-#include "Operators/float64_loss.h"
-#include "Operators/float64_attention.h"
-#include "Operators/float64_random.h"
-#include "Operators/float64_categorical.h"
-#include "Operators/float64_normalization.h"
-#include "Operators/integer_matrix.h"
-#include "Operators/storage_layout.h"
-#include "Operators/low_precision_cast.h"
-#include "Operators/low_precision_pointwise.h"
-#include "Operators/low_precision_reduction.h"
-#include "Operators/low_precision_matrix.h"
-#include "Operators/low_precision_softmax.h"
-#include "Operators/low_precision_normalization.h"
-#include "Operators/low_precision_indexing.h"
-#include "Operators/low_precision_spatial.h"
-#include "Operators/low_precision_loss.h"
-#include "Operators/low_precision_fused.h"
-#include "Operators/low_precision_attention.h"
-#include "Operators/low_precision_random.h"
-#include "Operators/low_precision_categorical.h"
+#include "Kernals/integer_pointwise.h"
+#include "Kernals/packed_integer_cast.h"
+#include "Kernals/float64_pointwise.h"
+#include "Kernals/complex_pointwise.h"
+#include "Kernals/float64_reduction.h"
+#include "Kernals/float64_matrix.h"
+#include "Kernals/float64_softmax.h"
+#include "Kernals/float64_indexing.h"
+#include "Kernals/float64_spatial.h"
+#include "Kernals/float64_loss.h"
+#include "Kernals/float64_attention.h"
+#include "Kernals/float64_random.h"
+#include "Kernals/float64_categorical.h"
+#include "Kernals/float64_normalization.h"
+#include "Kernals/integer_matrix.h"
+#include "Kernals/storage_layout.h"
+#include "Kernals/low_precision_cast.h"
+#include "Kernals/low_precision_pointwise.h"
+#include "Kernals/low_precision_reduction.h"
+#include "Kernals/low_precision_matrix.h"
+#include "Kernals/low_precision_softmax.h"
+#include "Kernals/low_precision_normalization.h"
+#include "Kernals/low_precision_indexing.h"
+#include "Kernals/low_precision_spatial.h"
+#include "Kernals/low_precision_loss.h"
+#include "Kernals/low_precision_fused.h"
+#include "Kernals/low_precision_attention.h"
+#include "Kernals/low_precision_random.h"
+#include "Kernals/low_precision_categorical.h"
 
 namespace elman {
 namespace {
@@ -54,7 +54,7 @@ struct CPUKernel { CPULaunch launch; int inputs; };
   void launch_##name##_cpu(uint32_t*, const uint32_t*, const uint32_t*, const uint32_t*, const KernelParams&);
 #define ELMAN_CPU_KERNEL4(name) \
   void launch_##name##_cpu(uint32_t*, const uint32_t*, const uint32_t*, const uint32_t*, const uint32_t*, const KernelParams&);
-#include "Operators/cpu_dispatch.inc"
+#include "Kernals/cpu_dispatch.inc"
 #undef ELMAN_CPU_KERNEL
 #undef ELMAN_CPU_KERNEL4
 
@@ -93,7 +93,7 @@ void dispatch_cpu(const std::string& operation, const BufferPtr& output,
   static const std::unordered_map<std::string, CPUKernel> kernels = {
 #define ELMAN_CPU_KERNEL(name) {#name, {[](uint32_t* out, const uint32_t* a, const uint32_t* b, const uint32_t* c, const uint32_t*, const KernelParams& p) { launch_##name##_cpu(out, a, b, c, p); }, 3}},
 #define ELMAN_CPU_KERNEL4(name) {#name, {launch_##name##_cpu, 4}},
-#include "Operators/cpu_dispatch.inc"
+#include "Kernals/cpu_dispatch.inc"
 #undef ELMAN_CPU_KERNEL
 #undef ELMAN_CPU_KERNEL4
   };

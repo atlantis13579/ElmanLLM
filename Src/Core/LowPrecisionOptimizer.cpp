@@ -1,8 +1,31 @@
-#include "Operators/low_precision_optimizer.h"
+#include "Kernals/low_precision_optimizer.h"
 #include <cmath>
+#include <algorithm>
 #include <stdexcept>
 
 namespace elman {
+void validate_optimizer_stats(const BufferPtr& output, const std::vector<BufferPtr>& inputs, const KernelParams& p) {
+    auto require = [](bool valid) { if (!valid) throw std::invalid_argument("Invalid CUDA optimizer statistics operands"); };
+    require(output->backend == Backend::CUDA && output->dtype == DType::Float32 && inputs.size() == 4);
+    require(p.attribute(0) == 0 || p.attribute(0) == 1);
+    for (int i = 1; i < KernelParams::kAttributeCount; ++i) require(p.attribute(i) == 0);
+    const int rank = p.input_rank(KernelInput::A);
+    require(rank >= 0 && rank <= 8 && inputs[0]);
+    size_t count = 1;
+    for (int d = rank - 1; d >= 0; --d) {
+        const int length = p.input_shape(KernelInput::A, d);
+        require(length >= 0 && count <= size_t(INT32_MAX) / size_t(std::max(1, length)));
+        for (int i = 0; i < 4; ++i) require(p.input_shape(KernelInput(i), d) == length && p.input_stride(KernelInput(i), d) == int(count));
+        count *= size_t(length);
+    }
+    for (int i = 0; i < 4; ++i) require(inputs[i] && inputs[i]->dtype == DType::Float32 && inputs[i]->count == count && p.input_rank(KernelInput(i)) == rank);
+    const int chunks = std::max(1, int((count + 4095) / 4096));
+    require(p.output_rank() == 2 && p.output_shape(0) == chunks && p.output_shape(1) == 2 && output->count == size_t(chunks) * 2 && p.output_count() == chunks * 2);
+    for (const BufferPtr& input : inputs) if (input->bytes) {
+        const uintptr_t a = reinterpret_cast<uintptr_t>(output->raw_pointer()), b = reinterpret_cast<uintptr_t>(input->raw_pointer());
+        require(!(a <= b ? b - a < output->bytes : a - b < input->bytes));
+    }
+}
 void validate_low_precision_optimizer(const BufferPtr& output,const std::vector<BufferPtr>& inputs,const KernelParams& p){
     void (*const require)(bool, const char*)=[](bool valid,const char* message){if(!valid)throw std::invalid_argument(message);};
     require(inputs.size()==4&&inputs[0]&&inputs[1]&&inputs[2]&&inputs[3],"Optimizer step requires four operands");

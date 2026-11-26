@@ -24,14 +24,14 @@ const std::set<std::string> registered = {
     "angle", "complex", "conj", "float64_fma", "imag", "real", "sgn", "tanh",
 #define ELMAN_CPU_KERNEL(operation) #operation,
 #define ELMAN_CPU_KERNEL4(operation) #operation,
-#include "Operators/cpu_dispatch.inc"
+#include "Kernals/cpu_dispatch.inc"
 #undef ELMAN_CPU_KERNEL4
 #undef ELMAN_CPU_KERNEL
 };
 
 const std::set<std::string> metal_kernels = {
 #define ELMAN_METAL_KERNEL(operation) #operation,
-#include "Operators/metal_dispatch.inc"
+#include "Kernals/metal_dispatch.inc"
 #undef ELMAN_METAL_KERNEL
 };
 

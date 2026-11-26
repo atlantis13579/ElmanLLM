@@ -45,7 +45,9 @@ std::vector<float> call(Backend backend,const std::string& op,const std::vector<
     if(dtype==DType::QInt8){for(unsigned char code:backend_download_raw(output))result.push_back(float(int8_t(code)));}
     else result=backend_download(output);
     visited.insert(op);
-    if(backend!=Backend::CPU)close(op+" CPU parity",result,call(Backend::CPU,op,shape,inputs,attributes,dtype),3e-4f);
+    // MPS uses Philox; numerical kernels still share the independent CPU oracle.
+    const bool metal_random=backend==Backend::Metal&&(op=="uniform"||op=="normal"||op=="dropout");
+    if(backend!=Backend::CPU&&!metal_random)close(op+" CPU parity",result,call(Backend::CPU,op,shape,inputs,attributes,dtype),3e-4f);
     return result;
 }
 void close(const std::string& label,const std::vector<float>& actual,const std::vector<float>& expected,float tolerance=2e-5f) {
@@ -276,7 +278,16 @@ void test_kernel_reference(elman::Backend backend) {
         const float value=(float(word&16777215u)+0.5f)/16777216.f;
         masked.push_back(value>=0.25f?1/0.75f:0);
     }
-    close("dropout mask",call(backend,"dropout",{1024},{{{1024},std::vector<float>(1024,1)}},{42,0,bits(0.25f),1}),masked);
+    const auto dropped=call(backend,"dropout",{1024},{{{1024},std::vector<float>(1024,1)}},{42,0,bits(0.25f),1});
+    if(backend==Backend::Metal){
+        close("dropout reproducibility",call(backend,"dropout",{1024},{{{1024},std::vector<float>(1024,1)}},{42,0,bits(0.25f),1}),dropped,0);
+        size_t kept=0;
+        for(float value:dropped){
+            if(value!=0&&std::abs(value-4.f/3.f)>1e-6f)throw std::runtime_error("Dropout mask scaling");
+            kept+=value!=0;
+        }
+        if(std::abs(double(kept)/dropped.size()-.75)>.06)throw std::runtime_error("Dropout keep rate");
+    }else close("dropout mask",dropped,masked);
     const float inv=1.0f/std::sqrt(1.25f+1e-5f);
     const Input normalized{{2,4},{1,2,3,4,5,6,7,8}};
     const Input ones{{4},{1,1,1,1}};
@@ -374,7 +385,7 @@ void test_kernel_reference(elman::Backend backend) {
     const std::vector<std::string> expected={
 #define ELMAN_CPU_KERNEL(name) #name,
 #define ELMAN_CPU_KERNEL4(name) #name,
-#include "../Src/Operators/cpu_dispatch.inc"
+#include "../Src/Kernals/cpu_dispatch.inc"
 #undef ELMAN_CPU_KERNEL
 #undef ELMAN_CPU_KERNEL4
     };
@@ -384,7 +395,7 @@ void test_kernel_reference(elman::Backend backend) {
 int main(int argc,char** argv) {
     try{
         const Backend backend=elman::parse_backend(argc>1?argv[1]:"cpu");
-        if(!elman::backend_available(backend))throw std::runtime_error("Requested native test backend unavailable");
+        if(!elman::backend_available(backend))return 77;
         test_kernel_reference(backend);
         std::cout<<"PASS "<<visited.size()<<" native operators on "<<elman::backend_name(backend)<<"; expected values, CPU parity, and convolution finite differences\n";
         return 0;

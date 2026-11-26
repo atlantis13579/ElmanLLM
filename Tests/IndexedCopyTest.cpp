@@ -131,7 +131,7 @@ void contracts(Backend backend) {
     Tensor integer = Tensor::from_int_data({3}, {0, 1, 2}, backend);
     rejects([&] { integer.assign_indexed(0, contiguous_view(integer, {1}), Tensor::from_int_data({1}, {7}, backend)); },
             "Output/index overlap accepted");
-    if (backend == Backend::CUDA) {
+    if (backend != Backend::CPU) {
         rejects([&] { index_copy(x, 0, ids.to(Backend::CPU), s); }, "Mixed backend indices accepted");
         rejects([&] { index_copy(x, 0, ids, s.to(Backend::CPU)); }, "Mixed backend source accepted");
     }
@@ -180,7 +180,7 @@ void streams(Backend backend, bool pooled) {
 }
 int main(int argc, char** argv) {
     try {
-        if (argc != 2) throw std::invalid_argument("Usage: elman_indexed_copy cpu|cuda");
+        if (argc != 2) throw std::invalid_argument("Usage: elman_indexed_copy cpu|cuda|metal");
         Backend backend = parse_backend(argv[1]);
         if (!backend_available(backend)) return 77;
         for (bool pooled : {false, true}) { mutation(backend, pooled); streams(backend, pooled); }

@@ -11,7 +11,7 @@ namespace elman::metal {
 using Lowering = Tensor (*)(Graph, const Operands&, const KernelParams&);
 
 #define ELMAN_METAL_KERNEL(name) Tensor lower_##name(Graph, const Operands&, const KernelParams&);
-#include "Operators/metal_dispatch.inc"
+#include "Kernals/metal_dispatch.inc"
 #undef ELMAN_METAL_KERNEL
 
 namespace {
@@ -283,7 +283,7 @@ Tensor wide_layout(Graph m, Lowering kernel, const std::string& op, const Operan
 Lowering find_kernel(const std::string& op) {
   static const std::unordered_map<std::string, Lowering> kernels = {
 #define ELMAN_METAL_KERNEL(name) {#name, lower_##name},
-#include "Operators/metal_dispatch.inc"
+#include "Kernals/metal_dispatch.inc"
 #undef ELMAN_METAL_KERNEL
   };
   const auto it = kernels.find(op);

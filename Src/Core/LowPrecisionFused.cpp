@@ -1,4 +1,4 @@
-#include "Operators/low_precision_fused.h"
+#include "Kernals/low_precision_fused.h"
 #include <algorithm>
 #include <stdexcept>
 

@@ -1,7 +1,7 @@
 #include "Core/Quantization.h"
 #include "Core/Graph.h"
 #include "Core/TensorDispatch.h"
-#include "Operators/affine_quantization.h"
+#include "Kernals/affine_quantization.h"
 #include <cmath>
 #include <stdexcept>
 

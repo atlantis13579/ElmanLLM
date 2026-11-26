@@ -3,7 +3,7 @@
 #include <stdexcept>
 #include <utility>
 
-#include "Operators/inference_ops.h"
+#include "Kernals/inference_ops.h"
 
 namespace elman::diffusion {
 

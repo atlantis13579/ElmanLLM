@@ -1,6 +1,6 @@
-#include "Operators/low_precision_random.h"
-#include "Operators/float64_random_math.h"
-#include "Operators/attributes.h"
+#include "Kernals/low_precision_random.h"
+#include "Kernals/float64_random_math.h"
+#include "Kernals/attributes.h"
 #include <limits>
 #include <stdexcept>
 

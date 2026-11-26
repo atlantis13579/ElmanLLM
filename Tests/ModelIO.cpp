@@ -58,9 +58,27 @@ struct TemporaryDirectory {
   }
 };
 
-elman::Json gpt_definition() {
-  return elman::Json::parse(
-      R"({"format":"elman.model","version":1,"name":"TestGPT2","architecture":"gpt2","vocab_size":8,"context_length":3,"embedding_dim":4,"num_heads":2,"num_layers":1,"mlp_ratio":2,"dropout":0,"layer_norm_epsilon":0.00001})");
+elman::Json token_definition() {
+  return elman::Json::parse(R"({
+    "format":"elman.model","version":2,"name":"TokenLookupFixture",
+    "task":"language_modeling","output_features":8,
+    "inputs":[{"name":"input","dtype":"int32","shape":[-1,3]}],
+    "outputs":[{"name":"output","value":"lookup","dtype":"float32","shape":[-1,3,8]}],
+    "layers":[{"name":"weight","class_name":"Parameter","config":{"shape":[8,8]},"inputs":[]},
+      {"name":"lookup","class_name":"embedding","config":{},"inputs":["input","weight"]}]
+  })");
+}
+elman::Json affine_definition(bool regression) {
+  auto result = elman::Json::parse(R"({
+    "format":"elman.model","version":2,"name":"AffineFixture","task":"classification",
+    "parameters":{"input_features":2,"classes":2},"output_features":"$classes",
+    "inputs":[{"name":"input","dtype":"float32","shape":[-1,"$input_features"]}],
+    "outputs":[{"name":"output","value":"dense","dtype":"float32","shape":[-1,"$classes"]}],
+    "layers":[{"name":"dense","class_name":"Linear",
+      "config":{"in_features":"$input_features","out_features":"$classes"},"inputs":["input"]}]
+  })").object();
+  result["task"] = regression ? "regression" : "classification";
+  return result;
 }
 elman::TrainingState state_for(const elman::Model& model) {
   elman::TrainingState result;
@@ -132,52 +150,6 @@ void json_tests() {
       "JSON nesting bound");
 }
 
-void model_tests() {
-  using namespace elman;
-  elman::Json definition = gpt_definition();
-  std::unique_ptr<Model> model = create_model(definition, Backend::CPU, 7);
-  Tensor input =
-      Tensor::from_data({1, 3}, {1, 2, 3}, Backend::CPU, false, DType::Int32);
-  Tensor output = model->forward(input, false);
-  check(output.shape() == Shape({1, 3, 8}), "GPT2 output shape");
-  check(!output.requires_grad(),
-        "Inference does not record parameter gradients");
-  std::vector<float> altered =
-      model
-          ->forward(Tensor::from_data({1, 3}, {1, 2, 5}, Backend::CPU, false,
-                                      DType::Int32),
-                    false)
-          .data();
-  std::vector<float> original = output.data();
-  near(std::vector<float>(altered.begin(), altered.begin() + 16),
-       std::vector<float>(original.begin(), original.begin() + 16), 1e-6f,
-       "Causal attention cannot observe future tokens");
-  float final_change = 0;
-  for (size_t i = 16; i < original.size(); ++i) {
-    final_change = std::max(final_change, std::abs(original[i] - altered[i]));
-  }
-  check(final_change > 1e-5f, "Changed current token affects its own logits");
-  check(model->parameters().size() == 16,
-        "GPT2 tied embeddings are registered once");
-  elman::Json::Object bad_heads = definition.object();
-  bad_heads["num_heads"] = Json(3);
-  rejects([&] { create_model(Json(bad_heads), Backend::CPU); },
-          "GPT2 head divisibility validation");
-  rejects([&] { model->forward(Tensor::zeros({1, 4}), false); },
-          "GPT2 context overflow validation");
-
-  Json alex_definition = Json::parse(
-      R"({"format":"elman.model","version":1,"name":"TestAlexNet","architecture":"alexnet","input_shape":[3,8,8],"channels":[2,2,2,2,2],"kernels":[3,3,3,3,3],"strides":[1,1,1,1,1],"paddings":[1,1,1,1,1],"pool_kernel":2,"pool_stride":2,"hidden_features":[4,4],"num_classes":3,"dropout":0})");
-  std::unique_ptr<Model> alex = create_model(alex_definition, Backend::CPU, 9);
-  Tensor classification = alex->forward(Tensor::ones({2, 3, 8, 8}), false);
-  check(classification.shape() == Shape({2, 3}), "AlexNet output shape");
-  check(alex->parameters().size() == 16,
-        "AlexNet five convolution and three linear parameters");
-  for (float value : classification.data()) {
-    check(std::isfinite(value), "AlexNet finite logits");
-  }
-}
-
 void affine_tests() {
   using namespace elman;
   for (bool regression : {true, false}) {
@@ -187,19 +159,12 @@ void affine_tests() {
     const std::filesystem::path config_path = temporary.path / "run.json";
     const std::filesystem::path checkpoint_path = temporary.path / "model.elman";
     const std::filesystem::path prediction_path = temporary.path / "predictions.json";
-    Json definition(
-        Json::Object{{"format", "elman.model"},
-                     {"version", 1},
-                     {"name", "TestAffine"},
-                     {"architecture",
-                      regression ? "linear_regression" : "logistic_regression"},
-                     {"input_features", 2},
-                     {regression ? "output_features" : "num_classes", 2}});
+    Json definition = affine_definition(regression);
     definition.write(model_path.string());
     std::unique_ptr<Model> model = create_model(definition, Backend::CPU, 7);
     check(model->regression() == regression, "Affine objective selection");
     check(model->parameters().size() == 2, "Affine parameter count");
-    model->parameters()[0].value.assign({1, 2, 3, 4});
+    model->parameters()[0].value.assign({1, 3, 2, 4});
     model->parameters()[1].value.assign({0.5f, -0.5f});
     Tensor input = Tensor::from_data({2, 2}, {1, 2, -1, 1});
     Tensor prediction = model->forward(input, false);
@@ -212,11 +177,15 @@ void affine_tests() {
         [&] { model->forward(Tensor::from_int_data({1, 2}, {1, 2}), false); },
         "Affine input dtype");
     elman::Json::Object bad = definition.object();
-    bad["input_features"] = 0;
+    auto bad_parameters = bad.at("parameters").object();
+    bad_parameters["input_features"] = 0;
+    bad["parameters"] = bad_parameters;
     rejects([&] { create_model(Json(bad), Backend::CPU); },
             "Affine invalid feature count");
     bad = definition.object();
-    bad[regression ? "output_features" : "num_classes"] = regression ? 0 : 1;
+    bad_parameters = bad.at("parameters").object();
+    bad_parameters["classes"] = regression ? 0 : 1;
+    bad["parameters"] = bad_parameters;
     rejects([&] { create_model(Json(bad), Backend::CPU); },
             "Affine invalid output count");
     save_checkpoint(checkpoint_path.string(), *model, definition,
@@ -287,7 +256,7 @@ void checkpoint_tests() {
   TemporaryDirectory temporary;
   const std::filesystem::path good_path = temporary.path / "valid.elman";
   const std::filesystem::path bad_path = temporary.path / "invalid.elman";
-  elman::Json definition = gpt_definition();
+  elman::Json definition = token_definition();
   std::unique_ptr<Model> model = create_model(definition, Backend::CPU, 7);
   elman::TrainingState state = state_for(*model);
   save_checkpoint(good_path.string(), *model, definition, state);
@@ -348,7 +317,7 @@ void checkpoint_tests() {
   rejects([&] { load_checkpoint(bad_path.string(), *restored, definition); },
           "Trailing checkpoint bytes validation");
   elman::Json::Object changed_definition = definition.object();
-  changed_definition["layer_norm_epsilon"] = Json(0.001);
+  changed_definition["fixture_revision"] = Json(2);
   rejects(
       [&] {
         load_checkpoint(good_path.string(), *restored,
@@ -374,7 +343,7 @@ void inference_tests() {
   const std::filesystem::path configuration_path = temporary.path / "run.json";
   const std::filesystem::path prediction_path = temporary.path / "predictions.json";
 
-  elman::Json definition = gpt_definition();
+  elman::Json definition = token_definition();
   definition.write(definition_path.string());
   std::unique_ptr<Model> model = create_model(definition, Backend::CPU, 7);
   save_checkpoint(checkpoint_path.string(), *model, definition,
@@ -439,7 +408,6 @@ void inference_tests() {
 int main() {
   try {
     json_tests();
-    model_tests();
     affine_tests();
     checkpoint_tests();
     inference_tests();

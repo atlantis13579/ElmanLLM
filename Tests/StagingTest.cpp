@@ -76,7 +76,7 @@ void storage(Backend backend) {
 }
 int main(int argc, char** argv) {
     try {
-        if (argc != 2) throw std::invalid_argument("Usage: elman_staging_tests cpu|cuda");
+        if (argc != 2) throw std::invalid_argument("Usage: elman_staging_tests cpu|cuda|metal");
         Backend backend = elman::parse_backend(argv[1]);
         if (!elman::backend_available(backend)) return 77;
         bindings(backend); storage(backend);

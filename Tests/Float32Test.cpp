@@ -213,7 +213,7 @@ void convolution_and_random() {
     near(dropout(x, .5f, 19, false).data(), x.data(), "dropout eval");
 }
 void full_vocabulary_loss() {
-    if (device != Backend::CUDA) return;
+    if (device == Backend::CPU) return;
     constexpr int classes = 50257;
     std::vector<float> values(2 * classes), expected(2 * classes);
     double expected_loss = 0;
@@ -258,9 +258,118 @@ void graph_and_parity() {
         Tensor b = Tensor::normal({1, 4, 3}, 0, .3f, 47, device);
         Tensor (*const run)(Tensor, Tensor) = [](Tensor a, Tensor b) { return sum(softmax(matmul(a, b)), 1); };
         near(run(a, b).data(), run(a.to(Backend::CPU), b.to(Backend::CPU)).data(), "CPU backend parity", .0002f);
-        near(Tensor::uniform({64}, 0, 1, 42, device).data(), Tensor::uniform({64}, 0, 1, 42, Backend::CPU).data(),
+        if (device == Backend::CUDA) near(Tensor::uniform({64}, 0, 1, 42, device).data(), Tensor::uniform({64}, 0, 1, 42, Backend::CPU).data(),
              "random backend parity");
     }
+}
+void training_kernel_parity() {
+    if (device == Backend::CPU) return;
+    auto values = [](size_t count, float scale) {
+        std::vector<float> result(count);
+        for (size_t i = 0; i < count; ++i) result[i] = std::sin(float(i) * .117f) * scale;
+        return result;
+    };
+    for (const Shape shape : {Shape{2048, 384}, Shape{37, 65}}) {
+        const int width = shape.back();
+        auto run = [&](Backend backend) {
+            Tensor x = Tensor::from_data(shape, values(size_t(shape[0]) * width, 2.f), backend, true);
+            Tensor w = Tensor::from_data({width}, values(width, .7f), backend, true);
+            Tensor b = Tensor::from_data({width}, values(width, .2f), backend, true);
+            Tensor y = layer_norm(x, w, b);
+            y.backward(Tensor::from_data(shape, values(x.numel(), .3f), backend));
+            return std::vector<std::vector<float>>{y.data(), x.grad(), w.grad(), b.grad()};
+        };
+        auto expected = run(Backend::CPU), actual = run(device);
+        for (size_t i = 0; i < expected.size(); ++i) near(actual[i], expected[i], "LayerNorm training shape parity", .002f);
+    }
+    {
+        Tensor a = Tensor::from_data({8192}, values(8192, 3.f), device);
+        Tensor b = Tensor::from_data({8192}, values(8192, .7f), device);
+        Tensor ca = a.to(Backend::CPU), cb = b.to(Backend::CPU);
+        near(add(a, b).data(), add(ca, cb).data(), "Vectorized FP32 add parity", 0.f);
+        near(sub(a, b).data(), sub(ca, cb).data(), "Vectorized FP32 subtract parity", 0.f);
+        near(mul(a, b).data(), mul(ca, cb).data(), "Vectorized FP32 multiply parity", 0.f);
+        near(mul(a, .3).data(), mul(ca, .3).data(), "Vectorized FP32 scalar parity", 0.f);
+    }
+    for (int length : {1, 33, 256, 777, 1025}) {
+        auto run = [&](Backend backend) {
+            Tensor x = Tensor::from_data({3, length}, values(3 * length, 3.f), backend, true);
+            softmax(x).backward(Tensor::from_data(x.shape(), values(x.numel(), .7f), backend));
+            return x.grad();
+        };
+        near(run(device), run(Backend::CPU), "Warp softmax derivative boundary parity", .0001f);
+    }
+    for (int axis : {1, 2}) {
+        auto run = [&](Backend backend, bool attention) {
+            Tensor x = Tensor::from_data({5, 7, 9}, values(315, 3.f), backend, true);
+            Tensor mask = Tensor::from_data({1, 1, 9}, values(9, .2f), backend, true);
+            Tensor y = attention ? attention_softmax(x, mask, 2.5, axis) : softmax(x, axis);
+            y.backward(Tensor::from_data(y.shape(), values(315, .7f), backend));
+            return std::vector<std::vector<float>>{y.data(), x.grad(), attention ? mask.grad() : std::vector<float>{}};
+        };
+        for (bool attention : {false, true}) {
+            auto expected = run(Backend::CPU, attention), actual = run(device, attention);
+            for (size_t i = 0; i < expected.size(); ++i) near(actual[i], expected[i], "Softmax backward axis and mask parity", .0001f);
+        }
+    }
+    for (bool train_mask : {false, true}) {
+        auto run = [&](Backend backend) {
+            Tensor x = Tensor::from_data({3, 2, 13, 17}, values(3 * 2 * 13 * 17, 3.f), backend, true);
+            Tensor mask = Tensor::from_data({1, 1, 13, 17}, values(13 * 17, .2f), backend, train_mask);
+            Tensor y = attention_softmax(x, mask, 2.5);
+            y.backward(Tensor::from_data(y.shape(), values(y.numel(), .7f), backend));
+            return std::vector<std::vector<float>>{y.data(), x.grad(), mask.grad()};
+        };
+        auto expected = run(Backend::CPU), actual = run(device);
+        for (size_t i = 0; i < expected.size(); ++i) near(actual[i], expected[i], "Matrix attention mask parity", .0001f);
+    }
+    for (int axis : {0, 1, 2, 3}) {
+        auto run = [&](Backend backend) {
+            Tensor x = Tensor::from_data({2, 5, 7, 12}, values(2 * 5 * 7 * 12, 3.f), backend, true);
+            Tensor transposed = permute(x, {0, 2, 1, 3});
+            Tensor y = slice(transposed, axis, 1, transposed.shape()[axis], 2);
+            y.backward(Tensor::from_data(y.shape(), values(y.numel(), .7f), backend));
+            return std::vector<std::vector<float>>{transposed.data(), y.data(), x.grad()};
+        };
+        auto expected = run(Backend::CPU), actual = run(device);
+        for (size_t i = 0; i < expected.size(); ++i) near(actual[i], expected[i], "Head permutation and strided slice parity", 0.f);
+    }
+    for (int axis : {0, 1, 2}) {
+        auto run = [&](Backend backend) {
+            Tensor x = Tensor::from_data({2, 5, 7, 64}, values(2 * 5 * 7 * 64, 3.f), backend, true);
+            const auto parts = split(x, axis == 0 ? 1 : 2, axis);
+            Tensor loss = add(add(mul(sum_all(parts.front()), .3), mul(sum_all(parts.back()), .7)), mul(sum_all(x), .2));
+            loss.backward();
+            std::vector<std::vector<float>> gradients{x.grad()};
+            loss.backward();
+            gradients.push_back(x.grad());
+            x.zero_grad();
+            sum_all(parts[1]).backward();
+            gradients.push_back(x.grad());
+            return gradients;
+        };
+        auto expected = run(Backend::CPU), actual = run(device);
+        for (size_t i = 0; i < expected.size(); ++i) near(actual[i], expected[i], "Joined split gradients, unused outputs and repeated backward", .000001f);
+    }
+    auto gelu_run = [&](Backend backend) {
+        Tensor x = Tensor::from_data({531}, values(531, 8.f), backend, true);
+        gelu(x).backward(Tensor::from_data({531}, values(531, .3f), backend));
+        return x.grad();
+    };
+    near(gelu_run(device), gelu_run(Backend::CPU), "GELU fused derivative parity");
+    for (bool transposed : {false, true}) {
+        auto run = [&](Backend backend) {
+            Tensor a = Tensor::from_data({2, 7, 9}, values(126, .3f), backend, true);
+            Tensor b = Tensor::from_data(transposed ? Shape{1, 11, 9} : Shape{1, 9, 11}, values(99, .5f), backend, true);
+            Tensor y = transposed ? matmul_transposed(a, b) : matmul(a, b);
+            y.backward(Tensor::from_data(y.shape(), values(154, .4f), backend));
+            return std::vector<std::vector<float>>{a.grad(), b.grad()};
+        };
+        auto expected = run(Backend::CPU), actual = run(device);
+        for (size_t i = 0; i < expected.size(); ++i) near(actual[i], expected[i], "Batched transposed GEMM derivative parity");
+    }
+    Tensor reduction = Tensor::from_data({3, 257, 65}, values(3 * 257 * 65, 1.f), device);
+    near(sum(reduction, 1).data(), sum(reduction.to(Backend::CPU), 1).data(), "Partitioned column reduction parity", .0001f);
 }
 } // namespace
 int main(int argc, char** argv) {
@@ -284,6 +393,7 @@ int main(int argc, char** argv) {
         convolution_and_random();
         graph_and_parity();
         full_vocabulary_loss();
+        training_kernel_parity();
         std::cout << "PASS backend=" << backend_name(device) << " checks=" << checks
                   << " native_dispatches=" << backend_dispatch_count(device) << '\n';
         return 0;

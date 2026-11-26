@@ -1,4 +1,4 @@
-#include "Operators/affine_quantization.h"
+#include "Kernals/affine_quantization.h"
 #include "Core/LocalFunction.h"
 #include <limits>
 #include <stdexcept>

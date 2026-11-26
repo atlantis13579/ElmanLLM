@@ -5,8 +5,8 @@
 #include <stdexcept>
 
 #include "Core/Device.h"
-#include "Operators/flux2_ops.h"
-#include "Operators/inference_ops.h"
+#include "Kernals/flux2_ops.h"
+#include "Kernals/inference_ops.h"
 
 namespace elman::flux2 {
 std::vector<float> flow_schedule(int steps, int image_tokens) {

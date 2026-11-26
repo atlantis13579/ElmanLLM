@@ -11,7 +11,7 @@
 #include "Core/Device.h"
 #include "IO/Json.h"
 #include "Models/Audio/Whisper.h"
-#include "Operators/audio_ops.h"
+#include "Kernals/audio_ops.h"
 #include "Text/WhisperTokenizer.h"
 
 namespace elman {

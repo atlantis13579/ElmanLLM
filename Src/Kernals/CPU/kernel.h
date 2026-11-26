@@ -1,0 +1,103 @@
+#pragma once
+#include <algorithm>
+#include <cmath>
+#include <cstring>
+#include <limits>
+
+#include "Core/Backend.h"
+#include "Core/Float16.h"
+#include "Kernals/attributes.h"
+#include "Kernals/tensor_axes.h"
+
+namespace elman {
+inline float cpu_float(uint32_t word) {
+  float result;
+  std::memcpy(&result, &word, 4);
+  return result;
+}
+inline uint32_t cpu_bits(float value) {
+  uint32_t result;
+  std::memcpy(&result, &value, 4);
+  return result;
+}
+inline float cpu_read(const uint32_t* data, int index, int dtype) {
+  if (dtype == 3) return numeric::half_to_float(reinterpret_cast<const uint16_t*>(data)[index]);
+  if (dtype == 4) return numeric::bfloat_to_float(reinterpret_cast<const uint16_t*>(data)[index]);
+  if (dtype == 2) return reinterpret_cast<const uint8_t*>(data)[index] != 0 ? 1.0f : 0.0f;
+  return dtype == 0 ? cpu_float(data[index]) : float(int32_t(data[index]));
+}
+inline int cpu_read_int(const uint32_t* data, int index, int dtype) {
+  if (dtype == 3 || dtype == 4) return int(cpu_read(data, index, dtype));
+  if (dtype == 2) return reinterpret_cast<const uint8_t*>(data)[index] != 0 ? 1 : 0;
+  return dtype == 0 ? int(cpu_float(data[index])) : int32_t(data[index]);
+}
+inline void cpu_write(uint32_t* data, int index, float value, int dtype) {
+  if (dtype == 3 || dtype == 4) {
+    reinterpret_cast<uint16_t*>(data)[index] = dtype == 3 ? numeric::float_to_half(value) : numeric::float_to_bfloat(value);
+  } else if (dtype == 0) {
+    data[index] = cpu_bits(value);
+  } else if (dtype == 2) {
+    reinterpret_cast<uint8_t*>(data)[index] = value != 0.0f ? 1u : 0u;
+  } else if (std::isnan(value) || value >= 2147483648.0f || value <= -2147483648.0f) {
+    data[index] = 2147483648u;
+  } else {
+    data[index] = uint32_t(int32_t(value));
+  }
+}
+inline void cpu_write_int(uint32_t* data, int index, int value, int dtype) {
+  if (dtype == 3 || dtype == 4) {
+    cpu_write(data, index, float(value), dtype);
+  } else if (dtype == 0) {
+    data[index] = cpu_bits(float(value));
+  } else {
+    if (dtype == 2) reinterpret_cast<uint8_t*>(data)[index] = value != 0 ? 1u : 0u;
+    else data[index] = uint32_t(value);
+  }
+}
+inline void cpu_copy_element(uint32_t* out, const uint32_t* source, int destination, int index, int dtype) {
+  if (dtype == 2) reinterpret_cast<uint8_t*>(out)[destination] = reinterpret_cast<const uint8_t*>(source)[index];
+  else if (dtype == 3 || dtype == 4) reinterpret_cast<uint16_t*>(out)[destination] = reinterpret_cast<const uint16_t*>(source)[index];
+  else out[destination] = source[index];
+}
+inline void cpu_copy_a(uint32_t* out, const uint32_t* a, int destination,
+                       int source, const KernelParams& params) {
+  if (params.input_dtype(KernelInput::A) == params.output_dtype()) {
+    cpu_copy_element(out, a, destination, source, params.output_dtype());
+  } else {
+    cpu_write(out, destination,
+              cpu_read(a, source, params.input_dtype(KernelInput::A)),
+              params.output_dtype());
+  }
+}
+inline float float_attribute(const KernelParams& params, int offset) {
+  return cpu_float(uint32_t(params.attribute(offset)));
+}
+#define READ_A(index) cpu_read(a, index, p.input_dtype(KernelInput::A))
+#define READ_B(index) cpu_read(b, index, p.input_dtype(KernelInput::B))
+#define READ_C(index) cpu_read(c, index, p.input_dtype(KernelInput::C))
+#define READ_INT_A(index) cpu_read_int(a, index, p.input_dtype(KernelInput::A))
+#define READ_INT_B(index) cpu_read_int(b, index, p.input_dtype(KernelInput::B))
+#define READ_INT_C(index) cpu_read_int(c, index, p.input_dtype(KernelInput::C))
+#define WRITE_OUTPUT(index, value) \
+  cpu_write(out, index, value, p.output_dtype())
+#define WRITE_INT_OUTPUT(index, value) \
+  cpu_write_int(out, index, value, p.output_dtype())
+#define COPY_INPUT_A(index, source) cpu_copy_a(out, a, index, source, p)
+#define COPY_TYPED_ELEMENT(out, source, destination, index, dtype) cpu_copy_element(out, source, destination, index, dtype)
+#define EL_INLINE inline
+#define EL_UINT uint32_t
+#define EL_SQRT(x) std::sqrt(x)
+#define EL_EXP(x) std::exp(x)
+#define EL_LOG(x) std::log(x)
+#define EL_SIN(x) std::sin(x)
+#define EL_COS(x) std::cos(x)
+#define EL_POW(x, y) std::pow(x, y)
+#define EL_TANH(x) std::tanh(x)
+#define EL_FLOOR(x) std::floor(x)
+#define EL_ABS(x) std::fabs(x)
+#define EL_MIN(x, y) (std::isnan(x) || (x) < (y) ? (x) : (y))
+#define EL_MAX(x, y) (std::isnan(x) || (x) > (y) ? (x) : (y))
+#define EL_INF std::numeric_limits<float>::infinity()
+}  // namespace elman
+
+#include "Kernals/common.h"

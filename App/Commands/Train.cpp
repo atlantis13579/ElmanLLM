@@ -13,6 +13,9 @@ int train(const std::string& configuration, const RunOptions& options) {
   DeviceScope device(config.backend, config.backend == Backend::CUDA && cuda_device >= 0
                                          ? cuda_device : current_device(config.backend));
   Dataset data(config);
+  std::unique_ptr<Dataset> validation;
+  if (config.json.at("data").string_or("format", "") == "character_text")
+    validation = std::make_unique<Dataset>(config, true);
   TrainingRun run;
   run.definition = config.definition;
   run.settings = config.json.at("training");
@@ -24,9 +27,11 @@ int train(const std::string& configuration, const RunOptions& options) {
   run.metrics = options.output.empty()
       ? config.output("metrics", "../Intermediate/metrics.json") : options.output;
   run.resume = options.resume;
+  if (validation)
+    run.best_checkpoint = config.output("best_checkpoint", "../Intermediate/best.elman");
   if (config.json.contains("output") && config.json.at("output").contains("graph"))
     run.graph = config.output("graph", "../Intermediate/graph.json");
-  return train_model(*config.model, data, run, group);
+  return train_model(*config.model, data, run, group, validation.get());
 }
 
 }

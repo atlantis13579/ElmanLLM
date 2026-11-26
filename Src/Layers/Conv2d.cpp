@@ -1,5 +1,5 @@
 #include "Layers/Conv2d.h"
-#include "Operators/inference_ops.h"
+#include "Kernals/inference_ops.h"
 
 #include <cmath>
 #include <stdexcept>

@@ -5,7 +5,7 @@
 #include <tuple>
 
 #include "Core/Device.h"
-#include "Operators/flux2_ops.h"
+#include "Kernals/flux2_ops.h"
 
 namespace elman::flux2 {
 namespace {

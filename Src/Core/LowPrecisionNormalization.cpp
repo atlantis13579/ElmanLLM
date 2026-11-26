@@ -1,4 +1,4 @@
-#include "Operators/low_precision_normalization.h"
+#include "Kernals/low_precision_normalization.h"
 #include "Core/LocalFunction.h"
 #include <cstring>
 #include <stdexcept>

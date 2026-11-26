@@ -1,4 +1,4 @@
-#include "Operators/low_precision_pointwise.h"
+#include "Kernals/low_precision_pointwise.h"
 #include <algorithm>
 #include <stdexcept>
 

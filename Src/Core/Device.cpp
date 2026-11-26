@@ -1,6 +1,7 @@
 #include "Core/Device.h"
 #include "Core/AllocationPool.h"
 #include "Core/Memory.h"
+#include "Fusion/Fusion.h"
 #include <stdexcept>
 #ifdef ELMAN_HAS_METAL
 #include "Backends/Metal.h"
@@ -60,6 +61,8 @@ DeviceScope::~DeviceScope() {
 #endif
 }
 void copy_device_storage(const BufferPtr& destination, const BufferPtr& source) {
+    fusion::access(source);
+    fusion::access(destination);
     if (!destination || !source || destination->backend != Backend::CUDA || source->backend != Backend::CUDA ||
         destination->dtype != source->dtype || destination->count != source->count)
         throw std::invalid_argument("CUDA transfer requires matching source/destination storage");

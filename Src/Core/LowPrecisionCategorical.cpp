@@ -1,4 +1,4 @@
-#include "Operators/low_precision_categorical.h"
+#include "Kernals/low_precision_categorical.h"
 #include <stdexcept>
 
 namespace elman {

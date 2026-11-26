@@ -1,5 +1,6 @@
 #include "Core/Execution.h"
 #include "Core/Memory.h"
+#include "Fusion/Fusion.h"
 #ifdef ELMAN_HAS_METAL
 #include "Backends/Metal.h"
 #endif
@@ -47,14 +48,15 @@ ExecutionStream::ExecutionStream(Backend backend, const HostStagingOptions& stag
 #endif
     else throw std::invalid_argument("Execution backend unavailable");
 }
-ExecutionEvent ExecutionStream::record() const { return ExecutionEvent(state_->record()); }
+ExecutionEvent ExecutionStream::record() const { fusion::flush(); return ExecutionEvent(state_->record()); }
 void ExecutionStream::wait(const ExecutionEvent& event) const {
+    fusion::flush();
     if (!event.state_ || event.state_->backend != backend() || event.state_->device != device())
         throw std::invalid_argument("Event and stream must belong to the same backend and device");
     state_->wait(event.state_);
 }
-bool ExecutionStream::ready() const { return state_->ready(); }
-void ExecutionStream::synchronize() const { state_->synchronize(); }
+bool ExecutionStream::ready() const { fusion::flush(); return state_->ready(); }
+void ExecutionStream::synchronize() const { fusion::flush(); state_->synchronize(); }
 HostStagingStats ExecutionStream::host_staging_stats() const { return state_->host_staging_stats(); }
 void ExecutionStream::trim_host_staging() const { state_->trim_host_staging(); }
 bool ExecutionEvent::ready() const {

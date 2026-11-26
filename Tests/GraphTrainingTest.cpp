@@ -61,7 +61,9 @@ void training(Backend backend,const std::filesystem::path& directory) {
 int main(int argc,char** argv) {
     try {
         if(argc!=3) throw std::invalid_argument("Expected backend and artifact directory");
-        const auto backend=parse_backend(argv[1]);gradients(backend);training(backend,std::filesystem::u8path(argv[2]));
+        const auto backend=parse_backend(argv[1]);
+        if(!backend_available(backend)) return 77;
+        gradients(backend);training(backend,std::filesystem::u8path(argv[2]));
         std::cout<<"Graph gradients, JSON training, and NPY round trips passed\n";return 0;
     } catch(const std::exception& e) { std::cerr<<e.what()<<'\n';return 1; }
 }

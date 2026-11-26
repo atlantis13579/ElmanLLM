@@ -1,4 +1,4 @@
-#include "Operators/low_precision_reduction.h"
+#include "Kernals/low_precision_reduction.h"
 #include <stdexcept>
 
 namespace elman {

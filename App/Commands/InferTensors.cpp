@@ -11,6 +11,7 @@
 #include "IO/Safetensors.h"
 #include "IO/Json.h"
 #include "IO/TensorArchive.h"
+#include "Models/Model.h"
 
 #include "Commands/Commands.h"
 
@@ -38,7 +39,7 @@ int infer_tensors_command(int argc, char** argv) {
   const bool keras = extension == ".keras" || extension == ".h5" || extension == ".hdf5";
   const bool scripted = extension == ".pt" || extension == ".pth" || extension == ".torchscript" || extension == ".ptc";
   const bool saved = extension == ".pb" || std::filesystem::is_directory(model);
-  const bool graph = tflite || keras || saved || scripted || Json::read(model).at("format").string() == "elman.graph";
+  const bool graph = tflite || keras || saved || scripted || read_model_definition(model).at("format").string() == "elman.graph";
   if (!saved && !signature.empty()) throw std::invalid_argument("--signature requires a TensorFlow SavedModel");
   if (!graph && checkpoint.empty())
     throw std::invalid_argument("Built-in models require --checkpoint");

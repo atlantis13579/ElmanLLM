@@ -1,4 +1,4 @@
-#include "Operators/low_precision_matrix.h"
+#include "Kernals/low_precision_matrix.h"
 #include "Core/LocalFunction.h"
 #include <algorithm>
 #include <stdexcept>

@@ -1,5 +1,5 @@
-#include "Operators/floating_random.h"
-#include "Operators/floating_random_math.h"
+#include "Kernals/floating_random.h"
+#include "Kernals/floating_random_math.h"
 #include <limits>
 #include <stdexcept>
 

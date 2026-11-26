@@ -1,50 +1,51 @@
 #include "Backend.h"
+#include "Kernals/sdpa.h"
 #include "Core/LocalFunction.h"
 #include "Core/TensorDispatch.h"
 #include "Backends/MetalDTypeSupport.h"
 #include "Core/CommandGraph.h"
-#include "Operators/complex_pointwise.h"
-#include "Operators/paged_attention.h"
-#include "Operators/flux2_ops.h"
-#include "Operators/affine_quantization.h"
+#include "Kernals/complex_pointwise.h"
+#include "Kernals/paged_attention.h"
+#include "Kernals/flux2_ops.h"
+#include "Kernals/affine_quantization.h"
 #include "Core/Memory.h"
 #ifdef ELMAN_HAS_METAL
 #include "Backends/Metal.h"
 #endif
 #include "Core/AllocationPool.h"
-#include "Operators/attributes.h"
-#include "Operators/group_norm_params.h"
-#include "Operators/integer_pointwise.h"
-#include "Operators/packed_integer_cast.h"
-#include "Operators/float64_pointwise.h"
-#include "Operators/float64_reduction.h"
-#include "Operators/float64_matrix.h"
-#include "Operators/float64_softmax.h"
-#include "Operators/float64_indexing.h"
-#include "Operators/float64_spatial.h"
-#include "Operators/float64_loss.h"
-#include "Operators/float64_attention.h"
-#include "Operators/float64_random.h"
-#include "Operators/float64_categorical.h"
-#include "Operators/float64_normalization.h"
-#include "Operators/integer_matrix.h"
-#include "Operators/storage_layout.h"
-#include "Operators/low_precision_cast.h"
-#include "Operators/low_precision_pointwise.h"
-#include "Operators/low_precision_reduction.h"
-#include "Operators/low_precision_matrix.h"
-#include "Operators/low_precision_softmax.h"
-#include "Operators/low_precision_normalization.h"
-#include "Operators/low_precision_indexing.h"
-#include "Operators/low_precision_spatial.h"
-#include "Operators/low_precision_loss.h"
-#include "Operators/low_precision_fused.h"
-#include "Operators/low_precision_attention.h"
-#include "Operators/low_precision_random.h"
-#include "Operators/low_precision_categorical.h"
-#include "Operators/low_precision_optimizer.h"
-#include "Operators/floating_dropout.h"
-#include "Operators/floating_random.h"
+#include "Kernals/attributes.h"
+#include "Kernals/group_norm_params.h"
+#include "Kernals/integer_pointwise.h"
+#include "Kernals/packed_integer_cast.h"
+#include "Kernals/float64_pointwise.h"
+#include "Kernals/float64_reduction.h"
+#include "Kernals/float64_matrix.h"
+#include "Kernals/float64_softmax.h"
+#include "Kernals/float64_indexing.h"
+#include "Kernals/float64_spatial.h"
+#include "Kernals/float64_loss.h"
+#include "Kernals/float64_attention.h"
+#include "Kernals/float64_random.h"
+#include "Kernals/float64_categorical.h"
+#include "Kernals/float64_normalization.h"
+#include "Kernals/integer_matrix.h"
+#include "Kernals/storage_layout.h"
+#include "Kernals/low_precision_cast.h"
+#include "Kernals/low_precision_pointwise.h"
+#include "Kernals/low_precision_reduction.h"
+#include "Kernals/low_precision_matrix.h"
+#include "Kernals/low_precision_softmax.h"
+#include "Kernals/low_precision_normalization.h"
+#include "Kernals/low_precision_indexing.h"
+#include "Kernals/low_precision_spatial.h"
+#include "Kernals/low_precision_loss.h"
+#include "Kernals/low_precision_fused.h"
+#include "Kernals/low_precision_attention.h"
+#include "Kernals/low_precision_random.h"
+#include "Kernals/low_precision_categorical.h"
+#include "Kernals/low_precision_optimizer.h"
+#include "Kernals/floating_dropout.h"
+#include "Kernals/floating_random.h"
 
 #include <array>
 #include <algorithm>
@@ -169,7 +170,7 @@ BufferPtr backend_allocate(Backend backend, size_t count, DType dtype) {
   return detail::pooled_allocate(backend, count, dtype, MemoryKind::Tensor, implementation.allocate, implementation.clear);
 }
 BufferPtr detail::allocate_dispatch_output(const std::string& op, Backend backend, size_t count, DType dtype,
-                                           const std::vector<Tensor>& inputs) {
+                                           const std::vector<Tensor>& inputs, const std::vector<int>& attributes) {
 #ifdef ELMAN_HAS_CUDA
   if (backend == Backend::CUDA && (is_arithmetic_float(dtype) || is_complex(dtype) ||
                                    dtype == DType::Bool || dtype == DType::Int32)) {
@@ -190,12 +191,19 @@ BufferPtr detail::allocate_dispatch_output(const std::string& op, Backend backen
       {"addmm",3},{"linear",2},{"packed_linear",2},{"matmul",2},{"bmm",2},
       {"layer_norm",3},{"batch_norm",3},{"rms_norm",2},{"rotary_embedding",3},{"tiled_attention",4},
       {"complex",2},{"conj",1},{"real",1},{"imag",1},{"angle",1},{"sgn",1},{"tanh",1},
-      {"float64_fma",3}
+      {"float64_fma",3},{"optimizer_step",4},{"optimizer_stats",4},{"slice_grad",1}
     };
     const auto it = full_writes.find(op);
     if (it != full_writes.end()) {
       const bool optional_bias = op == "linear" || op == "packed_linear";
-      const uint64_t required = it->second;
+      uint64_t required = it->second;
+      if (dtype == DType::Float32) {
+        // Inline scalars also overwrite their entire destination.
+        if ((op == "add" || op == "sub" || op == "mul") && attributes.size() >= 2 && attributes[0] == 1 &&
+            inputs.size() == 1 && inputs[0].defined() && inputs[0].numel() == count) required = 1;
+        if (op == "layer_norm" && attributes.size() > 10 && attributes[10] == 1 &&
+            (attributes[8] == 2 || attributes[8] == 3)) required = 2;
+      }
       if ((inputs.size() == required || (optional_bias && inputs.size() == required + 1)) &&
           std::all_of(inputs.begin(), inputs.begin() + required, [](const Tensor& t) {
             return t.defined() && t.numel() != 0;
@@ -468,6 +476,8 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
   if (double_categorical) validate_float64_categorical(output, inputs, params);
   if (low_categorical) validate_low_precision_categorical(output, inputs, params);
   if (low_optimizer) validate_low_precision_optimizer(output, inputs, params);
+  if (op == "optimizer_stats") validate_optimizer_stats(output, inputs, params);
+  if (op == "sdpa_weights" || op == "sdpa_gradient") validate_sdpa_stage(op == "sdpa_gradient",output,inputs,params);
   if (double_matrix != Float64Matrix::None)
     validate_float64_matrix(double_matrix, output, inputs, params);
   if (double_reduction != Float64Reduction::None)

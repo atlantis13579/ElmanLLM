@@ -1,0 +1,279 @@
+{
+  "class_name": "Graph",
+  "parameters": {
+    "embedding_dim": null,
+    "num_heads": null,
+    "mlp_ratio": 4,
+    "dropout": 0.1,
+    "epsilon": 1e-05
+  },
+  "config": {
+    "inputs": [
+      "x"
+    ],
+    "outputs": [
+      "residual2"
+    ],
+    "layers": [
+      {
+        "name": "norm1",
+        "class_name": "LayerNorm",
+        "config": {
+          "features": "$embedding_dim",
+          "epsilon": "$epsilon"
+        },
+        "inputs": [
+          "x"
+        ]
+      },
+      {
+        "name": "qkv",
+        "class_name": "Linear",
+        "config": {
+          "in_features": "$embedding_dim",
+          "out_features": {
+            "product": [
+              3,
+              "$embedding_dim"
+            ]
+          }
+        },
+        "inputs": [
+          "norm1"
+        ]
+      },
+      {
+        "name": "split",
+        "class_name": "split",
+        "config": {
+          "size": "$embedding_dim",
+          "dim": 2
+        },
+        "inputs": [
+          "qkv"
+        ],
+        "outputs": [
+          "q",
+          "k",
+          "v"
+        ]
+      },
+      {
+        "name": "qheads",
+        "class_name": "split_heads",
+        "config": {
+          "heads": "$num_heads"
+        },
+        "inputs": [
+          "q"
+        ]
+      },
+      {
+        "name": "kheads",
+        "class_name": "split_heads",
+        "config": {
+          "heads": "$num_heads"
+        },
+        "inputs": [
+          "k"
+        ]
+      },
+      {
+        "name": "vheads",
+        "class_name": "split_heads",
+        "config": {
+          "heads": "$num_heads"
+        },
+        "inputs": [
+          "v"
+        ]
+      },
+      {
+        "name": "kt",
+        "class_name": "transpose",
+        "config": {
+          "a": 2,
+          "b": 3
+        },
+        "inputs": [
+          "kheads"
+        ]
+      },
+      {
+        "name": "scores",
+        "class_name": "matmul",
+        "config": {},
+        "inputs": [
+          "qheads",
+          "kt"
+        ]
+      },
+      {
+        "name": "scale",
+        "class_name": "mul_scalar",
+        "config": {
+          "b": {
+            "quotient": [
+              1,
+              {
+                "sqrt": {
+                  "quotient": [
+                    "$embedding_dim",
+                    "$num_heads"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "inputs": [
+          "scores"
+        ]
+      },
+      {
+        "name": "mask",
+        "class_name": "causal_mask",
+        "config": {},
+        "inputs": [
+          "x"
+        ]
+      },
+      {
+        "name": "softmax",
+        "class_name": "attention_softmax",
+        "config": {},
+        "inputs": [
+          "scale",
+          "mask"
+        ]
+      },
+      {
+        "name": "attn_drop",
+        "class_name": "Dropout",
+        "config": {
+          "probability": "$dropout"
+        },
+        "inputs": [
+          "softmax"
+        ]
+      },
+      {
+        "name": "attended",
+        "class_name": "matmul",
+        "config": {},
+        "inputs": [
+          "attn_drop",
+          "vheads"
+        ]
+      },
+      {
+        "name": "merged",
+        "class_name": "merge_heads",
+        "config": {},
+        "inputs": [
+          "attended"
+        ]
+      },
+      {
+        "name": "proj",
+        "class_name": "Linear",
+        "config": {
+          "in_features": "$embedding_dim",
+          "out_features": "$embedding_dim"
+        },
+        "inputs": [
+          "merged"
+        ]
+      },
+      {
+        "name": "proj_drop",
+        "class_name": "Dropout",
+        "config": {
+          "probability": "$dropout"
+        },
+        "inputs": [
+          "proj"
+        ]
+      },
+      {
+        "name": "residual1",
+        "class_name": "add",
+        "config": {},
+        "inputs": [
+          "x",
+          "proj_drop"
+        ]
+      },
+      {
+        "name": "norm2",
+        "class_name": "LayerNorm",
+        "config": {
+          "features": "$embedding_dim",
+          "epsilon": "$epsilon"
+        },
+        "inputs": [
+          "residual1"
+        ]
+      },
+      {
+        "name": "fc",
+        "class_name": "Linear",
+        "config": {
+          "in_features": "$embedding_dim",
+          "out_features": {
+            "product": [
+              "$embedding_dim",
+              "$mlp_ratio"
+            ]
+          }
+        },
+        "inputs": [
+          "norm2"
+        ]
+      },
+      {
+        "name": "gelu",
+        "class_name": "gelu",
+        "config": {},
+        "inputs": [
+          "fc"
+        ]
+      },
+      {
+        "name": "mlp_proj",
+        "class_name": "Linear",
+        "config": {
+          "in_features": {
+            "product": [
+              "$embedding_dim",
+              "$mlp_ratio"
+            ]
+          },
+          "out_features": "$embedding_dim"
+        },
+        "inputs": [
+          "gelu"
+        ]
+      },
+      {
+        "name": "mlp_drop",
+        "class_name": "Dropout",
+        "config": {
+          "probability": "$dropout"
+        },
+        "inputs": [
+          "mlp_proj"
+        ]
+      },
+      {
+        "name": "residual2",
+        "class_name": "add",
+        "config": {},
+        "inputs": [
+          "residual1",
+          "mlp_drop"
+        ]
+      }
+    ]
+  }
+}

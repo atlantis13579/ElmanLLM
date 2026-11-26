@@ -1,4 +1,5 @@
 #include "Text/Tokenizer.h"
+#include "Text/CharacterTokenizer.h"
 
 #include <functional>
 #include <iostream>
@@ -21,6 +22,20 @@ void rejects(const std::function<void()>& operation) {
 int main() {
     try {
         using namespace elman;
+        const CharacterTokenizer characters(Json::Object{{"type", "character"}, {"characters", "ab \n"}});
+        check(characters.size() == 4, "character vocabulary size");
+        check(characters.encode("ba\na ") == std::vector<int32_t>({1, 0, 3, 0, 2}), "character token IDs");
+        check(characters.encode("").empty(), "empty character text");
+        std::string decoded;
+        for (int32_t token : characters.encode("ba\na ")) decoded += characters.decode(token);
+        check(decoded == "ba\na ", "character round trip");
+        rejects([&] { characters.encode("x"); });
+        rejects([&] { characters.encode(std::string(1, char(0xff))); });
+        rejects([&] { characters.decode(-1); });
+        rejects([&] { characters.decode(4); });
+        for (const std::string vocabulary : {std::string("a"), std::string("aa"), std::string("a\xff")})
+            rejects([&] { CharacterTokenizer invalid(Json::Object{{"type", "character"}, {"characters", vocabulary}}); });
+        rejects([] { CharacterTokenizer invalid(Json::Object{{"type", "other"}, {"characters", "ab"}}); });
         TokenizerTrainingOptions options;
         options.vocabulary_size = 310;
         options.special_tokens = {"<end>", "<end>long", "<begin>"};

@@ -3,6 +3,7 @@
 #include "Core/Device.h"
 #include "Core/Memory.h"
 #include "Backends/CudaExecution.h"
+#include "Fusion/Fusion.h"
 #include <set>
 #include <stdexcept>
 
@@ -39,6 +40,7 @@ CudaCommandRecording::CudaCommandRecording(const std::string& op, const BufferPt
 }
 CudaCommandRecording::~CudaCommandRecording() { current_command = static_cast<Command*>(previous_); }
 bool lowering_cuda_graph() { return lowering; }
+bool recording_cuda_graph() { return recording != nullptr; }
 BufferPtr replay_cuda_graph_workspace(size_t bytes) {
     if (!lowering) return {};
     require(current_command && workspace_index < current_command->workspace.size(), "CUDA graph scratch count changed");
@@ -69,6 +71,7 @@ struct CommandGraph::Impl {
 CommandGraph::CommandGraph() : impl_(std::make_unique<Impl>()) {}
 CommandGraph::~CommandGraph() = default;
 void CommandGraph::record(const std::function<void()>& forward) {
+    fusion::Policy eager(fusion::Options{});
     CommandGraph::Impl& s = *impl_;
     require(!s.recorded && !s.failed && !recording && !lowering, "CUDA graph recording is not reusable or nestable");
     DeviceScope owner(Backend::CUDA, s.device);
@@ -95,6 +98,7 @@ void CommandGraph::record(const std::function<void()>& forward) {
     s.recorded = true;
 }
 void CommandGraph::compile() {
+    fusion::Policy eager(fusion::Options{});
     CommandGraph::Impl& s = *impl_;
     require(s.recorded && !s.failed && !s.executable, "CUDA graph is not ready for capture");
     DeviceScope owner(Backend::CUDA, s.device);
@@ -124,6 +128,7 @@ void CommandGraph::compile() {
     } catch (...) { s.failed = true; throw; }
 }
 void CommandGraph::replay() {
+    fusion::Policy eager(fusion::Options{});
     CommandGraph::Impl& s = *impl_;
     require(s.executable && !s.failed, "CUDA graph is not executable");
     DeviceScope owner(Backend::CUDA, s.device);

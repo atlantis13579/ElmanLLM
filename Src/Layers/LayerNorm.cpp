@@ -1,5 +1,5 @@
 #include "Layers/LayerNorm.h"
-#include "Operators/inference_ops.h"
+#include "Kernals/inference_ops.h"
 
 namespace elman::inference {
 

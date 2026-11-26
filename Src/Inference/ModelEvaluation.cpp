@@ -38,7 +38,7 @@ int infer(const std::string& configuration, const RunOptions& options) {
           : options.checkpoint;
   load_inference_parameters(std::filesystem::u8path(checkpoint), *config.model, config.definition, config.backend);
 
-  std::vector<size_t> order(data.inputs.size());
+  std::vector<size_t> order(data.size());
   std::iota(order.begin(), order.end(), 0);
   Json::Array predictions;
   size_t correct = 0;

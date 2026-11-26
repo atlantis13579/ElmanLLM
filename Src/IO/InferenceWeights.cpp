@@ -2,7 +2,7 @@
 #include "IO/Json.h"
 #include "Core/Memory.h"
 #include "Core/TensorDispatch.h"
-#include "Operators/affine_quantization.h"
+#include "Kernals/affine_quantization.h"
 #include <algorithm>
 #include <filesystem>
 #include <set>

@@ -17,6 +17,7 @@ public:
     virtual Tensor forward(const Tensor& input, bool training, uint32_t seed = 1) = 0;
     virtual Shape sample_shape() const = 0;
     virtual int output_classes() const = 0;
+    virtual bool language() const { return false; }
     virtual bool regression() const { return false; }
     virtual std::vector<Parameter> checkpoint_buffers() const { return {}; }
     const std::string& name() const { return name_; }
@@ -35,5 +36,7 @@ protected:
 };
 
 std::unique_ptr<Model> create_model(const Json& definition, Backend backend, uint32_t seed = 42);
+// Resolve relative JSON includes into a self-contained checkpoint definition.
+Json read_model_definition(const std::filesystem::path& path);
 
 }

@@ -8,7 +8,7 @@
 #include "Core/Device.h"
 #include "Models/Diffusion/ModelConfig.h"
 #include "Models/Diffusion/Blocks.h"
-#include "Operators/inference_ops.h"
+#include "Kernals/inference_ops.h"
 
 namespace elman {
 namespace {

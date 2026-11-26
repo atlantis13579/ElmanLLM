@@ -256,7 +256,7 @@ Tensor dispatch_tensor(const std::string& op, const Shape& shape,
   const int device = inputs.empty() ? current_device(backend) : inputs[0].device();
   DeviceScope owner(backend, device);
   const size_t count = shape_element_count(shape);
-  n->value = detail::allocate_dispatch_output(op, backend, count, dtype, inputs);
+  n->value = detail::allocate_dispatch_output(op, backend, count, dtype, inputs, attrs);
   n->operation = op;
   dispatch_bound(op, Tensor(n), inputs, attrs, count, device);
   return Tensor(n);

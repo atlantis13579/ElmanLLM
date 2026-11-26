@@ -1,14 +1,167 @@
 {
   "format": "elman.model",
-  "version": 1,
+  "version": 2,
   "name": "GPT2",
   "architecture": "gpt2",
-  "vocab_size": 50257,
-  "context_length": 1024,
-  "embedding_dim": 768,
-  "num_heads": 12,
-  "num_layers": 12,
-  "mlp_ratio": 4,
-  "dropout": 0.1,
-  "layer_norm_epsilon": 0.00001
+  "task": "language_modeling",
+  "parameters": {
+    "vocab_size": 50257,
+    "context_length": 1024,
+    "embedding_dim": 768,
+    "num_heads": 12,
+    "num_layers": 12,
+    "mlp_ratio": 4,
+    "dropout": 0.1,
+    "epsilon": 1e-05
+  },
+  "output_features": "$vocab_size",
+  "inputs": [
+    {
+      "name": "input",
+      "dtype": "int32",
+      "shape": [
+        -1,
+        -1
+      ],
+      "sample_shape": [
+        "$context_length"
+      ],
+      "max_shape": [
+        -1,
+        "$context_length"
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "name": "output",
+      "value": "network",
+      "dtype": "float32",
+      "shape": [
+        -1,
+        -1,
+        "$vocab_size"
+      ]
+    }
+  ],
+  "layers": [
+    {
+      "name": "token_weight",
+      "class_name": "Parameter",
+      "config": {
+        "shape": [
+          "$vocab_size",
+          "$embedding_dim"
+        ]
+      },
+      "inputs": []
+    },
+    {
+      "name": "position_weight",
+      "class_name": "Parameter",
+      "config": {
+        "shape": [
+          "$context_length",
+          "$embedding_dim"
+        ]
+      },
+      "inputs": []
+    },
+    {
+      "name": "tokens",
+      "class_name": "embedding",
+      "config": {},
+      "inputs": [
+        "input",
+        "token_weight"
+      ]
+    },
+    {
+      "name": "positions",
+      "class_name": "position_ids",
+      "config": {},
+      "inputs": [
+        "input"
+      ]
+    },
+    {
+      "name": "position_embedding",
+      "class_name": "embedding",
+      "config": {},
+      "inputs": [
+        "positions",
+        "position_weight"
+      ]
+    },
+    {
+      "name": "sum",
+      "class_name": "add",
+      "config": {},
+      "inputs": [
+        "tokens",
+        "position_embedding"
+      ]
+    },
+    {
+      "name": "drop",
+      "class_name": "Dropout",
+      "config": {
+        "probability": "$dropout"
+      },
+      "inputs": [
+        "sum"
+      ]
+    },
+    {
+      "name": "blocks",
+      "class_name": "Sequence",
+      "config": {
+        "repeat": "$num_layers",
+        "layers": [
+          {
+            "name": "block",
+            "class_name": "Subgraph",
+            "config": {
+              "ref": "TransformerBlock",
+              "parameters": {
+                "embedding_dim": "$embedding_dim",
+                "num_heads": "$num_heads",
+                "mlp_ratio": "$mlp_ratio",
+                "dropout": "$dropout",
+                "epsilon": "$epsilon"
+              }
+            }
+          }
+        ]
+      },
+      "inputs": [
+        "drop"
+      ]
+    },
+    {
+      "name": "final_norm",
+      "class_name": "LayerNorm",
+      "config": {
+        "features": "$embedding_dim",
+        "epsilon": "$epsilon"
+      },
+      "inputs": [
+        "blocks"
+      ]
+    },
+    {
+      "name": "network",
+      "class_name": "linear",
+      "config": {},
+      "inputs": [
+        "final_norm",
+        "token_weight"
+      ]
+    }
+  ],
+  "definitions": {
+    "TransformerBlock": {
+      "$include": "Modules/TransformerBlock.json"
+    }
+  }
 }

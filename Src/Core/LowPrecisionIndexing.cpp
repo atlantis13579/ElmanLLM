@@ -1,4 +1,4 @@
-#include "Operators/low_precision_indexing.h"
+#include "Kernals/low_precision_indexing.h"
 #include "Core/LocalFunction.h"
 #include "Core/Memory.h"
 #include <algorithm>

@@ -1,4 +1,4 @@
-#include "Operators/float64_categorical.h"
+#include "Kernals/float64_categorical.h"
 #include <stdexcept>
 
 namespace elman {

@@ -13,35 +13,37 @@
 #include "Backends/CudaExecution.h"
 #include "Backends/CudaGreedy.h"
 #include "Core/AllocationPool.h"
-#include "Operators/integer_pointwise.h"
-#include "Operators/packed_integer_cast.h"
-#include "Operators/float64_pointwise.h"
-#include "Operators/complex_pointwise.h"
-#include "Operators/float64_reduction.h"
-#include "Operators/float64_matrix.h"
-#include "Operators/float64_softmax.h"
-#include "Operators/float64_indexing.h"
-#include "Operators/float64_spatial.h"
-#include "Operators/float64_loss.h"
-#include "Operators/float64_attention.h"
-#include "Operators/float64_random.h"
-#include "Operators/float64_categorical.h"
-#include "Operators/float64_normalization.h"
-#include "Operators/integer_matrix.h"
-#include "Operators/storage_layout.h"
-#include "Operators/low_precision_cast.h"
-#include "Operators/low_precision_pointwise.h"
-#include "Operators/low_precision_reduction.h"
-#include "Operators/low_precision_matrix.h"
-#include "Operators/low_precision_softmax.h"
-#include "Operators/low_precision_normalization.h"
-#include "Operators/low_precision_indexing.h"
-#include "Operators/low_precision_spatial.h"
-#include "Operators/low_precision_loss.h"
-#include "Operators/low_precision_fused.h"
-#include "Operators/low_precision_attention.h"
-#include "Operators/low_precision_random.h"
-#include "Operators/low_precision_categorical.h"
+#include "Fusion/Fusion.h"
+#include <functional>
+#include "Kernals/integer_pointwise.h"
+#include "Kernals/packed_integer_cast.h"
+#include "Kernals/float64_pointwise.h"
+#include "Kernals/complex_pointwise.h"
+#include "Kernals/float64_reduction.h"
+#include "Kernals/float64_matrix.h"
+#include "Kernals/float64_softmax.h"
+#include "Kernals/float64_indexing.h"
+#include "Kernals/float64_spatial.h"
+#include "Kernals/float64_loss.h"
+#include "Kernals/float64_attention.h"
+#include "Kernals/float64_random.h"
+#include "Kernals/float64_categorical.h"
+#include "Kernals/float64_normalization.h"
+#include "Kernals/integer_matrix.h"
+#include "Kernals/storage_layout.h"
+#include "Kernals/low_precision_cast.h"
+#include "Kernals/low_precision_pointwise.h"
+#include "Kernals/low_precision_reduction.h"
+#include "Kernals/low_precision_matrix.h"
+#include "Kernals/low_precision_softmax.h"
+#include "Kernals/low_precision_normalization.h"
+#include "Kernals/low_precision_indexing.h"
+#include "Kernals/low_precision_spatial.h"
+#include "Kernals/low_precision_loss.h"
+#include "Kernals/low_precision_fused.h"
+#include "Kernals/low_precision_attention.h"
+#include "Kernals/low_precision_random.h"
+#include "Kernals/low_precision_categorical.h"
 
 namespace elman {
 namespace {
@@ -107,7 +109,7 @@ struct CudaKernel { CudaLaunch launch; int inputs; };
   void launch_##name##_cuda(uint32_t*, const uint32_t*, const uint32_t*, const uint32_t*, const KernelParams&);
 #define ELMAN_CUDA_KERNEL4(name) \
   void launch_##name##_cuda(uint32_t*, const uint32_t*, const uint32_t*, const uint32_t*, const uint32_t*, const KernelParams&);
-#include "Operators/cuda_dispatch.inc"
+#include "Kernals/cuda_dispatch.inc"
 #undef ELMAN_CUDA_KERNEL
 #undef ELMAN_CUDA_KERNEL4
 
@@ -200,6 +202,7 @@ int allocation_device_cuda() {
   return device;
 }
 void clear_cuda(const BufferPtr& buffer) {
+  fusion::access(buffer);
   std::lock_guard<std::recursive_mutex> lock(cuda_submission_mutex());
   CudaBuffer& destination = checked_cuda(buffer);
   prepare_cuda_write(destination.access);
@@ -215,6 +218,7 @@ void retain_cuda_workspace(const BufferPtr& buffer) {
   if (workspace_frame) workspace_frame->buffers.push_back(buffer);
 }
 void upload_raw_cuda(const BufferPtr& buffer, const std::vector<uint8_t>& bytes) {
+  fusion::access(buffer);
   std::lock_guard<std::recursive_mutex> lock(cuda_submission_mutex());
   CudaBuffer& destination = checked_cuda(buffer);
   if (bytes.size() != buffer->bytes) throw std::invalid_argument("CUDA raw upload size mismatch");
@@ -231,6 +235,7 @@ void upload_raw_cuda(const BufferPtr& buffer, const std::vector<uint8_t>& bytes)
   } catch (...) { cudaStreamSynchronize(current_cuda_stream()); throw; }
 }
 std::vector<uint8_t> download_raw_cuda(const BufferPtr& buffer) {
+  fusion::access(buffer);
   std::lock_guard<std::recursive_mutex> lock(cuda_submission_mutex());
   const CudaBuffer& source = checked_cuda(buffer);
   std::vector<uint8_t> bytes(buffer->bytes);
@@ -289,6 +294,7 @@ __global__ void greedy_final(const Candidate* partials, int count, int* result) 
 }
 }
 int32_t greedy_id_cuda(const BufferPtr& logits) {
+  fusion::access(logits);
   if (logits->dtype != DType::Float32 || !logits->count || logits->count > INT_MAX)
     throw std::invalid_argument("CUDA greedy selection requires a nonempty Float32 vocabulary");
   const int blocks = int(std::min<size_t>(greedy_threads, (logits->count + greedy_threads - 1) / greedy_threads));
@@ -322,7 +328,7 @@ void dispatch_cuda(const std::string& op, const BufferPtr& output,
   static const std::unordered_map<std::string, CudaKernel> kernels = {
 #define ELMAN_CUDA_KERNEL(name) {#name, {[](uint32_t* out, const uint32_t* a, const uint32_t* b, const uint32_t* c, const uint32_t*, const KernelParams& p) { launch_##name##_cuda(out, a, b, c, p); }, 3}},
 #define ELMAN_CUDA_KERNEL4(name) {#name, {launch_##name##_cuda, 4}},
-#include "Operators/cuda_dispatch.inc"
+#include "Kernals/cuda_dispatch.inc"
 #undef ELMAN_CUDA_KERNEL
 #undef ELMAN_CUDA_KERNEL4
   };
@@ -347,6 +353,7 @@ void dispatch_cuda(const std::string& op, const BufferPtr& output,
       sources[i] = static_cast<const uint32_t*>(inputs[i]->raw_pointer());
     }
   }
+  if (fusion::enqueue(op, output, inputs, params)) return;
   if (!output->count) return;
   detail::CudaCommandRecording command(op, output, inputs, params);
   if (!detail::lowering_cuda_graph()) {
@@ -447,6 +454,30 @@ void dispatch_cuda(const std::string& op, const BufferPtr& output,
 }
 void prepare_cuda_graph_buffers(const std::vector<BufferPtr>& buffers) {
   for (const BufferPtr& buffer : buffers) prepare_cuda_write(checked_cuda(buffer).access);
+}
+void submit_fusion_cuda(const std::vector<BufferPtr>& inputs, const std::vector<BufferPtr>& outputs,
+                        const std::function<void()>& launch) {
+  std::lock_guard<std::recursive_mutex> lock(cuda_submission_mutex());
+  std::vector<CudaBuffer*> readers, writers;
+  for (const auto& buffer : outputs) {
+    CudaBuffer* value = &checked_cuda(buffer);
+    if (std::find(writers.begin(), writers.end(), value) == writers.end()) writers.push_back(value);
+  }
+  for (const auto& buffer : inputs) {
+    CudaBuffer* value = &checked_cuda(buffer);
+    if (std::find(writers.begin(), writers.end(), value) == writers.end() &&
+        std::find(readers.begin(), readers.end(), value) == readers.end()) readers.push_back(value);
+  }
+  for (auto* value : writers) prepare_cuda_write(value->access);
+  for (auto* value : readers) prepare_cuda_read(value->access);
+  try {
+    launch();
+    cuda_check(cudaGetLastError(), "Generated fusion launch");
+    auto event = asynchronous_execution(Backend::CUDA) ? record_cuda_completion() : std::shared_ptr<CudaEventState>{};
+    if (!event) synchronize_cuda_stream();
+    for (auto* value : readers) finish_cuda_read(value->access, event);
+    for (auto* value : writers) finish_cuda_write(value->access, event);
+  } catch (...) { cudaStreamSynchronize(current_cuda_stream()); throw; }
 }
 void finish_cuda_graph_buffers(const std::vector<BufferPtr>& buffers) {
   const std::shared_ptr<CudaEventState> event = record_cuda_completion();

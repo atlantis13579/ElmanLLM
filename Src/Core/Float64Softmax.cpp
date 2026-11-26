@@ -1,4 +1,4 @@
-#include "Operators/float64_softmax.h"
+#include "Kernals/float64_softmax.h"
 #include <stdexcept>
 
 namespace elman {

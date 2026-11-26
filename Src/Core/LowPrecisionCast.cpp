@@ -1,4 +1,4 @@
-#include "Operators/low_precision_cast.h"
+#include "Kernals/low_precision_cast.h"
 #include <stdexcept>
 
 namespace elman {

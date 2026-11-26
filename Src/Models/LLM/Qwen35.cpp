@@ -4,7 +4,7 @@
 #include "Core/Graph.h"
 #include "Core/TensorDispatch.h"
 #include "Inference/LLM/ProjectionWeight.h"
-#include "Operators/recurrent_ops.h"
+#include "Kernals/recurrent_ops.h"
 #include <algorithm>
 #include <cmath>
 #include <limits>

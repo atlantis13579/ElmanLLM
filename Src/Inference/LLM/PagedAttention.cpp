@@ -2,7 +2,7 @@
 #include "Core/TensorDispatch.h"
 #include "Core/Graph.h"
 #include "Core/Memory.h"
-#include "Operators/paged_attention.h"
+#include "Kernals/paged_attention.h"
 #include <climits>
 #include <cmath>
 #include <cstring>

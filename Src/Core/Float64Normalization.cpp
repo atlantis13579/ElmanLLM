@@ -1,4 +1,4 @@
-#include "Operators/float64_normalization_math.h"
+#include "Kernals/float64_normalization_math.h"
 #include "Core/LocalFunction.h"
 #include <stdexcept>
 

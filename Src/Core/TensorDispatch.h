@@ -12,7 +12,7 @@ size_t shape_element_count(const Shape& shape);
 
 namespace detail {
 BufferPtr allocate_dispatch_output(const std::string& op, Backend backend, size_t count, DType dtype,
-                                   const std::vector<Tensor>& inputs);
+                                   const std::vector<Tensor>& inputs, const std::vector<int>& attributes);
 }
 
 Tensor dispatch_tensor(const std::string& operation, const Shape& shape,

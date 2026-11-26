@@ -1,6 +1,6 @@
-#include "Operators/packed_integer_cast.h"
+#include "Kernals/packed_integer_cast.h"
 #include "Core/LocalFunction.h"
-#include "Operators/storage_layout.h"
+#include "Kernals/storage_layout.h"
 #include <limits>
 #include <stdexcept>
 #include <unordered_set>

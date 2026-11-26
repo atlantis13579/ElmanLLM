@@ -1,4 +1,5 @@
 #include "Inference/InferenceSession.h"
+#include "Models/GraphModel.h"
 #include "Core/LocalFunction.h"
 
 #include <algorithm>
@@ -105,12 +106,25 @@ void load_inference_parameters(const std::filesystem::path& path, Model& model, 
 InferenceSession load_model_session(const std::string& model_path, const std::string& checkpoint_path,
                                     Backend backend, int device) {
   DeviceScope owner(backend, device);
-  const Json definition = Json::read(model_path);
+  const Json definition = read_model_definition(model_path);
   std::shared_ptr<Model> model = create_model(definition, backend);
   load_inference_parameters(std::filesystem::u8path(checkpoint_path), *model, definition, backend);
+  if (auto graph = std::dynamic_pointer_cast<GraphModel>(model)) {
+    std::map<std::string, TensorSpec> input_specs, output_specs;
+    for (const auto& key : {"inputs", "outputs"}) {
+      auto& specs = key == std::string("inputs") ? input_specs : output_specs;
+      for (const auto& port : graph->definition().at(key).array()) {
+        Shape shape;
+        for (const auto& dim : port.at("shape").array()) shape.push_back(dim.integer());
+        specs.emplace(port.at("name").string(), TensorSpec{parse_dtype(port.at("dtype").string()), shape});
+      }
+    }
+    return InferenceSession(backend, device, std::move(input_specs), std::move(output_specs),
+        [graph = std::move(graph)](const NamedTensors& inputs) { return graph->forward(inputs, false); });
+  }
   Shape shape = model->sample_shape();
   shape.insert(shape.begin(), -1);
-  const bool language = model->architecture() == "gpt2";
+  const bool language = model->language();
   if (language) shape.back() = -1;
   const Shape output = language ? Shape{-1, -1, model->output_classes()} : Shape{-1, model->output_classes()};
   return InferenceSession(backend, device,

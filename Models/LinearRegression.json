@@ -1,8 +1,46 @@
 {
   "format": "elman.model",
-  "version": 1,
+  "version": 2,
   "name": "LinearRegression",
   "architecture": "linear_regression",
-  "input_features": 10,
-  "output_features": 1
+  "task": "regression",
+  "parameters": {
+    "input_features": 10,
+    "classes": 1
+  },
+  "output_features": "$classes",
+  "inputs": [
+    {
+      "name": "input",
+      "dtype": "float32",
+      "shape": [
+        -1,
+        "$input_features"
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "name": "output",
+      "value": "network",
+      "dtype": "float32",
+      "shape": [
+        -1,
+        "$classes"
+      ]
+    }
+  ],
+  "layers": [
+    {
+      "name": "network",
+      "class_name": "Linear",
+      "config": {
+        "in_features": "$input_features",
+        "out_features": "$classes"
+      },
+      "inputs": [
+        "input"
+      ]
+    }
+  ]
 }

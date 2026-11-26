@@ -1,7 +1,7 @@
 #include "Optimizer/OptimizerInternal.h"
 #include "Core/LocalFunction.h"
 #include "Core/TensorDispatch.h"
-#include "Operators/low_precision_optimizer.h"
+#include "Kernals/low_precision_optimizer.h"
 #include <cmath>
 #include <cstring>
 

@@ -1,4 +1,4 @@
-#include "Operators/low_precision_spatial.h"
+#include "Kernals/low_precision_spatial.h"
 #include "Core/LocalFunction.h"
 #include <optional>
 #include <stdexcept>

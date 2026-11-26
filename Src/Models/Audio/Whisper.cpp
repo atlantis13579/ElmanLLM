@@ -6,8 +6,8 @@
 #include "Core/Device.h"
 #include "Core/Graph.h"
 #include "IO/CTranslate2.h"
-#include "Operators/audio_ops.h"
-#include "Operators/inference_ops.h"
+#include "Kernals/audio_ops.h"
+#include "Kernals/inference_ops.h"
 
 namespace elman {
 namespace {

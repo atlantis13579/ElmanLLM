@@ -1,0 +1,337 @@
+{
+  "class_name": "Graph",
+  "parameters": {
+    "embedding_dim": null,
+    "num_heads": null,
+    "mlp_ratio": 4,
+    "dropout": 0.1,
+    "epsilon": 1e-05,
+    "num_layers": 6
+  },
+  "config": {
+    "inputs": [
+      "x"
+    ],
+    "outputs": [
+      "residual2"
+    ],
+    "layers": [
+      {
+        "name": "norm1",
+        "class_name": "LayerNorm",
+        "config": {
+          "features": "$embedding_dim",
+          "epsilon": "$epsilon"
+        },
+        "inputs": [
+          "x"
+        ]
+      },
+      {
+        "name": "qkv_weight",
+        "class_name": "Parameter",
+        "config": {
+          "shape": [
+            {
+              "product": [
+                3,
+                "$embedding_dim"
+              ]
+            },
+            "$embedding_dim"
+          ],
+          "stddev": 0.02
+        },
+        "inputs": []
+      },
+      {
+        "name": "qkv_bias",
+        "class_name": "Parameter",
+        "config": {
+          "shape": [
+            {
+              "product": [
+                3,
+                "$embedding_dim"
+              ]
+            }
+          ],
+          "initializer": "zeros"
+        },
+        "inputs": []
+      },
+      {
+        "name": "qkv",
+        "class_name": "linear",
+        "config": {},
+        "inputs": [
+          "norm1",
+          "qkv_weight",
+          "qkv_bias"
+        ]
+      },
+      {
+        "name": "split",
+        "class_name": "split",
+        "config": {
+          "size": "$embedding_dim",
+          "dim": 2
+        },
+        "inputs": [
+          "qkv"
+        ],
+        "outputs": [
+          "q",
+          "k",
+          "v"
+        ]
+      },
+      {
+        "name": "qheads",
+        "class_name": "split_heads",
+        "config": {
+          "heads": "$num_heads"
+        },
+        "inputs": [
+          "q"
+        ]
+      },
+      {
+        "name": "kheads",
+        "class_name": "split_heads",
+        "config": {
+          "heads": "$num_heads"
+        },
+        "inputs": [
+          "k"
+        ]
+      },
+      {
+        "name": "vheads",
+        "class_name": "split_heads",
+        "config": {
+          "heads": "$num_heads"
+        },
+        "inputs": [
+          "v"
+        ]
+      },
+      {
+        "name": "attended",
+        "class_name": "scaled_dot_product_attention",
+        "config": {
+          "is_causal": true,
+          "dropout_p": "$dropout"
+        },
+        "inputs": [
+          "qheads",
+          "kheads",
+          "vheads"
+        ]
+      },
+      {
+        "name": "merged",
+        "class_name": "merge_heads",
+        "config": {},
+        "inputs": [
+          "attended"
+        ]
+      },
+      {
+        "name": "proj_weight",
+        "class_name": "Parameter",
+        "config": {
+          "shape": [
+            "$embedding_dim",
+            "$embedding_dim"
+          ],
+          "stddev": {
+            "quotient": [
+              0.02,
+              {
+                "sqrt": {
+                  "product": [
+                    2,
+                    "$num_layers"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "inputs": []
+      },
+      {
+        "name": "proj_bias",
+        "class_name": "Parameter",
+        "config": {
+          "shape": [
+            "$embedding_dim"
+          ],
+          "initializer": "zeros"
+        },
+        "inputs": []
+      },
+      {
+        "name": "proj",
+        "class_name": "linear",
+        "config": {},
+        "inputs": [
+          "merged",
+          "proj_weight",
+          "proj_bias"
+        ]
+      },
+      {
+        "name": "proj_drop",
+        "class_name": "Dropout",
+        "config": {
+          "probability": "$dropout"
+        },
+        "inputs": [
+          "proj"
+        ]
+      },
+      {
+        "name": "residual1",
+        "class_name": "add",
+        "config": {},
+        "inputs": [
+          "x",
+          "proj_drop"
+        ]
+      },
+      {
+        "name": "norm2",
+        "class_name": "LayerNorm",
+        "config": {
+          "features": "$embedding_dim",
+          "epsilon": "$epsilon"
+        },
+        "inputs": [
+          "residual1"
+        ]
+      },
+      {
+        "name": "fc_weight",
+        "class_name": "Parameter",
+        "config": {
+          "shape": [
+            {
+              "product": [
+                "$embedding_dim",
+                "$mlp_ratio"
+              ]
+            },
+            "$embedding_dim"
+          ],
+          "stddev": 0.02
+        },
+        "inputs": []
+      },
+      {
+        "name": "fc_bias",
+        "class_name": "Parameter",
+        "config": {
+          "shape": [
+            {
+              "product": [
+                "$embedding_dim",
+                "$mlp_ratio"
+              ]
+            }
+          ],
+          "initializer": "zeros"
+        },
+        "inputs": []
+      },
+      {
+        "name": "fc",
+        "class_name": "linear",
+        "config": {},
+        "inputs": [
+          "norm2",
+          "fc_weight",
+          "fc_bias"
+        ]
+      },
+      {
+        "name": "gelu",
+        "class_name": "gelu",
+        "config": {},
+        "inputs": [
+          "fc"
+        ]
+      },
+      {
+        "name": "mlp_proj_weight",
+        "class_name": "Parameter",
+        "config": {
+          "shape": [
+            "$embedding_dim",
+            {
+              "product": [
+                "$embedding_dim",
+                "$mlp_ratio"
+              ]
+            }
+          ],
+          "stddev": {
+            "quotient": [
+              0.02,
+              {
+                "sqrt": {
+                  "product": [
+                    2,
+                    "$num_layers"
+                  ]
+                }
+              }
+            ]
+          }
+        },
+        "inputs": []
+      },
+      {
+        "name": "mlp_proj_bias",
+        "class_name": "Parameter",
+        "config": {
+          "shape": [
+            "$embedding_dim"
+          ],
+          "initializer": "zeros"
+        },
+        "inputs": []
+      },
+      {
+        "name": "mlp_proj",
+        "class_name": "linear",
+        "config": {},
+        "inputs": [
+          "gelu",
+          "mlp_proj_weight",
+          "mlp_proj_bias"
+        ]
+      },
+      {
+        "name": "mlp_drop",
+        "class_name": "Dropout",
+        "config": {
+          "probability": "$dropout"
+        },
+        "inputs": [
+          "mlp_proj"
+        ]
+      },
+      {
+        "name": "residual2",
+        "class_name": "add",
+        "config": {},
+        "inputs": [
+          "residual1",
+          "mlp_drop"
+        ]
+      }
+    ]
+  }
+}

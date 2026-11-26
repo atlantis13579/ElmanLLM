@@ -131,7 +131,7 @@ void streams(Backend backend, bool pooled) {
 }
 int main(int argc, char** argv) {
     try {
-        if (argc != 2) throw std::invalid_argument("Usage: elman_view_tests cpu|cuda");
+        if (argc != 2) throw std::invalid_argument("Usage: elman_view_tests cpu|cuda|metal");
         Backend backend = parse_backend(argv[1]);
         if (!backend_available(backend)) return 77;
         for (bool pooled : {false, true}) { storage(backend, pooled); streams(backend, pooled); }

@@ -32,9 +32,11 @@ struct Dataset final : BatchDataset {
   bool language = false;
   bool regression = false;
   int classes = 0;
+  std::vector<int32_t> tokens;
+  size_t token_samples = 0;
 
-  explicit Dataset(const Configuration& config);
-  size_t size() const override { return inputs.size(); }
+  explicit Dataset(const Configuration& config, bool validation = false);
+  size_t size() const override { return tokens.empty() ? inputs.size() : token_samples; }
   const Shape& shape() const override { return sample_shape; }
   std::string fingerprint() const override;
   TensorBatch batch(const std::vector<size_t>& order, size_t offset,

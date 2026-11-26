@@ -3,8 +3,8 @@
 #include "Backends/AttentionGemm.h"
 #include "Core/AllocationPool.h"
 #include "Backends/CpuMath.h"
-#include "Operators/CPU/kernel.h"
-#include "Operators/matmul_params.h"
+#include "Kernals/CPU/kernel.h"
+#include "Kernals/matmul_params.h"
 
 #ifdef ELMAN_HAS_MKL
 #include <mkl.h>

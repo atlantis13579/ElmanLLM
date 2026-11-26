@@ -4,6 +4,7 @@
 #include <complex>
 #include <initializer_list>
 #include <utility>
+#include <optional>
 
 namespace elman {
 using Shape = std::vector<int>;
@@ -139,6 +140,12 @@ Tensor packed_linear(const Tensor& input, const Tensor& weight, const std::vecto
 Tensor triu(const Tensor& x, int diagonal = 0);
 Tensor tril(const Tensor& x, int diagonal = 0);
 Tensor softmax(const Tensor& x, int dim = -1);
+// Boolean SDPA masks use true for allowed entries. Causal masks are upper-left
+// aligned. Dropout depends on dropout_p; callers pass zero during evaluation.
+Tensor scaled_dot_product_attention(const Tensor& query, const Tensor& key, const Tensor& value,
+                                    const Tensor& mask = Tensor{}, double dropout_p = 0,
+                                    bool is_causal = false, std::optional<double> scale = {},
+                                    bool enable_gqa = false, uint32_t seed = 0);
 // Match cast(softmax(cast(scores / divisor + mask, Float32), dim), scores.dtype()).
 // Division and mask addition round separately in the shared input dtype.
 Tensor attention_softmax(const Tensor& scores, const Tensor& mask, double divisor = 1, int dim = -1);

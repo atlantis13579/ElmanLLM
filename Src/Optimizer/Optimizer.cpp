@@ -51,15 +51,57 @@ Tensor reduce_device_rows(const Tensor& value, const ReduceRows& reduce, DType d
   return partial.defined() ? reduce(partial, 0) : Tensor::zeros({}, value.backend(), false, dtype);
 }
 
+struct ResidentChecks {
+  Tensor partials;
+  std::vector<size_t> offsets;
+  std::vector<std::string> names;
+  void prepare(const std::vector<Parameter>& parameters) {
+    offsets.push_back(0);
+    for (const Parameter& parameter : parameters)
+      offsets.push_back(offsets.back() + std::max(size_t(1), (parameter.value.numel() + 4095) / 4096));
+    require(offsets.back() <= size_t(std::numeric_limits<int>::max() / 2), "Optimizer validation workspace is too large");
+    DeviceScope owner(parameters.front().value.backend(), parameters.front().value.device());
+    partials = Tensor::zeros({int(offsets.back()), 2}, parameters.front().value.backend());
+    names.reserve(parameters.size());
+  }
+  void add(const Tensor& value, const Tensor& gradient, const Tensor& first, const Tensor& second, const std::string& name, bool norm) {
+    const int chunks = std::max(1, int((value.numel() + 4095) / 4096));
+    const size_t index = names.size();
+    require(index + 1 < offsets.size() && offsets[index + 1] - offsets[index] == size_t(chunks), "Optimizer validation partition mismatch");
+    // Disjoint views share one compact download buffer, avoiding a reduction
+    // and concatenation launch for every parameter on each validation pass.
+    Tensor output = contiguous_view(partials, {chunks, 2}, offsets[index] * 2);
+    dispatch_tensor_into("optimizer_stats", output, {value, gradient, first, second}, {int(norm)});
+    names.push_back(name);
+  }
+  float finish() {
+    if (names.empty()) return 0;
+    require(names.size() + 1 == offsets.size(), "Incomplete optimizer validation pass");
+    DeviceScope owner(partials.backend(), partials.device());
+    const std::vector<float> results = partials.data();
+    float squares = 0;
+    for (size_t i = 0; i < names.size(); ++i) {
+      float parameter_squares = 0;
+      for (size_t row = offsets[i]; row < offsets[i + 1]; ++row) {
+        require(results[row * 2 + 1] == 0.f, "Invalid device optimizer value: " + names[i]);
+        parameter_squares += results[row * 2];
+      }
+      squares += parameter_squares;
+    }
+    names.clear();
+    return squares;
+  }
+};
+
 void validate_resident_float32(const Tensor& value, bool nonnegative, const std::string& name) {
   if (!value.numel()) return;
   Tensor (*const row_max)(const Tensor&, int) = [](const Tensor& x, int axis) { return amax(x, axis); };
-  require(std::isfinite(reduce_device_rows(abs(value), row_max, value.dtype()).data().front()),
-          "Non-finite device optimizer value: " + name);
+  Tensor maximum = reduce_device_rows(abs(value), row_max, value.dtype());
+  require(std::isfinite(maximum.data().front()), "Non-finite device optimizer value: " + name);
   if (nonnegative) {
     Tensor (*const row_min)(const Tensor&, int) = [](const Tensor& x, int axis) { return amin(x, axis); };
-    require(reduce_device_rows(value, row_min, value.dtype()).data().front() >= 0.f,
-            "Negative device optimizer second moment: " + name);
+    Tensor minimum = reduce_device_rows(value, row_min, value.dtype());
+    require(minimum.data().front() >= 0.f, "Negative device optimizer second moment: " + name);
   }
 }
 
@@ -73,6 +115,7 @@ Optimizer::Optimizer(const Json& settings, const Model& model, bool default_devi
   settings_.epsilon = settings.number_or("epsilon", 1e-8);
   settings_.momentum = settings.number_or("momentum", 0);
   settings_.weight_decay = settings.number_or("weight_decay", 0);
+  decay_matrix_parameters_only_ = settings.bool_or("decay_matrix_parameters_only", false);
   settings_.clip_norm = settings.number_or("clip_grad_norm", 1);
   require(name_ == "adam" || name_ == "adamw" || name_ == "sgd",
           "optimizer must be adam, adamw or sgd");
@@ -118,6 +161,12 @@ double Optimizer::update(Model& model, double rate) {
   graph::RecordingGuard recording;
   std::vector<std::vector<float>> gradients(count), proposed_narrow(count);
   std::vector<Tensor> tensor_gradients(count), proposed_tensors(count);
+  const bool batch_validation = count && std::all_of(model.parameters().begin(), model.parameters().end(), [&](const Parameter& p) {
+    return state_.uses_resident_float32(p.value) && p.value.backend() == Backend::CUDA &&
+           p.value.device() == model.parameters().front().value.device();
+  });
+  ResidentChecks resident_checks;
+  if (batch_validation) resident_checks.prepare(model.parameters());
   // The FP4/FP8 frontend exposes a binary64 reference norm, including E8M0 gradients.
   const bool wide_norm = std::any_of(model.parameters().begin(), model.parameters().end(), [](const Parameter& p) {
     const DType dtype = p.value.dtype();
@@ -151,14 +200,16 @@ double Optimizer::update(Model& model, double rate) {
         require(moment->defined() && moment->dtype() == DType::Float32 && moment->shape() == value.shape() &&
                 moment->backend() == value.backend() && moment->device() == value.device() && !moment->requires_grad(),
                 "Invalid device optimizer moment: " + parameter.name);
-        validate_resident_float32(*moment, moment == &state_.second_moment_float[i], parameter.name);
+        if (!batch_validation) validate_resident_float32(*moment, moment == &state_.second_moment_float[i], parameter.name);
       }
-      validate_resident_float32(value, false, parameter.name);
+      if (!batch_validation) validate_resident_float32(value, false, parameter.name);
       tensor_gradients[i] = Tensor(value.node()->gradient).detach();
-      if (value.numel()) {
+      if (batch_validation) resident_checks.add(value, tensor_gradients[i], state_.first_moment_float[i], state_.second_moment_float[i], parameter.name, true);
+      else if (value.numel()) {
         const Tensor& gradient = tensor_gradients[i];
         Tensor (*const row_sum)(const Tensor&, int) = [](const Tensor& x, int axis) { return sum(x, axis); };
-        parameter_squares = reduce_device_rows(mul(gradient, gradient), row_sum, DType::Float32).data().front();
+        Tensor squares = reduce_device_rows(mul(gradient, gradient), row_sum, DType::Float32);
+        parameter_squares = squares.data().front();
       }
     } else if (is_complex(value.dtype())) {
       require(state_.first_moment[i].empty() && state_.second_moment[i].empty() &&
@@ -225,6 +276,7 @@ double Optimizer::update(Model& model, double rate) {
     if (wide_norm) wide_norm_squared += parameter_squares;
     else norm_squared += parameter_squares;
   }
+  norm_squared += resident_checks.finish();
   const double norm = wide_norm ? std::sqrt(wide_norm_squared) : std::sqrt(norm_squared);
   require(std::isfinite(norm), "Non-finite optimizer gradient norm");
   double scale = 1.;
@@ -243,19 +295,29 @@ double Optimizer::update(Model& model, double rate) {
   // Prepare every update before mutating parameters or advancing any state.
   for (size_t i = 0; i < count; ++i) {
     const Parameter& parameter = model.parameters()[i];
+    auto parameter_step = step;
+    auto parameter_float_step = float_step;
+    if (decay_matrix_parameters_only_ && parameter.value.shape().size() < 2) {
+      parameter_step.weight_decay = 0;
+      parameter_float_step.decay = 0;
+      parameter_float_step.decay_factor = 1;
+    }
     if (state_.uses_resident_float32(parameter.value)) {
       DeviceScope owner(parameter.value.backend(), parameter.value.device());
       optimizer_internal::TensorStep result = optimizer_internal::resident_float32_step(name_, parameter.value.detach(), tensor_gradients[i],
-          state_.first_moment_float[i], state_.second_moment_float[i], step);
-      validate_resident_float32(result.value, false, parameter.name);
-      validate_resident_float32(result.first_moment, false, parameter.name);
-      if (name_ != "sgd") validate_resident_float32(result.second_moment, true, parameter.name);
+          state_.first_moment_float[i], state_.second_moment_float[i], parameter_step);
+      if (batch_validation) resident_checks.add(result.value, result.value, result.first_moment, result.second_moment, parameter.name, false);
+      else {
+        validate_resident_float32(result.value, false, parameter.name);
+        validate_resident_float32(result.first_moment, false, parameter.name);
+        if (name_ != "sgd") validate_resident_float32(result.second_moment, true, parameter.name);
+      }
       proposed_tensors[i] = std::move(result.value);
       next.first_moment_float[i] = std::move(result.first_moment);
       next.second_moment_float[i] = std::move(result.second_moment);
     } else if (is_complex(parameter.value.dtype())) {
       optimizer_internal::TensorStep result = optimizer_internal::complex_step(name_, parameter.value.detach(), tensor_gradients[i],
-          state_.first_moment_double[i], state_.second_moment_double[i], step, !state_.sgd_buffer_initialized[i]);
+          state_.first_moment_double[i], state_.second_moment_double[i], parameter_step, !state_.sgd_buffer_initialized[i]);
       for (const Tensor* tensor : {&result.value, &result.first_moment, &result.second_moment})
         for (const std::complex<double> z : tensor->complex_data()) require(std::isfinite(z.real()) && std::isfinite(z.imag()), "Non-finite complex optimizer update");
       proposed_tensors[i] = std::move(result.value);
@@ -264,7 +326,7 @@ double Optimizer::update(Model& model, double rate) {
       if (name_ == "sgd") next.sgd_buffer_initialized[i] = 1;
     } else if (parameter.value.dtype() == DType::Float64) {
       optimizer_internal::TensorStep result = optimizer_internal::double_step(name_, parameter.value.detach(), tensor_gradients[i],
-          state_.first_moment_double[i], state_.second_moment_double[i], step);
+          state_.first_moment_double[i], state_.second_moment_double[i], parameter_step);
       for (const Tensor* tensor : {&result.value, &result.first_moment, &result.second_moment})
         for (double x : tensor->double_data()) require(std::isfinite(x), "Non-finite Double optimizer update: " + parameter.name);
       proposed_tensors[i] = std::move(result.value);
@@ -272,7 +334,7 @@ double Optimizer::update(Model& model, double rate) {
       next.second_moment_double[i] = std::move(result.second_moment);
     } else if (is_low_precision_float(parameter.value.dtype())) {
       optimizer_internal::LowStep result=optimizer_internal::low_step(name_,parameter.value.detach(),tensor_gradients[i],
-          state_.first_moment_float[i],state_.second_moment_float[i],step,!state_.sgd_buffer_initialized[i]);
+          state_.first_moment_float[i],state_.second_moment_float[i],parameter_step,!state_.sgd_buffer_initialized[i]);
       for(const Tensor* tensor:{&result.value_float32,&result.value,&result.first_moment,&result.second_moment})
         for(float x:tensor->data())require(std::isfinite(x), "Non-finite low-format optimizer update: " + parameter.name);
       proposed_tensors[i]=std::move(result.value);
@@ -282,9 +344,9 @@ double Optimizer::update(Model& model, double rate) {
     } else {
       std::vector<float>& values = proposed_narrow[i];
       values = parameter.value.data();
-      if (name_ == "sgd") optimizer_internal::sgd_step(values, gradients[i], next.first_moment[i], float_step);
-      else if (name_ == "adam") optimizer_internal::adam_step(values, gradients[i], next.first_moment[i], next.second_moment[i], float_step);
-      else optimizer_internal::adamw_step(values, gradients[i], next.first_moment[i], next.second_moment[i], float_step);
+      if (name_ == "sgd") optimizer_internal::sgd_step(values, gradients[i], next.first_moment[i], parameter_float_step);
+      else if (name_ == "adam") optimizer_internal::adam_step(values, gradients[i], next.first_moment[i], next.second_moment[i], parameter_float_step);
+      else optimizer_internal::adamw_step(values, gradients[i], next.first_moment[i], next.second_moment[i], parameter_float_step);
       for (size_t j = 0; j < values.size(); ++j) {
         if (!std::isfinite(values[j]) || !std::isfinite(next.first_moment[i][j]) ||
             !std::isfinite(next.second_moment[i][j]))
@@ -292,6 +354,7 @@ double Optimizer::update(Model& model, double rate) {
       }
     }
   }
+  resident_checks.finish();
   for (size_t i = 0; i < count; ++i) {
     Tensor& value = model.parameters()[i].value;
     if (proposed_tensors[i].defined()) {

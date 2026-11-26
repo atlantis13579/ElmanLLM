@@ -1,0 +1,60 @@
+{
+  "format": "elman.training",
+  "version": 1,
+  "model_name": "nanoGPT",
+  "model": "../../Models/nanoGPT.json",
+  "backend": "cuda",
+  "data": {
+    "format": "character_text",
+    "path": "H:/data/tiny_shakespeare/input.txt",
+    "sequence_length": 256,
+    "train_fraction": 0.9
+  },
+  "training": {
+    "steps": 5000,
+    "batch_size": 8,
+    "gradient_accumulation_steps": 8,
+    "optimizer": "adamw",
+    "learning_rate": 0.001,
+    "beta1": 0.9,
+    "beta2": 0.99,
+    "epsilon": 1e-08,
+    "weight_decay": 0.1,
+    "clip_grad_norm": 1.0,
+    "seed": 1337,
+    "shuffle": true,
+    "log_every": 10,
+    "checkpoint_every": 250,
+    "eval_every": 250,
+    "eval_batches": 25,
+    "lr_schedule": "cosine",
+    "warmup_steps": 100,
+    "min_lr_ratio": 0.1,
+    "require_loss_decrease": true,
+    "precision": "float32",
+    "matmul_precision": "fp32",
+    "convolution_precision": "fp32",
+    "operator_fusion": true,
+    "operator_fusion_verify": true,
+    "asynchronous": true,
+    "reuse_memory": true,
+    "pool_megabytes": 3072
+  },
+  "output": {
+    "checkpoint": "../../Intermediate/Runs/nanoGPT/model.elman",
+    "best_checkpoint": "../../Intermediate/Runs/nanoGPT/best.elman",
+    "metrics": "../../Intermediate/Runs/nanoGPT/metrics.json",
+    "samples": "../../Intermediate/Runs/nanoGPT/samples.json"
+  },
+  "sampling": {
+    "max_new_tokens": 1000,
+    "temperature": 0.8,
+    "top_k": 0,
+    "seed": 1337,
+    "prompts": [
+      "\n",
+      "ROMEO:\n",
+      "First Citizen:\n"
+    ]
+  }
+}

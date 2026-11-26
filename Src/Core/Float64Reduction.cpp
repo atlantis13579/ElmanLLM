@@ -1,4 +1,4 @@
-#include "Operators/float64_reduction.h"
+#include "Kernals/float64_reduction.h"
 #include <stdexcept>
 
 namespace elman {

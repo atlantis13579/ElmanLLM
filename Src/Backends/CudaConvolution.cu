@@ -1,8 +1,9 @@
 #include "Backends/CudaConvolution.h"
+#include "Backends/CudaGemm.h"
 
 #include "Backends/CudaExecution.h"
 #include "Core/AllocationPool.h"
-#include "Operators/conv2d_params.h"
+#include "Kernals/conv2d_params.h"
 
 #include <cuda_runtime_api.h>
 #include <cudnn.h>
@@ -12,6 +13,7 @@
 #include <map>
 #include <memory>
 #include <stdexcept>
+#include <utility>
 
 namespace elman {
 namespace {
@@ -47,6 +49,7 @@ struct Plan {
   ConvolutionDescriptor convolution;
   int algorithm = -1;
   size_t workspace_bytes = 0;
+  bool tf32 = false;
 
   template <class Perf, size_t N>
   void select(cudnnStatus_t status, const std::array<Perf, N>& results, int count) {
@@ -55,7 +58,8 @@ struct Plan {
     for (int i = 0; i < count; ++i) {
       const Perf& candidate = results[i];
       if (candidate.status != CUDNN_STATUS_SUCCESS || candidate.determinism != CUDNN_DETERMINISTIC ||
-          candidate.memory > workspace_limit || candidate.mathType == CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION) continue;
+          candidate.memory > workspace_limit || candidate.mathType == CUDNN_TENSOR_OP_MATH_ALLOW_CONVERSION ||
+          (!tf32 && candidate.mathType != CUDNN_FMA_MATH)) continue;
       check(cudnnSetConvolutionMathType(convolution, candidate.mathType), "Set cuDNN convolution math type");
       algorithm = static_cast<int>(candidate.algo);
       workspace_bytes = candidate.memory;
@@ -64,7 +68,7 @@ struct Plan {
   }
 
   Plan(cudnnHandle_t handle, CudaConvolution operation, const Shape4& x, const Shape4& w,
-       const Shape4& y, const std::array<int, 7>& geometry) {
+       const Shape4& y, const std::array<int, 7>& geometry, bool tf32_enabled) : tf32(tf32_enabled) {
     void (*const tensor)(const TensorDescriptor&, const Shape4&) = [](const TensorDescriptor& d, const Shape4& s) {
       check(cudnnSetTensor4dDescriptor(d, CUDNN_TENSOR_NCHW, CUDNN_DATA_FLOAT, s[0], s[1], s[2], s[3]),
             "Set cuDNN tensor shape");
@@ -77,7 +81,9 @@ struct Plan {
           geometry[kStrideHeight], geometry[kStrideWidth], geometry[kDilationHeight], geometry[kDilationWidth],
           CUDNN_CROSS_CORRELATION, CUDNN_DATA_FLOAT), "Set cuDNN convolution geometry");
     check(cudnnSetConvolutionGroupCount(convolution, geometry[kGroups]), "Set cuDNN convolution groups");
-    check(cudnnSetConvolutionMathType(convolution, CUDNN_FMA_MATH), "Disable reduced-precision cuDNN convolution");
+    check(cudnnSetConvolutionMathType(convolution,
+          tf32 ? CUDNN_DEFAULT_MATH : CUDNN_FMA_MATH),
+          "Set cuDNN convolution math mode");
     int count = 0;
     switch (operation) {
       case CudaConvolution::Forward: {
@@ -154,8 +160,9 @@ bool try_convolution_cuda(CudaConvolution operation, uint32_t* out, const uint32
   if (capturing != cudaStreamCaptureStatusNone) return false;
   int device = 0;
   check_cuda_execution(cudaGetDevice(&device), "Get CUDA convolution device");
-  static thread_local std::map<int, std::unique_ptr<Context>> contexts;
-  std::unique_ptr<Context>& owner = contexts[device];
+  const bool tf32 = cuda_conv_tf32_enabled();
+  static thread_local std::map<std::pair<int, bool>, std::unique_ptr<Context>> contexts;
+  std::unique_ptr<Context>& owner = contexts[{device, tf32}];
   if (!owner) owner = std::make_unique<Context>(device);
   Context& context = *owner;
   check(cudnnSetStream(context.handle, stream), "Set cuDNN stream");
@@ -169,7 +176,7 @@ bool try_convolution_cuda(CudaConvolution operation, uint32_t* out, const uint32
   auto entry = context.plans.find(key);
   if (entry == context.plans.end()) {
     if (context.plans.size() == plan_limit) context.plans.clear();
-    entry = context.plans.emplace(key, std::make_unique<Plan>(context.handle, operation, x, w, y, geometry)).first;
+    entry = context.plans.emplace(key, std::make_unique<Plan>(context.handle, operation, x, w, y, geometry, tf32)).first;
   }
   const Plan& plan = *entry->second;
   if (plan.algorithm < 0) return false;

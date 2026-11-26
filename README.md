@@ -23,9 +23,31 @@ differentiation, model training, checkpoint loading, and inference.
 
 ### Execution backends
 
-- CPU, NVIDIA CUDA, and Apple Metal are available through a common backend
-  interface. CUDA supports execution across multiple devices, including layer placement
-  tensor parallelism. Apple execution uses Metal and MPSGraph.
+- A common backend interface supports CPU, NVIDIA CUDA, and Apple Metal, with
+  native kernels and optional acceleration libraries.
+- CPU: native operators with optional Intel oneMKL acceleration for FP32 matrix
+  multiplication and vector math.
+- CUDA: native operators combined with cuBLAS/cuBLASLt for matrix multiplication
+  and optional cuDNN for convolution, or Elman's own GEMM kernels without a BLAS
+  dependency. The custom GEMM path uses shared-memory/register tiling, FP16/BF16
+  Tensor Core products with FP32 accumulation, and specialized small-row decode
+  kernels.
+- Metal: Apple GPU execution through Metal buffers and command queues, with
+  MPSGraph compiling tensor operations into GPU executables.
+- Multi-device CUDA execution supports layer placement and tensor parallelism.
+
+### Operator fusion
+
+- Dataflow analysis groups compatible FP32 pointwise operations and trailing-axis
+  reductions in forward and backward execution to reduce dispatch overhead and
+  intermediate memory traffic. Tensors needed by autograd or external readers
+  remain materialized.
+- CUDA generates fused kernels and compiles them with NVRTC; Metal combines
+  compatible operations into connected MPSGraph regions for Apple's compiler.
+  Compiled programs are cached for reuse.
+- Fusion and first-use numerical verification are enabled by default. Unsupported
+  operations use ordinary execution; compilation failures or verification
+  mismatches also fall back to the original operators.
 
 ### Training
 

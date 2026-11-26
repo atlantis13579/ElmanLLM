@@ -1,6 +1,6 @@
 #include "Layers/Attention.h"
 #include "Core/LocalFunction.h"
-#include "Operators/inference_ops.h"
+#include "Kernals/inference_ops.h"
 #include <stdexcept>
 #include <utility>
 

@@ -1,5 +1,5 @@
 #include "Layers/Linear.h"
-#include "Operators/inference_ops.h"
+#include "Kernals/inference_ops.h"
 
 #include <cmath>
 #include <stdexcept>

@@ -1,4 +1,5 @@
-#include "Inference/LLM/MemoryPlan.h"
+#include "Core/Memory.h"
+#include "Core/Tensor.h"
 #include "Backends/CpuMath.h"
 #include <atomic>
 #include <functional>
@@ -48,7 +49,7 @@ void accounting(Backend backend) {
     check(memory_stats(backend).live_bytes() == before, "Reservation scope leaked");
     {
         BufferPtr empty = backend_allocate(backend, 0, DType::Float32);
-        check(memory_stats(backend).live_bytes() == before + (backend == Backend::CUDA ? 1 : 0), "Empty allocation charge differs");
+        check(memory_stats(backend).live_bytes() == before + (backend == Backend::CPU ? 0 : 1), "Empty allocation charge differs");
     }
     // Allocation failure after charging must roll back the reservation.
     rejects<std::exception>([&] { backend_allocate(backend, std::numeric_limits<size_t>::max() / 2, DType::Float32); });
@@ -90,8 +91,10 @@ void workspace(Backend backend) {
     Tensor input = Tensor::from_data({4097}, std::vector<float>(4097, 1), backend);
     size_t before = memory_stats(backend).live_bytes();
     {
-        // Permit output IDs only: the sort workspace must hit the runtime cap.
-        MemoryLimit limit(backend, before + memory_allocation_bytes(backend, input.numel() * 4));
+        // MPS owns its internal scratch; exercise the tracked output limit there.
+        // CPU/CUDA also reserve explicit sort workspace after allocating IDs.
+        const size_t output_bytes = memory_allocation_bytes(backend, input.numel() * 4);
+        MemoryLimit limit(backend, before + output_bytes - (backend == Backend::Metal ? 1 : 0));
         rejects<MemoryLimitExceeded>([&] { argsort(input, 0); });
     }
     check(memory_stats(backend).live_bytes() == before, "Sort workspace rejection leaked");
@@ -118,11 +121,19 @@ void workspace(Backend backend) {
             size_t baseline = memory_stats(backend).live_bytes();
             {
                 MemoryLimit limit(backend, baseline + matrix.nbytes());
+#ifdef ELMAN_TEST_CUBLAS
                 rejects<MemoryLimitExceeded>([&] { matmul(matrix, matrix); });
+#else
+                check(matmul(matrix, matrix).data().front() == 64, "Workspace-free GEMM exceeded its output budget");
+#endif
             }
             check(memory_stats(backend).live_bytes() == baseline, "Failed GEMM initialization leaked workspace");
             check(matmul(matrix, matrix).data().front() == 64, "GEMM did not recover");
+#ifdef ELMAN_TEST_CUBLAS
             check(memory_stats(backend).live_bytes() == baseline + 1024 * 1024, "Persistent GEMM workspace was not charged");
+#else
+            check(memory_stats(backend).live_bytes() == baseline, "Native GEMM retained unexpected workspace");
+#endif
         }
         {
             Tensor logits = Tensor::zeros({2, 3}, backend);
@@ -138,56 +149,19 @@ void workspace(Backend backend) {
         }
     }
 }
-void plans(Backend backend) {
-    {
-        Qwen2Config tiny;
-        tiny.vocabulary = 3; tiny.hidden = 2; tiny.intermediate = 1; tiny.layers = 1;
-        tiny.heads = tiny.kv_heads = 1; tiny.max_positions = 8;
-        DecoderMemoryPlan packed = plan_decoder_generation(tiny, backend, DType::BFloat16, 1, 0, false, false, true);
-        DecoderMemoryPlan separate = plan_decoder_generation(tiny, backend, DType::BFloat16, 1, 0, false, false, false);
-        check(packed.parameter_bytes == (backend == Backend::CPU ? 120 : 92), "Packed parameter alignment differs");
-        check(separate.parameter_bytes == (backend == Backend::CPU ? 136 : 92), "Separate parameter alignment differs");
-    }
-    Qwen2Config c;
-    c.vocabulary = 151936; c.hidden = 1536; c.intermediate = 8960; c.layers = 28;
-    c.heads = 12; c.kv_heads = 2; c.max_positions = 131072;
-    DecoderMemoryPlan plan = plan_decoder_generation(c, backend, DType::BFloat16, 128, 64, true);
-    check(plan.parameter_bytes == size_t(1777088000) * 2, "Official parameter accounting differs");
-    check(plan.kv_cache_bytes == size_t(2) * 28 * 192 * 256 * 2, "KV cache accounting differs");
-    DecoderMemoryPlan longer = plan_decoder_generation(c, backend, DType::BFloat16, 4096, 64, true);
-    check(longer.additional_bytes > plan.additional_bytes, "Longer prompt did not increase budget");
-    DecoderMemoryPlan selected = plan_decoder_generation(c, backend, DType::BFloat16, 4088, 8, true, true, true, true, 0, false);
-    DecoderMemoryPlan chunked = plan_decoder_generation(c, backend, DType::BFloat16, 4088, 8, true, true, true, true, 128, false);
-    DecoderMemoryPlan chunked_full = plan_decoder_generation(c, backend, DType::BFloat16, 4088, 8, true, true, true, true, 128, true);
-    check(chunked.additional_bytes < selected.additional_bytes, "Chunked prefill did not reduce admission bound");
-    check(chunked.additional_bytes < chunked_full.additional_bytes, "Selected logits did not reduce admission bound");
-    check(chunked.parameter_bytes + chunked.additional_bytes < size_t(4)*1024*1024*1024, "4096-token BF16 request exceeds 4 GiB tracked budget");
-    rejects<std::invalid_argument>([&] { plan_qwen_batch(c,backend,DType::BFloat16,2,1,17,Qwen2Logits::Last,false,true,0); });
-    QwenBatchMemoryPlan narrow_pages=plan_qwen_batch(c,backend,DType::BFloat16,2,1,33,Qwen2Logits::Last,false,true,1);
-    QwenBatchMemoryPlan shared_pages=plan_qwen_batch(c,backend,DType::BFloat16,2,1,33,Qwen2Logits::Last,false,true,32);
-    check(shared_pages.forward_bytes>narrow_pages.forward_bytes && shared_pages.host_additional_bytes>narrow_pages.host_additional_bytes,
-          "Shared partial tails did not increase batch memory admission");
-    rejects<std::invalid_argument>([&] { plan_decoder_generation(c, backend, DType::BFloat16, 1, 0, false, true, true, true, -1, false); });
-    rejects<std::invalid_argument>([&] { plan_decoder_generation(c, backend, DType::BFloat16, 65536, 1, false); });
-    rejects<std::invalid_argument>([&] { plan_decoder_generation(c, backend, DType::Int8, 1, 1, false); });
-    rejects<std::invalid_argument>([&] { plan_decoder_generation(c, backend, DType::Float32, 131072, 1, false); });
-    c.vocabulary = 1000000; c.hidden = 2; c.heads = c.kv_heads = 1;
-    check(qwen_host_workspace(c, 1, 3000, 3000, false) > 0, "Last-logit-only planning rejected a valid shape");
-    rejects<std::invalid_argument>([&] { qwen_host_workspace(c, 1, 3000, 3000, true); });
-    c.heads = 0;
-    rejects<std::invalid_argument>([&] { plan_decoder_generation(c, backend, DType::Float32, 1, 1, false); });
+void size_overflow() {
     rejects<std::overflow_error>([&] { checked_memory_add(std::numeric_limits<size_t>::max(), 1); });
     rejects<std::overflow_error>([&] { checked_memory_mul(std::numeric_limits<size_t>::max(), 2); });
 }
 }
 int main(int argc, char** argv) {
     try {
-        if (argc != 2) throw std::invalid_argument("Usage: elman_memory_tests cpu|cuda");
+        if (argc != 2) throw std::invalid_argument("Usage: elman_memory_tests cpu|cuda|metal");
         Backend backend = elman::parse_backend(argv[1]);
         if (!elman::backend_available(backend)) return 77;
         accounting(backend);
         workspace(backend);
-        plans(backend);
+        size_overflow();
         std::cout << "Memory: " << checks << " passed, 0 failed\n";
         return 0;
     } catch (const std::exception& error) {

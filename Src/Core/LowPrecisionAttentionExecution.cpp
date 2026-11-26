@@ -1,4 +1,4 @@
-#include "Operators/low_precision_attention.h"
+#include "Kernals/low_precision_attention.h"
 #include "Core/LocalFunction.h"
 #include "Core/TensorDispatch.h"
 #include "Core/Graph.h"

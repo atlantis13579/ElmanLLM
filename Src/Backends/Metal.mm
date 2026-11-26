@@ -2,7 +2,9 @@
 #include "Backends/HostWords.h"
 #include "Core/AllocationPool.h"
 #include "Backends/MPSGraph.h"
-#include "Operators/attributes.h"
+#include "Kernals/attributes.h"
+#include "Fusion/Fusion.h"
+#include "Fusion/MetalRuntime.h"
 
 #import <Foundation/Foundation.h>
 #import <Metal/Metal.h>
@@ -199,6 +201,7 @@ public:
     }
 
     bool ready() const { return !pending_ && (!last_ || last_.status >= MTLCommandBufferStatusCompleted); }
+    MPSGraphDevice* graph_device() const { return graph_device_; }
 
     const Plan& plan(const std::string& op, const KernelParams& p, bool has_samples) {
         Key key{op, p};
@@ -307,6 +310,7 @@ BufferPtr allocate_metal(size_t count, DType dtype) {
     @autoreleasepool { return std::make_shared<MetalBuffer>(context().device, count, dtype); }
 }
 void clear_metal(const BufferPtr& buffer) {
+    fusion::access(buffer);
     if (!buffer->bytes) return;
     @autoreleasepool {
         MetalContext& state = context();
@@ -319,6 +323,7 @@ void clear_metal(const BufferPtr& buffer) {
     }
 }
 void upload_raw_metal(const BufferPtr& buffer, const std::vector<uint8_t>& values) {
+    fusion::access(buffer);
     storage_for(buffer);
     if (values.empty()) return;
     @autoreleasepool {
@@ -329,6 +334,7 @@ void upload_raw_metal(const BufferPtr& buffer, const std::vector<uint8_t>& value
     }
 }
 std::vector<uint8_t> download_raw_metal(const BufferPtr& buffer) {
+    fusion::access(buffer);
     storage_for(buffer);
     std::vector<uint8_t> bytes(buffer->bytes);
     if (bytes.empty()) return bytes;
@@ -372,6 +378,7 @@ void dispatch_metal(const std::string& op, const BufferPtr& output,
         }
     }
     if (!output->bytes) return;
+    if (fusion::enqueue(op, output, inputs, p)) return;
     @autoreleasepool {
         MPSMatrixRandomDistributionDescriptor* distribution = random_operation(op) ? distribution_for(op,p) : nil;
         const bool direct = distribution && output->dtype == DType::Float32 && op != "dropout";
@@ -435,5 +442,27 @@ void dispatch_metal(const std::string& op, const BufferPtr& output,
 std::shared_ptr<detail::StreamState> detail::create_metal_stream() {
     allocation_device_metal();
     return std::make_shared<MetalStream>();
+}
+MPSGraphDevice* fusion::metal_graph_device() {
+    allocation_device_metal();
+    return context().graph_device();
+}
+void fusion::encode_metal(MPSGraphExecutable* executable, const std::vector<BufferPtr>& inputs,
+                          const std::vector<BufferPtr>& outputs) {
+    if (!executable || inputs.size() != executable.feedTensors.count ||
+        outputs.size() != executable.targetTensors.count)
+        throw std::invalid_argument("Metal fusion binding count mismatch");
+    @autoreleasepool {
+        NSMutableArray<MPSGraphTensorData*>* feeds = [NSMutableArray arrayWithCapacity:inputs.size()];
+        NSMutableArray<MPSGraphTensorData*>* results = [NSMutableArray arrayWithCapacity:outputs.size()];
+        for (size_t i = 0; i < inputs.size(); ++i)
+            [feeds addObject:tensor_data(inputs[i], executable.feedTensors[i].shape)];
+        for (size_t i = 0; i < outputs.size(); ++i)
+            [results addObject:tensor_data(outputs[i], executable.targetTensors[i].shape)];
+        MetalContext& state = context();
+        std::lock_guard<std::mutex> lock(state.mutex);
+        [executable encodeToCommandBuffer:state.buffer() inputsArray:feeds resultsArray:results executionDescriptor:nil];
+        state.encoded();
+    }
 }
 } // namespace elman

@@ -2,11 +2,13 @@
 
 #include "Core/Device.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 #include <fstream>
 #include <stdexcept>
 #include <utility>
+#include "Text/CharacterTokenizer.h"
 
 namespace elman {
 namespace {
@@ -35,7 +37,7 @@ Configuration::Configuration(const std::string& path,
   require(json.at("format").string() == "elman.training" &&
               json.at("version").integer() == 1,
           "Unsupported training configuration format/version");
-  definition = Json::read(resolve(directory, json.at("model").string()));
+  definition = read_model_definition(resolve(directory, json.at("model").string()));
   backend =
       parse_backend(options.backend.empty() ? json.string_or("backend", "cpu")
                                             : options.backend);
@@ -58,10 +60,10 @@ std::string Configuration::output(const std::string& key,
                                 : fallback);
 }
 
-Dataset::Dataset(const Configuration& config) {
+Dataset::Dataset(const Configuration& config, bool validation) {
   const Json& settings = config.json.at("data");
   sample_shape = config.model->sample_shape();
-  language = config.model->architecture() == "gpt2";
+  language = config.model->language();
   regression = config.model->regression();
   if (language && settings.contains("sequence_length")) {
     int length = settings.at("sequence_length").integer();
@@ -70,10 +72,35 @@ Dataset::Dataset(const Configuration& config) {
     sample_shape[0] = length;
   }
   classes = config.model->output_classes();
+  if (settings.at("format").string() == "character_text") {
+    require(language && sample_shape.size() == 1, "Character text requires a language model");
+    CharacterTokenizer tokenizer(config.definition.at("tokenizer"));
+    require(tokenizer.size() == size_t(classes), "Character vocabulary does not match model output");
+    const std::string path = resolve(config.directory, settings.at("path").string());
+    std::ifstream input(path, std::ios::binary);
+    require(bool(input), "Cannot open dataset: " + path);
+    const std::string text((std::istreambuf_iterator<char>(input)), {});
+    require(!input.bad(), "Dataset read failed");
+    auto all = tokenizer.encode(text);
+    const double fraction = settings.number_or("train_fraction", 0.9);
+    require(fraction > 0 && fraction < 1, "train_fraction must be between zero and one");
+    const size_t split = size_t(all.size() * fraction);
+    const bool held_out = validation || settings.string_or("split", "train") == "validation";
+    require(settings.string_or("split", "train") == "train" ||
+                settings.string_or("split", "train") == "validation", "Unknown dataset split");
+    tokens.assign(all.begin() + (held_out ? split : 0), all.begin() + (held_out ? all.size() : split));
+    require(tokens.size() > size_t(sample_shape[0]), "Text split is shorter than one training window");
+    token_samples = tokens.size() - sample_shape[0];
+    const int limit = settings.int_or("limit_samples", 0);
+    require(limit >= 0, "limit_samples must be non-negative");
+    if (limit) token_samples = std::min(token_samples, size_t(limit));
+    return;
+  }
+  require(!validation, "Validation split requires character_text data");
   const std::string format =
       regression                                              ? "regression_csv"
       : language                                              ? "token_csv"
-      : config.model->architecture() == "logistic_regression" ? "tabular_csv"
+      : sample_shape.size() == 1 ? "tabular_csv"
                                                               : "image_csv";
   require(settings.at("format").string() == format,
           "Dataset format does not match model architecture");
@@ -150,6 +177,10 @@ Dataset::Dataset(const Configuration& config) {
 
 std::string Dataset::fingerprint() const {
   uint64_t hash = 14695981039346656037ull;
+  for (int32_t token : tokens) {
+    for (int shift = 0; shift < 32; shift += 8)
+      hash = (hash ^ uint8_t(uint32_t(token) >> shift)) * 1099511628211ull;
+  }
   for (const std::vector<std::vector<float>>* rows : {&inputs, &targets}) {
     for (const std::vector<float>& row : *rows) {
       for (float value : row) {
@@ -167,6 +198,20 @@ std::string Dataset::fingerprint() const {
 TensorBatch Dataset::batch(const std::vector<size_t>& order,
                                          size_t offset, size_t count,
                                          Backend backend) const {
+  if (!tokens.empty()) {
+    std::vector<int32_t> x, y;
+    const size_t length = size_t(sample_shape[0]);
+    x.reserve(count * length);
+    y.reserve(count * length);
+    for (size_t i = 0; i < count; ++i) {
+      const size_t start = order.at((offset + i) % order.size());
+      require(start < token_samples, "Text window outside dataset");
+      x.insert(x.end(), tokens.begin() + start, tokens.begin() + start + length);
+      y.insert(y.end(), tokens.begin() + start + 1, tokens.begin() + start + length + 1);
+    }
+    return {Tensor::from_int_data({int(count), int(length)}, x, backend),
+            Tensor::from_int_data({int(count * length)}, y, backend)};
+  }
   std::vector<float> input_values;
   std::vector<float> target_values;
   input_values.reserve(count * inputs[0].size());

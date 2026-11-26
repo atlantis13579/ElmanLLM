@@ -35,6 +35,7 @@ private:
     void* previous_ = nullptr;
 };
 bool lowering_cuda_graph();
+bool recording_cuda_graph();
 BufferPtr replay_cuda_graph_workspace(size_t bytes);
 void record_cuda_graph_workspace(const BufferPtr& buffer);
 }

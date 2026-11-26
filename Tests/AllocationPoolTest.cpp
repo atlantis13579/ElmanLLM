@@ -172,7 +172,7 @@ void workspaces_and_gradients(Backend backend) {
 }
 int main(int argc, char** argv) {
     try {
-        if (argc != 2) throw std::invalid_argument("Usage: elman_pool_tests cpu|cuda");
+        if (argc != 2) throw std::invalid_argument("Usage: elman_pool_tests cpu|cuda|metal");
         Backend backend = elman::parse_backend(argv[1]);
         if (!elman::backend_available(backend)) return 77;
         ownership(backend); formats(backend); limits(backend); nesting(backend); workspaces_and_gradients(backend);

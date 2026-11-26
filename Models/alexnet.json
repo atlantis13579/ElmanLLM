@@ -1,16 +1,218 @@
 {
   "format": "elman.model",
-  "version": 1,
+  "version": 2,
   "name": "AlexNet",
   "architecture": "alexnet",
-  "input_shape": [3, 224, 224],
-  "channels": [64, 192, 384, 256, 256],
-  "kernels": [11, 5, 3, 3, 3],
-  "strides": [4, 1, 1, 1, 1],
-  "paddings": [2, 2, 1, 1, 1],
-  "pool_kernel": 3,
-  "pool_stride": 2,
-  "hidden_features": [4096, 4096],
-  "num_classes": 1000,
-  "dropout": 0.5
+  "task": "classification",
+  "parameters": {
+    "image_size": 224,
+    "c1": 64,
+    "c2": 192,
+    "c3": 384,
+    "c4": 256,
+    "c5": 256,
+    "k1": 11,
+    "s1": 4,
+    "p1": 2,
+    "pool": 3,
+    "pool_stride": 2,
+    "flat_features": 9216,
+    "hidden": 4096,
+    "classes": 1000,
+    "dropout": 0.5
+  },
+  "output_features": "$classes",
+  "inputs": [
+    {
+      "name": "input",
+      "dtype": "float32",
+      "shape": [
+        -1,
+        3,
+        "$image_size",
+        "$image_size"
+      ]
+    }
+  ],
+  "outputs": [
+    {
+      "name": "output",
+      "value": "network",
+      "dtype": "float32",
+      "shape": [
+        -1,
+        "$classes"
+      ]
+    }
+  ],
+  "layers": [
+    {
+      "name": "network",
+      "class_name": "Sequence",
+      "config": {
+        "layers": [
+          {
+            "name": "conv1",
+            "class_name": "Conv2d",
+            "config": {
+              "in_channels": 3,
+              "out_channels": "$c1",
+              "kernel_size": "$k1",
+              "stride": "$s1",
+              "padding": "$p1"
+            }
+          },
+          {
+            "name": "relu1",
+            "class_name": "ReLU",
+            "config": {}
+          },
+          {
+            "name": "pool1",
+            "class_name": "max_pool2d",
+            "config": {
+              "kernel": "$pool",
+              "stride": "$pool_stride"
+            }
+          },
+          {
+            "name": "conv2",
+            "class_name": "Conv2d",
+            "config": {
+              "in_channels": "$c1",
+              "out_channels": "$c2",
+              "kernel_size": 5,
+              "stride": 1,
+              "padding": 2
+            }
+          },
+          {
+            "name": "relu2",
+            "class_name": "ReLU",
+            "config": {}
+          },
+          {
+            "name": "pool2",
+            "class_name": "max_pool2d",
+            "config": {
+              "kernel": "$pool",
+              "stride": "$pool_stride"
+            }
+          },
+          {
+            "name": "conv3",
+            "class_name": "Conv2d",
+            "config": {
+              "in_channels": "$c2",
+              "out_channels": "$c3",
+              "kernel_size": 3,
+              "stride": 1,
+              "padding": 1
+            }
+          },
+          {
+            "name": "relu3",
+            "class_name": "ReLU",
+            "config": {}
+          },
+          {
+            "name": "conv4",
+            "class_name": "Conv2d",
+            "config": {
+              "in_channels": "$c3",
+              "out_channels": "$c4",
+              "kernel_size": 3,
+              "stride": 1,
+              "padding": 1
+            }
+          },
+          {
+            "name": "relu4",
+            "class_name": "ReLU",
+            "config": {}
+          },
+          {
+            "name": "conv5",
+            "class_name": "Conv2d",
+            "config": {
+              "in_channels": "$c4",
+              "out_channels": "$c5",
+              "kernel_size": 3,
+              "stride": 1,
+              "padding": 1
+            }
+          },
+          {
+            "name": "relu5",
+            "class_name": "ReLU",
+            "config": {}
+          },
+          {
+            "name": "pool5",
+            "class_name": "max_pool2d",
+            "config": {
+              "kernel": "$pool",
+              "stride": "$pool_stride"
+            }
+          },
+          {
+            "name": "flatten",
+            "class_name": "flatten",
+            "config": {}
+          },
+          {
+            "name": "drop1",
+            "class_name": "Dropout",
+            "config": {
+              "probability": "$dropout"
+            }
+          },
+          {
+            "name": "fc1",
+            "class_name": "Linear",
+            "config": {
+              "in_features": "$flat_features",
+              "out_features": "$hidden"
+            }
+          },
+          {
+            "name": "fc_relu1",
+            "class_name": "ReLU",
+            "config": {}
+          },
+          {
+            "name": "drop2",
+            "class_name": "Dropout",
+            "config": {
+              "probability": "$dropout"
+            }
+          },
+          {
+            "name": "fc2",
+            "class_name": "Linear",
+            "config": {
+              "in_features": "$hidden",
+              "out_features": "$hidden"
+            }
+          },
+          {
+            "name": "fc_relu2",
+            "class_name": "ReLU",
+            "config": {}
+          },
+          {
+            "name": "fc3",
+            "class_name": "Linear",
+            "config": {
+              "in_features": "$hidden",
+              "out_features": "$classes"
+            }
+          }
+        ]
+      },
+      "inputs": [
+        "input"
+      ]
+    }
+  ]
 }

@@ -1,6 +1,6 @@
-#include "Operators/floating_dropout.h"
-#include "Operators/float64_random_math.h"
-#include "Operators/attributes.h"
+#include "Kernals/floating_dropout.h"
+#include "Kernals/float64_random_math.h"
+#include "Kernals/attributes.h"
 #include <stdexcept>
 
 namespace elman {

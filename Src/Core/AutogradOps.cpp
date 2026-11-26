@@ -7,16 +7,18 @@
 #include <unordered_set>
 
 #include "Core/Autograd.h"
+#include "Core/Device.h"
+#include "Fusion/Fusion.h"
 #include "Core/LocalFunction.h"
 #include "Core/Autocast.h"
 #include "Core/ComplexAutograd.h"
 #include "Core/LowPrecisionFloat.h"
 #include "Core/TensorDispatch.h"
 #include "Core/Memory.h"
-#include "Operators/group_norm_params.h"
-#include "Operators/attributes.h"
-#include "Operators/integer_matrix.h"
-#include "Operators/low_precision_attention.h"
+#include "Kernals/group_norm_params.h"
+#include "Kernals/attributes.h"
+#include "Kernals/integer_matrix.h"
+#include "Kernals/low_precision_attention.h"
 
 namespace elman {
 namespace {
@@ -148,14 +150,20 @@ static Tensor scalar_binary(const std::string& op, const Tensor& a, double argum
   require(op != "sub" || a.dtype() != DType::Bool, "Subtraction does not support bool operands");
   const DType dtype = is_differentiable_float(a.dtype()) ? a.dtype() : DType::Float32;
   const bool reciprocal = op == "div" && a.backend() == Backend::CUDA && dtype != DType::Float64;
-  Tensor right = wide ? Tensor::from_double_data({}, {argument}, a.backend()) :
-      scalar(reciprocal ? 1.0f / value : value, a.backend());
-  // Wrapped numeric scalars differ from ordinary zero-dimensional tensors.
-  // CPU add/sub and both power kernels convert the scalar to the result dtype;
-  // CUDA add/sub and multiplication/division retain FP32 scalar precision.
-  if (!is_low_precision_float(dtype) && (op == "pow" || (a.backend() == Backend::CPU && (op == "add" || op == "sub"))))
-    right = cast(right, dtype);
-  return tracked(dispatch_tensor(reciprocal ? "mul" : op, a.shape(), {cast(a, dtype), right}, {}, dtype), {a},
+  const bool inline_scalar = a.backend() == Backend::CUDA && a.dtype() == DType::Float32 && op != "pow";
+  Tensor output;
+  if (inline_scalar) output = dispatch_tensor(reciprocal ? "mul" : op, a.shape(), {a}, {1, float_bits(reciprocal ? 1.f / value : value)}, dtype);
+  else {
+    Tensor right = wide ? Tensor::from_double_data({}, {argument}, a.backend()) :
+        scalar(reciprocal ? 1.0f / value : value, a.backend());
+    // Wrapped numeric scalars differ from ordinary zero-dimensional tensors.
+    // CPU add/sub and both power kernels convert the scalar to the result dtype;
+    // CUDA add/sub and multiplication/division retain FP32 scalar precision.
+    if (!is_low_precision_float(dtype) && (op == "pow" || (a.backend() == Backend::CPU && (op == "add" || op == "sub"))))
+      right = cast(right, dtype);
+    output = dispatch_tensor(reciprocal ? "mul" : op, a.shape(), {cast(a, dtype), right}, {}, dtype);
+  }
+  return tracked(output, {a},
                  [original = a, value, argument, wide, op](const Tensor& upstream) {
     const bool low = is_low_precision_float(original.dtype());
     const Tensor a = low ? cast(original, DType::Float32) : original;
@@ -767,6 +775,40 @@ std::vector<Tensor> split(const Tensor& x, int size, int dim) {
   dim = axis(dim, x.shape().size());
   require(size > 0, "split size must be positive");
   std::vector<Tensor> out;
+  if (x.backend() == Backend::CUDA && x.dtype() == DType::Float32 && x.requires_grad() &&
+      x.shape()[dim] > size && int64_t(x.shape()[dim]) <= int64_t(size) * 4) {
+    DeviceScope owner(x.backend(), x.device());
+    const int count = (x.shape()[dim] - 1) / size + 1;
+    auto gradients = std::make_shared<std::vector<Tensor>>(count);
+    // One shared backward node joins all output gradients. Independent slice
+    // derivatives would each allocate a full zero-padded input gradient.
+    Tensor carrier = tracked(Tensor::zeros({}, x.backend()), {x}, [x, gradients, size, dim](const Tensor&) {
+      for (size_t i = 0; i < gradients->size(); ++i) if (!(*gradients)[i].defined()) {
+        Shape shape = x.shape();
+        shape[dim] = std::min(size, x.shape()[dim] - int(i) * size);
+        (*gradients)[i] = Tensor::zeros(shape, x.backend());
+      }
+      Tensor gradient = concat(*gradients, dim);
+      std::fill(gradients->begin(), gradients->end(), Tensor{});
+      accumulate(x, gradient);
+    });
+    carrier.node()->operation = "split_backward";
+    for (int i = 0; i < count; ++i) {
+      Shape shape = x.shape();
+      shape[dim] = std::min(size, x.shape()[dim] - i * size);
+      Tensor part = dispatch_tensor("slice", shape, {x}, {dim, i * size, 1}, x.dtype());
+      out.push_back(tracked(part, {carrier}, [carrier, gradients, i](const Tensor& gradient) {
+        // Autograd clears non-leaf gradients before every traversal, including
+        // retries after an exception. The scalar is only a scheduling token.
+        if (!carrier.node()->gradient) {
+          std::fill(gradients->begin(), gradients->end(), Tensor{});
+          accumulate(carrier, carrier.detach());
+        }
+        (*gradients)[i] = gradient.detach();
+      }));
+    }
+    return out;
+  }
   for (int start = 0; start < x.shape()[dim]; start += size) {
     out.push_back(slice(x, dim, start, std::min(start + size, x.shape()[dim])));
   }
@@ -992,6 +1034,15 @@ static Tensor matrix_backward_product(const Tensor& a, const Tensor& b, bool low
   }
   return matmul(a, b);
 }
+static Tensor matrix_backward_left_transposed(const Tensor& a, const Tensor& b, bool low, bool folded = true, bool vector_derivative = false) {
+  if (!low && a.backend() == Backend::CUDA && a.dtype() == DType::Float32) {
+    Shape shape = broadcast(Shape(a.shape().begin(), a.shape().end() - 2), Shape(b.shape().begin(), b.shape().end() - 2));
+    shape.push_back(a.shape().back());
+    shape.push_back(b.shape().back());
+    return dispatch_tensor("matmul", shape, {a, b}, {0, 0, 1}, DType::Float32);
+  }
+  return matrix_backward_product(transpose(a, -2, -1), b, low, folded, vector_derivative);
+}
 static Tensor matmul_impl(const Tensor& a, const Tensor& b, bool vector_left = false, bool vector_right = false) {
   require(a.dtype() == b.dtype(), "matmul requires matching dtypes");
   require(!a.shape().empty() && !b.shape().empty(),
@@ -1031,11 +1082,11 @@ static Tensor matmul_impl(const Tensor& a, const Tensor& b, bool vector_left = f
         if (left.requires_grad()) {
           // Retain the transposed weight layout so native CPU GEMM follows the
           // same dot reduction as the forward transposed-matrix primitive.
-          Tensor gradient = !low && left.dtype() == DType::Float32 && left.backend() == Backend::CPU ?
+          Tensor gradient = !low && left.dtype() == DType::Float32 && left.backend() != Backend::Metal ?
               matmul_transposed(g, b) : matrix_backward_product(g, transpose(b, -2, -1), low, folded, vector_left || vector_right);
           accumulate(left, unbroadcast(gradient, a.shape()));
         }
-        if (right.requires_grad()) accumulate(right, unbroadcast(matrix_backward_product(transpose(a, -2, -1), g, low, folded, vector_left || vector_right), b.shape()));
+        if (right.requires_grad()) accumulate(right, unbroadcast(matrix_backward_left_transposed(a, g, low, folded, vector_left || vector_right), b.shape()));
       });
 }
 Tensor matmul(const Tensor& a, const Tensor& b) {
@@ -1077,7 +1128,7 @@ Tensor matmul_transposed(const Tensor& a, const Tensor& b) {
     const Tensor b = low ? cast(right, DType::Float32) : right;
     const Tensor g = low ? cast(gradient, DType::Float32) : gradient;
     if (left.requires_grad()) accumulate(left, unbroadcast(matrix_backward_product(g, b, low, folded), a.shape()));
-    if (right.requires_grad()) accumulate(right, unbroadcast(matrix_backward_product(transpose(g, -2, -1), a, low, folded), b.shape()));
+    if (right.requires_grad()) accumulate(right, unbroadcast(matrix_backward_left_transposed(g, a, low, folded), b.shape()));
   });
 }
 Tensor addmm(const Tensor& c, const Tensor& a, const Tensor& b, double beta,
@@ -1172,7 +1223,7 @@ Tensor linear(const Tensor& x, const Tensor& w, const Tensor& b) {
     const Tensor matrix = reshape(low ? cast(x, DType::Float32) : x, {int(rows), w.shape()[1]});
     const Tensor upstream = reshape(low ? cast(g, DType::Float32) : g, {int(rows), w.shape()[0]});
     if (x.requires_grad()) accumulate(x, reshape(matrix_backward_product(upstream, low ? cast(w, DType::Float32) : w, low), x.shape()));
-    if (w.requires_grad()) accumulate(w, matrix_backward_product(transpose(upstream, 0, 1), matrix, low));
+    if (w.requires_grad()) accumulate(w, matrix_backward_left_transposed(upstream, matrix, low));
     if (b.requires_grad()) accumulate(b, b.shape().empty() ? sum_all(upstream) : sum(upstream, 0));
   });
 }
@@ -1243,7 +1294,7 @@ Tensor packed_linear(const Tensor& x, const Tensor& w, const std::vector<int>& w
         if (low) input_gradient = input_gradient.defined() ? add(input_gradient, piece) : piece;
         else accumulate(x, piece);
       }
-      if (w.requires_grad()) weight_gradients[index] = matrix_backward_product(transpose(upstream, 0, 1), matrix, low);
+      if (w.requires_grad()) weight_gradients[index] = matrix_backward_left_transposed(upstream, matrix, low);
       if (b.requires_grad()) bias_gradients[index] = sum(upstream, 0);
       end = begin;
     }
@@ -1714,11 +1765,29 @@ Tensor layer_norm(const Tensor& x, const Tensor& w, const Tensor& b,
     return reshape(layer_norm(reshape(x, {int(rows), int(w.numel())}), reshape(w, {int(w.numel())}),
                               reshape(b, {int(b.numel())}), eps), x.shape());
   }
-  Tensor centered = sub(x, mean(x, -1, true));
-  return add(mul(mul(centered,
-                     rsqrt(add(mean(mul(centered, centered), -1, true), eps))),
-                 w),
-             b);
+  fusion::Scope scope;
+  Tensor normalized,inverse,output;
+  {
+    graph::RecordingGuard recording;
+    // Translation before summation keeps constant large rows exactly centered.
+    // Both directions remain ordinary primitive graphs for the fusion analyzer.
+    Tensor shifted=x.shape().back()>0?sub(x,slice(x,-1,0,1)):x;
+    Tensor centered=sub(shifted,mean(shifted,-1,true));
+    inverse=rsqrt(add(mean(mul(centered,centered),-1,true),eps));
+    normalized=mul(centered,inverse);
+    output=add(mul(normalized,w),b);
+  }
+  Tensor result=tracked(output,{x,w,b},[x,w,b,normalized,inverse](const Tensor& g) {
+    if(w.requires_grad()) accumulate(w,unbroadcast(mul(g,normalized),w.shape()));
+    if(b.requires_grad()) accumulate(b,unbroadcast(g,b.shape()));
+    if(x.requires_grad()) {
+      Tensor weighted=mul(g,w);
+      Tensor centered=sub(sub(weighted,mean(weighted,-1,true)),mul(normalized,mean(mul(weighted,normalized),-1,true)));
+      accumulate(x,mul(centered,inverse));
+    }
+  });
+  scope.finish();
+  return result;
 }
 Tensor rms_norm(const Tensor& x, const Tensor& w, double eps, RmsNormRounding rounding) {
   if (x.dtype() != DType::Float64) eps = float(eps);

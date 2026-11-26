@@ -1,5 +1,6 @@
 #include "Core/Autograd.h"
 #include "Core/Device.h"
+#include "Fusion/Fusion.h"
 
 #include <stdexcept>
 
@@ -68,6 +69,7 @@ void Tensor::backward() {
 
 void Tensor::backward(const Tensor& seed) {
   DeviceScope owner(backend(), device());
+  fusion::Scope fusion_scope;
   require(requires_grad(), "Tensor does not require gradients");
   require(seed.shape() == shape() && seed.backend() == backend() && seed.device() == device(),
           "Backward seed mismatch");
@@ -86,6 +88,7 @@ void Tensor::backward(const Tensor& seed) {
       (*it)->backward(Tensor((*it)->gradient));
     }
   }
+  fusion_scope.finish();
 }
 
 }  // namespace elman

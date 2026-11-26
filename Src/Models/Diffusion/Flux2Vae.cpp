@@ -3,8 +3,8 @@
 #include <memory>
 
 #include "Models/Diffusion/Blocks.h"
-#include "Operators/flux2_ops.h"
-#include "Operators/inference_ops.h"
+#include "Kernals/flux2_ops.h"
+#include "Kernals/inference_ops.h"
 
 namespace elman::flux2 {
 namespace {

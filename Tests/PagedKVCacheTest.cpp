@@ -363,7 +363,7 @@ void context_boundary(Backend backend) {
 }
 int main(int argc, char** argv) {
     try {
-        if (argc != 2) throw std::invalid_argument("Usage: elman_paged_cache cpu|cuda");
+        if (argc != 2) throw std::invalid_argument("Usage: elman_paged_cache cpu|cuda|metal");
         Backend backend = parse_backend(argv[1]);
         if (!backend_available(backend)) return 77;
         for (elman::DType dtype : {DType::Float32,DType::Float16,DType::BFloat16})

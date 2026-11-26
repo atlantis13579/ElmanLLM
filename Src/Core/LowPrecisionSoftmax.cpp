@@ -1,4 +1,4 @@
-#include "Operators/low_precision_softmax.h"
+#include "Kernals/low_precision_softmax.h"
 #include <stdexcept>
 
 namespace elman {
