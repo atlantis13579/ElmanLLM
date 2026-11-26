@@ -50,183 +50,30 @@ if(ELMAN_ENABLE_CUDA)
     set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 endif()
 
-file(GLOB CPU_OPERATORS CONFIGURE_DEPENDS "Src/Operators/CPU/*.cpp")
-set(ELMAN_SOURCES
-    Src/Training/GraphTraining.cpp
-    Src/Backends/Cpu.cpp
-    Src/Backends/CpuGemm.cpp
-    Src/Backends/CpuMath.cpp
-    Src/Backends/CpuParallel.cpp
-    Src/Core/Autograd.cpp
-    Src/Core/AutogradOps.cpp
-    Src/Core/Autocast.cpp
-    Src/Core/Backend.cpp
-    Src/Core/AllocationPool.cpp
-    Src/Core/Execution.cpp
-    Src/Core/Device.cpp
-    Src/Core/Memory.cpp
-    Src/Core/DType.cpp
-    Src/Core/IntegerPointwise.cpp
-    Src/Core/Float64Pointwise.cpp
-    Src/Core/LowPrecisionCast.cpp
-    Src/Core/LowPrecisionPointwise.cpp
-    Src/Core/LowPrecisionReduction.cpp
-    Src/Core/LowPrecisionMatrix.cpp
-    Src/Core/LowPrecisionSoftmax.cpp
-    Src/Core/LowPrecisionNormalization.cpp
-    Src/Core/LowPrecisionAttention.cpp
-    Src/Core/LowPrecisionAttentionExecution.cpp
-    Src/Core/LowPrecisionFused.cpp
-    Src/Core/LowPrecisionRandom.cpp
-    Src/Core/LowPrecisionCategorical.cpp
-    Src/Core/LowPrecisionOptimizer.cpp
-    Src/Core/FloatingDropout.cpp
-    Src/Core/FloatingRandom.cpp
-    Src/Core/LowPrecisionLoss.cpp
-    Src/Core/LowPrecisionSpatial.cpp
-    Src/Core/LowPrecisionIndexing.cpp
-    Src/Core/Float64Reduction.cpp
-    Src/Core/Float64Matrix.cpp
-    Src/Core/Float64Softmax.cpp
-    Src/Core/Float64Indexing.cpp
-    Src/Core/Float64Spatial.cpp
-    Src/Core/Float64Loss.cpp
-    Src/Core/Float64Attention.cpp
-    Src/Core/Float64Random.cpp
-    Src/Core/Float64Categorical.cpp
-    Src/Core/Float64Normalization.cpp
-    Src/Core/IntegerMatrix.cpp
-    Src/Core/PackedIntegerCast.cpp
-    Src/Core/PackedIntegerExecution.cpp
-    Src/Core/Quantization.cpp
-    Src/Core/QuantizationDispatch.cpp
-    Src/Core/StorageLayout.cpp
-    Src/Core/Graph.cpp
-    Src/Core/CommandGraph.cpp
-    Src/Core/Tensor.cpp
-    Src/Operators/inference_ops.cpp
-    Src/Operators/audio_ops.cpp
-    Src/Operators/recurrent_ops.cpp
-    Src/Operators/flux2_ops.cpp
-    Src/Operators/upsample.cpp
-    Src/Inference/Diffusion/Ddim.cpp
-    Src/Models/ClipText.cpp
-    Src/Models/Audio/Whisper.cpp
-    Src/Inference/Audio/WhisperSession.cpp
-    Src/Inference/Audio/WhisperAlignment.cpp
-    Src/Inference/Diffusion/StableDiffusion.cpp
-    Src/Models/Diffusion/UNet.cpp
-    Src/Models/Diffusion/Vae.cpp
-    Src/Models/Diffusion/Flux2Text.cpp
-    Src/Models/Diffusion/Flux2Transformer.cpp
-    Src/Models/Diffusion/Flux2Vae.cpp
-    Src/Inference/Diffusion/Flux2Sampler.cpp
-    Src/Inference/Diffusion/Flux2Session.cpp
-    Src/Layers/LayerNorm.cpp
-    Src/Layers/Attention.cpp
-    Src/Models/Diffusion/Blocks.cpp
-    Src/IO/ComponentWeights.cpp
-    Src/Distributed/ProcessGroup.cpp
-    Src/Distributed/TensorParallel.cpp
-    Src/Core/ComplexTensor.cpp
-    Src/Core/ComplexPointwise.cpp
-    Src/Core/ComplexAutograd.cpp
-    Src/Reinforcement/PolicyValueInference.cpp
-    Src/Inference/ModelEvaluation.cpp
-    Src/Inference/GraphSession.cpp
-    Src/Inference/GraphBuilder.cpp
-    Src/Inference/Importers/SavedModel.cpp
-    Src/Inference/Importers/TorchScript.cpp
-    Src/Inference/Importers/Keras.cpp
-    Src/Inference/Importers/TfLite.cpp
-    Src/Inference/InferenceSession.cpp
-    Src/Inference/LLM/CacheBlockPool.cpp
-    Src/Inference/LLM/PagedKVCache.cpp
-    Src/Inference/LLM/PagedAttention.cpp
-    Src/Inference/LLM/LatentAttention.cpp
-    Src/Inference/LLM/Experts.cpp
-    Src/Inference/LLM/ProjectionWeight.cpp
-    Src/Inference/LLM/DevicePlacement.cpp
-    Src/Inference/LLM/Qwen2Graph.cpp
-    Src/Inference/LLM/Qwen2PagedGraph.cpp
-    Src/Inference/LLM/PrefixCache.cpp
-    Src/Inference/LLM/Generation.cpp
-    Src/Inference/LLM/MemoryPlan.cpp
-    Src/Inference/LLM/Sampling.cpp
-    Src/IO/Checkpoint.cpp
-    Src/IO/CTranslate2.cpp
-    Src/IO/Wave.cpp
-    Src/IO/AtomicFile.cpp
-    Src/IO/Jpeg.cpp
-    Src/IO/Png.cpp
-    Src/IO/Json.cpp
-    Src/IO/Safetensors.cpp
-    Src/IO/InferenceWeights.cpp
-    Src/IO/TensorArchive.cpp
-    Src/IO/Gguf.cpp
-    Src/IO/NumPy.cpp
-    Src/IO/TorchWeights.cpp
-    Src/IO/TensorFlowBundle.cpp
-    Src/IO/TensorFlowProto.cpp
-    Src/IO/Hdf5.cpp
-    Src/IO/ZipArchive.cpp
-    Src/Models/Model.cpp
-    Src/Reinforcement/ContinuousActorCritic.cpp
-    Src/Models/ModuleModel.cpp
-    Src/Models/LLM/Decoder.cpp
-    Src/Models/LLM/DeepSeek.cpp
-    Src/Models/LLM/DecoderFactory.cpp
-    Src/Models/LLM/Qwen2.cpp
-    Src/Models/LLM/Qwen35.cpp
-    Src/Models/ResNet.cpp
-    Src/Reinforcement/SpatialPolicyValue.cpp
-    Src/Layers/Module.cpp
-    Src/Layers/Sequential.cpp
-    Src/Layers/Linear.cpp
-    Src/Layers/Conv2d.cpp
-    Src/Layers/GroupNorm.cpp
-    Src/Layers/BatchNorm2d.cpp
-    Src/Layers/ReLU.cpp
-    Src/Layers/Dropout.cpp
-    Src/Optimizer/Adam.cpp
-    Src/Optimizer/AdamW.cpp
-    Src/Optimizer/Optimizer.cpp
-    Src/Optimizer/Double.cpp
-    Src/Optimizer/Complex.cpp
-    Src/Optimizer/Low.cpp
-    Src/Optimizer/Sgd.cpp
-    Src/Runtime/RunContext.cpp
-    Src/Text/Tokenizer.cpp
-    Src/Text/WhisperTokenizer.cpp
-    Src/Text/Qwen35Chat.cpp
-    Src/Text/HuggingFaceTokenizer.cpp
-    Src/Text/DeepSeekChat.cpp
-    Src/Text/ClipTokenizer.cpp
-    Src/Text/Unicode.cpp
-    Src/Text/TokenStream.cpp
-    Src/Training/DataLoader.cpp
-    Src/Training/LossScaler.cpp
-    Src/Reinforcement/Reinforcement.cpp
-    Src/Reinforcement/PPO.cpp
-    Src/Reinforcement/PpoRunner.cpp
-    Src/Reinforcement/PolicyValueTraining.cpp
-    Src/Training/Sampler.cpp
-    Src/Training/Trainer.cpp
-    ${CPU_OPERATORS}
-)
+file(GLOB_RECURSE ELMAN_SOURCES CONFIGURE_DEPENDS "Src/*.cpp")
+file(GLOB_RECURSE ELMAN_HEADERS CONFIGURE_DEPENDS
+    "Src/*.h" "Src/*.hpp" "Src/*.cuh" "Src/*.inc")
+# Src/Tools holds standalone command line tools, each with its own entry point.
+list(FILTER ELMAN_SOURCES EXCLUDE REGEX "/Src/Tools/")
 if(ELMAN_ENABLE_CUDA)
-    file(GLOB CUDA_OPERATORS CONFIGURE_DEPENDS "Src/Operators/CUDA/*.cu")
-    list(APPEND ELMAN_SOURCES Src/Backends/Cuda.cu Src/Backends/CudaExecution.cu Src/Backends/CudaGraph.cu Src/Backends/CudaGemm.cu ${CUDA_OPERATORS})
+    file(GLOB_RECURSE CUDA_OPERATORS CONFIGURE_DEPENDS "Src/Kernals/CUDA/*.cu")
+    list(APPEND ELMAN_SOURCES
+        Src/Backends/Cuda.cu
+        Src/Backends/CudaExecution.cu
+        Src/Backends/CudaGraph.cu
+        Src/Backends/CudaGemm.cu
+        Src/Backends/CudaGemm_cuBLAS.cu
+        ${CUDA_OPERATORS})
     if(MSVC)
         # CCCL requires the conforming MSVC preprocessor in CUDA 13.
-        set_source_files_properties(Src/Operators/CUDA/argsort_cuda.cu Src/Operators/CUDA/cumsum_cuda.cu
+        set_source_files_properties(Src/Kernals/CUDA/argsort_cuda.cu Src/Kernals/CUDA/cumsum_cuda.cu
             PROPERTIES COMPILE_OPTIONS "-Xcompiler=/Zc:preprocessor")
-        set_source_files_properties(Src/Operators/CUDA/complex_pointwise_cuda.cu
+        set_source_files_properties(Src/Kernals/CUDA/complex_pointwise_cuda.cu
             PROPERTIES COMPILE_OPTIONS "-Xcompiler=/Zc:preprocessor")
     endif()
 endif()
 
-add_library(elman_core SHARED ${ELMAN_SOURCES})
+add_library(elman_core SHARED ${ELMAN_SOURCES} ${ELMAN_HEADERS})
 add_library(Elman::Core ALIAS elman_core)
 set_target_properties(elman_core PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON EXPORT_NAME Core)
 find_package(Threads REQUIRED)
@@ -235,8 +82,9 @@ target_include_directories(elman_core PUBLIC
     $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/Src>
     $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}/Elman>)
 if(ELMAN_ENABLE_METAL)
-    file(GLOB METAL_OPERATORS CONFIGURE_DEPENDS "Src/Operators/Metal/*_metal.mm")
-    target_sources(elman_core PRIVATE Src/Backends/Metal.mm Src/Backends/MPSGraph.mm ${METAL_OPERATORS})
+    # Objective-C++ backend, fusion compiler and Metal kernels.
+    file(GLOB_RECURSE METAL_SOURCES CONFIGURE_DEPENDS "Src/*.mm")
+    target_sources(elman_core PRIVATE ${METAL_SOURCES})
     target_compile_options(elman_core PRIVATE $<$<COMPILE_LANGUAGE:OBJCXX>:-fobjc-arc>)
     target_compile_definitions(elman_core PUBLIC ELMAN_HAS_METAL)
     foreach(framework Foundation Metal MetalPerformanceShaders MetalPerformanceShadersGraph)
@@ -299,8 +147,8 @@ if(ELMAN_ENABLE_CUDA)
         target_sources(elman_core PRIVATE Src/Backends/CudaConvolution.cu)
         set_source_files_properties(Src/Backends/CudaConvolution.cu PROPERTIES INCLUDE_DIRECTORIES "${ELMAN_CUDNN_INCLUDE}")
         set_source_files_properties(Src/Backends/CudaConvolution.cu
-            Src/Operators/CUDA/conv2d_cuda.cu Src/Operators/CUDA/conv2d_input_grad_cuda.cu
-            Src/Operators/CUDA/conv2d_weight_grad_cuda.cu PROPERTIES COMPILE_DEFINITIONS ELMAN_HAS_CUDNN)
+            Src/Kernals/CUDA/conv2d_cuda.cu Src/Kernals/CUDA/conv2d_input_grad_cuda.cu
+            Src/Kernals/CUDA/conv2d_weight_grad_cuda.cu PROPERTIES COMPILE_DEFINITIONS ELMAN_HAS_CUDNN)
         target_link_libraries(elman_core PRIVATE "${ELMAN_CUDNN_LIBRARY}")
         if(WIN32)
             file(GLOB ELMAN_CUDNN_RUNTIME "${CUDAToolkit_BIN_DIR}/cudnn*.dll"
@@ -360,6 +208,7 @@ add_executable(elman App/Main.cpp
     App/Commands/Diffusion.cpp
     App/Commands/Generate.cpp
     App/Commands/InferTensors.cpp
+    App/Commands/Sample.cpp
     App/Commands/Tokenizer.cpp
     App/Commands/Transcribe.cpp
     App/Commands/Train.cpp)
@@ -373,6 +222,25 @@ if(WIN32)
         endif()
     endforeach()
     target_link_libraries(elman_serving PRIVATE shell32)
+endif()
+
+# Standalone command line tools. They live outside the library because each one
+# provides its own entry point.
+add_executable(elman_import_weights Src/Tools/ImportWeights.cpp)
+target_link_libraries(elman_import_weights PRIVATE elman_core)
+add_executable(elman_quantize_weights Src/Tools/QuantizeWeights.cpp Src/Tools/ToolIO.cpp)
+target_link_libraries(elman_quantize_weights PRIVATE elman_core)
+if(NOT WIN32)
+    target_link_libraries(elman_quantize_weights PRIVATE Threads::Threads)
+endif()
+add_executable(elman_launch_distributed Src/Tools/LaunchDistributed.cpp)
+target_link_libraries(elman_launch_distributed PRIVATE elman_core)
+option(ELMAN_ENABLE_ONNX "Build the ONNX graph import tool (requires the ONNX C++ library)" OFF)
+if(ELMAN_ENABLE_ONNX)
+    find_package(onnx CONFIG REQUIRED)
+    add_executable(elman_import_onnx Src/Tools/ImportOnnx.cpp)
+    target_compile_definitions(elman_import_onnx PRIVATE ELMAN_HAS_ONNX)
+    target_link_libraries(elman_import_onnx PRIVATE elman_core onnx onnx_proto)
 endif()
 
 enable_testing()

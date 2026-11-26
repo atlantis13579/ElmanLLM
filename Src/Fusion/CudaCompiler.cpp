@@ -1,3 +1,6 @@
+// NVRTC/driver based CUDA fusion compiler; only available in CUDA builds.
+#if defined(ELMAN_HAS_CUDA)
+
 #include "Fusion/CudaCompiler.h"
 #include "Backends/CudaStream.h"
 #include <cuda.h>
@@ -126,3 +129,5 @@ void submit(const Graph& graph, Executable& executable, const Schedule& schedule
     submit_fusion_cuda(graph.bindings,outputs,[&] { executable.launch(graph,schedule); });
 }
 } // namespace elman::fusion
+
+#endif // ELMAN_HAS_CUDA
