@@ -72,7 +72,9 @@ struct Graph {
     return [g lessThanWithPrimaryTensor:x secondaryTensor:y name:nil];
   }
   Tensor both(Tensor x, Tensor y) const {
-    return [g logicalANDWithPrimaryTensor:x secondaryTensor:y name:nil];
+    // MPSGraph logicalAND requires identical operand types. Normalize both
+    // operands to bool so integer comparison results never reach the op as si32.
+    return [g logicalANDWithPrimaryTensor:truth(x) secondaryTensor:truth(y) name:nil];
   }
   Tensor select(Tensor predicate, Tensor yes, Tensor no) const {
     return [g selectWithPredicateTensor:predicate truePredicateTensor:yes falsePredicateTensor:no name:nil];
@@ -115,6 +117,9 @@ struct Graph {
   }
   Tensor maximum(Tensor x, Tensor y) const {
     return [g maximumWithPrimaryTensor:x secondaryTensor:y name:nil];
+  }
+  Tensor minimum(Tensor x, Tensor y) const {
+    return [g minimumWithPrimaryTensor:x secondaryTensor:y name:nil];
   }
   Tensor index(Shape dims, int axis) const {
     return [g coordinateAlongAxis:axis withShape:dims name:nil];

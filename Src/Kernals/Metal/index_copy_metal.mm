@@ -48,7 +48,7 @@ Tensor lower_index_copy(Graph m, const Operands& inputs, const KernelParams& p) 
   winners = m.slice(winners, 0, 0, n);
   Tensor indices = m.maximum(m.sub(winners, m.integer(1)), m.integer(0));
   Tensor latest = m.reshape(m.gather(m.reshape(c, flat), indices, 0), result_shape);
-  Tensor written = m.reshape(m.truth(winners), result_shape);
+  Tensor written = m.reshape(m.less(m.integer(0), winners), result_shape);
   return m.select(written, latest, a);
 }
 }  // namespace elman::metal

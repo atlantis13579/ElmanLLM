@@ -138,13 +138,51 @@ Tensor Tensor::from_int64_data(Shape shape, const std::vector<int64_t>& data, Ba
 }
 Tensor Tensor::from_int_data(Shape shape, const std::vector<int32_t>& data,
                              Backend backend, DType dtype) {
-  require(dtype == DType::Int32 || dtype == DType::Bool || is_packed_integer(dtype),
-          "Integer data requires int32, bool, or packed integer dtype");
+  require(is_arithmetic_integer(dtype), "Integer data requires an integer dtype");
   require(shape_element_count(shape) == data.size(), "Integer data and tensor shape sizes differ");
   std::shared_ptr<TensorNode> node = std::make_shared<TensorNode>();
   node->shape = std::move(shape);
   node->value = backend_allocate(backend, data.size(), dtype);
-  backend_upload_int(node->value, data);
+  if (dtype == DType::Int32 || dtype == DType::Bool || is_packed_integer(dtype)) {
+    backend_upload_int(node->value, data);
+    return Tensor(node);
+  }
+  if (dtype == DType::Int64) {
+    backend_upload_int64(node->value, std::vector<int64_t>(data.begin(), data.end()));
+    return Tensor(node);
+  }
+  // Standard byte-addressable integer formats widen the int32 source into raw
+  // storage so callers do not have to assemble packed bytes for every dtype.
+  std::vector<uint8_t> bytes(dtype_storage_bytes(dtype, data.size()));
+  switch (dtype) {
+    case DType::Int8:
+      for (size_t i = 0; i < data.size(); ++i)
+        reinterpret_cast<int8_t*>(bytes.data())[i] = int8_t(data[i]);
+      break;
+    case DType::UInt8:
+      for (size_t i = 0; i < data.size(); ++i)
+        reinterpret_cast<uint8_t*>(bytes.data())[i] = uint8_t(data[i]);
+      break;
+    case DType::Int16:
+      for (size_t i = 0; i < data.size(); ++i)
+        reinterpret_cast<int16_t*>(bytes.data())[i] = int16_t(data[i]);
+      break;
+    case DType::UInt16:
+      for (size_t i = 0; i < data.size(); ++i)
+        reinterpret_cast<uint16_t*>(bytes.data())[i] = uint16_t(data[i]);
+      break;
+    case DType::UInt32:
+      for (size_t i = 0; i < data.size(); ++i)
+        reinterpret_cast<uint32_t*>(bytes.data())[i] = uint32_t(data[i]);
+      break;
+    case DType::UInt64:
+      for (size_t i = 0; i < data.size(); ++i)
+        reinterpret_cast<uint64_t*>(bytes.data())[i] = uint64_t(data[i]);
+      break;
+    default:
+      throw std::invalid_argument("Integer data requires an integer dtype");
+  }
+  backend_upload_raw(node->value, bytes);
   return Tensor(node);
 }
 Tensor Tensor::from_data(Shape shape, const std::vector<float>& data, Backend b,

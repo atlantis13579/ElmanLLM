@@ -159,8 +159,12 @@ void random_values() {
     exact(uniform, Tensor::uniform({count}, -1, 1, 73, backend, false, dtype), "Metal uniform reproducibility");
     check(uniform.raw_data() != Tensor::uniform({count}, -1, 1, 74, backend, false, dtype).raw_data(), "Uniform seed ignored");
     double mean = 0;
-    for (float value : uniform.data()) {
-      check(std::isfinite(value) && value >= -1 && value < 1, "Metal uniform half-open interval");
+    const std::vector<float> values = uniform.data();
+    for (size_t i = 0; i < values.size(); ++i) {
+      const float value = values[i];
+      check(std::isfinite(value) && value >= -1 && value < 1,
+            "Metal uniform half-open interval for " + std::string(dtype_name(dtype)) + " at " +
+                std::to_string(i) + ": " + std::to_string(value));
       mean += value / count;
     }
     check(std::abs(mean) < .06, "Metal uniform mean");

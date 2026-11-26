@@ -10,6 +10,7 @@
 #import <Metal/Metal.h>
 
 #include <algorithm>
+#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <list>
@@ -247,6 +248,9 @@ MPSGraphTensorData* tensor_data(const BufferPtr& buffer, MPSShape* dims) {
     const size_t offset = offset_for(buffer, owner);
     if (!offset) return [[MPSGraphTensorData alloc] initWithMTLBuffer:owner.storage shape:dims dataType:type];
     MPSNDArrayDescriptor* descriptor = [MPSNDArrayDescriptor descriptorWithDataType:type shape:dims];
+    std::fprintf(stderr, "tensor_data debug owner.length=%zu offset=%zu buffer.bytes=%zu dtype=%d dims=%s\n",
+                 size_t(owner.storage.length), offset, buffer->bytes, int(buffer->dtype),
+                 [[dims description] UTF8String]);
     MPSNDArray* array = [[MPSNDArray alloc] initWithBuffer:owner.storage offset:offset descriptor:descriptor];
     return [[MPSGraphTensorData alloc] initWithMPSNDArray:array];
 }
@@ -381,16 +385,22 @@ void dispatch_metal(const std::string& op, const BufferPtr& output,
     if (fusion::enqueue(op, output, inputs, p)) return;
     @autoreleasepool {
         MPSMatrixRandomDistributionDescriptor* distribution = random_operation(op) ? distribution_for(op,p) : nil;
-        const bool direct = distribution && output->dtype == DType::Float32 && op != "dropout";
+        // MPSMatrixRandomPhilox writes results in groups of four. Pad the draw
+        // length up to a multiple of four and feed the graph the first
+        // output->count samples so small tensors do not abort the command queue.
+        const size_t philox_multiple = 4;
+        const size_t padded_count = (output->count + philox_multiple - 1) & ~(philox_multiple - 1);
+        const bool direct = distribution && output->dtype == DType::Float32 && op != "dropout" &&
+                            padded_count == output->count;
         BufferPtr samples;
         if (distribution && !direct)
-            samples = backend_workspace(Backend::Metal,checked_memory_mul(output->count,sizeof(float)));
+            samples = backend_workspace(Backend::Metal,checked_memory_mul(padded_count ? padded_count : size_t(1),sizeof(float)));
         MetalContext& state = context();
         std::lock_guard<std::mutex> lock(state.mutex);
         if (distribution) {
             const BufferPtr& target = direct ? output : samples;
             const MetalBuffer& storage = storage_for(target);
-            MPSVectorDescriptor* vector = [MPSVectorDescriptor vectorDescriptorWithLength:output->count dataType:MPSDataTypeFloat32];
+            MPSVectorDescriptor* vector = [MPSVectorDescriptor vectorDescriptorWithLength:padded_count dataType:MPSDataTypeFloat32];
             MPSVector* dest = [[MPSVector alloc] initWithBuffer:storage.storage offset:offset_for(target,storage) descriptor:vector];
             const uint64_t seed = uint32_t(p.attribute(operator_attr::random::kSeed)) |
                 (uint64_t(uint32_t(p.attribute(operator_attr::random::kStreamOffset))) << 32);

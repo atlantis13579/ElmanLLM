@@ -34,6 +34,10 @@ void malformed(Backend backend) {
     p.v[KernelParams::kInputDTypeSlot] = int(DType::Int64);
     p.v[KernelParams::kAttributeSlot] = 1;
     p.v[KernelParams::kAttributeSlot + 1] = 0;
+    // Mark the unused operand descriptors absent. Metal validates every slot,
+    // while the zero-initialized KernelParams default leaves ranks at 0.
+    for (int slot = 1; slot < 4; ++slot)
+        p.v[KernelParams::input_slot(static_cast<KernelInput>(slot))] = -1;
     backend_dispatch("permute", out.node()->value, {a.node()->value}, p);
     check(out.int64_data() == std::vector<int64_t>{1, 4, 2, 5, 3, 6}, "Storage permutation differs");
     const std::vector<uint8_t> before = out.raw_data();
