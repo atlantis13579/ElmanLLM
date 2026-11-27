@@ -36,7 +36,7 @@ struct PaddingMaskInput {
 
 template<int DTypeCode>
 void launch_padding_softmax(uint32_t* out, const uint32_t* a, const uint32_t* b, const KernelParams& p, float inverse) {
-  using namespace operator_attr::attention_softmax;
+  using namespace kernal_attr::attention_softmax;
   const int queries = p.output_shape(2);
   const int mask_batch_stride = p.input_shape(KernelInput::B, 0) == 1 ? 0 : p.input_stride(KernelInput::B, 0);
   const PaddingMaskInput<DTypeCode> read{inverse, p.output_shape(3), queries, p.output_shape(1) * queries,
@@ -52,10 +52,10 @@ struct AttentionSoftmaxInput {
     float scaled = __fmul_rn(READ_A(i), inverse);
     scaled = elman_cuda_decode(elman_cuda_encode(scaled, dtype), dtype);
     float mask = READ_B(broadcast_index(i, KernelInput::B, p));
-    if (p.attribute(operator_attr::attention_softmax::kCausal)) {
+    if (p.attribute(kernal_attr::attention_softmax::kCausal)) {
       int keys = p.output_shape(3);
-      int64_t query = int64_t((i / keys) % p.output_shape(2)) + p.attribute(operator_attr::attention_softmax::kQueryBase);
-      if (int64_t(i % keys) > query + p.attribute(operator_attr::attention_softmax::kCausalOffset))
+      int64_t query = int64_t((i / keys) % p.output_shape(2)) + p.attribute(kernal_attr::attention_softmax::kQueryBase);
+      if (int64_t(i % keys) > query + p.attribute(kernal_attr::attention_softmax::kCausalOffset))
         mask = dtype == int(DType::Float16) ? -65504.0f : dtype == int(DType::BFloat16) ? -3.3895313892515355e38f : -3.402823466e38f;
     }
     float masked = __fadd_rn(scaled, mask);
@@ -64,19 +64,19 @@ struct AttentionSoftmaxInput {
 };
 void launch_attention_softmax_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
                                    const uint32_t* c, const KernelParams& p) {
-  int bits = p.attribute(operator_attr::attention_softmax::kDivisor);
+  int bits = p.attribute(kernal_attr::attention_softmax::kDivisor);
   float divisor;
   std::memcpy(&divisor, &bits, sizeof(divisor));
   const float inverse = 1.0f / divisor;
-  if (p.output_count() && p.output_rank() == 4 && p.attribute(operator_attr::attention_softmax::kAxis) == 3 &&
-      !p.attribute(operator_attr::attention_softmax::kCausal) && p.output_dtype() == int(DType::Float32) &&
+  if (p.output_count() && p.output_rank() == 4 && p.attribute(kernal_attr::attention_softmax::kAxis) == 3 &&
+      !p.attribute(kernal_attr::attention_softmax::kCausal) && p.output_dtype() == int(DType::Float32) &&
       p.input_dtype(KernelInput::A) == p.output_dtype() && p.input_dtype(KernelInput::B) == p.output_dtype() &&
       p.input_rank(KernelInput::B) == 4 && p.input_shape(KernelInput::B, 0) == 1 && p.input_shape(KernelInput::B, 1) == 1 &&
       p.input_shape(KernelInput::B, 2) == p.output_shape(2) && p.input_shape(KernelInput::B, 3) == p.output_shape(3)) {
     return launch_softmax_cuda_impl(out, a, b, p,
         FloatMatrixMaskInput{inverse, p.output_shape(2) * p.output_shape(3)}, int(DType::Float32));
   }
-  if (p.output_count() && p.output_rank() == 4 && p.attribute(operator_attr::attention_softmax::kAxis) == 3 &&
+  if (p.output_count() && p.output_rank() == 4 && p.attribute(kernal_attr::attention_softmax::kAxis) == 3 &&
       p.input_rank(KernelInput::B) == 4 && p.input_shape(KernelInput::B, 1) == 1 &&
       p.input_shape(KernelInput::B, 2) == 1 && p.input_shape(KernelInput::B, 3) == p.output_shape(3) &&
       p.input_stride(KernelInput::B, 3) == 1 && p.input_dtype(KernelInput::A) == p.output_dtype() &&

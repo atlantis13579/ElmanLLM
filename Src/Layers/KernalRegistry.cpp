@@ -22,18 +22,24 @@ Shape integers(const Json& value) {
 }
 }  // namespace
 
-const Json& operator_catalog() {
-  static const Json catalog = Json::parse(
-#include "OperatorCatalog.inc"
-  );
+const Json& kernal_catalog() {
+  static const Json catalog = [] {
+    // Separate literals avoid MSVC's per-literal and concatenated-string limits.
+    const char* const chunks[] = {
+#include "KernalCatalog.inc"
+    };
+    std::string text;
+    for (const char* chunk : chunks) text += chunk;
+    return Json::parse(text);
+  }();
   return catalog;
 }
 
 void validate_operation(const std::string& type, const Json& config,
                         size_t inputs, size_t outputs) {
-  const auto& entries = operator_catalog().at("entries");
+  const auto& entries = kernal_catalog().at("entries");
   if (!entries.contains(type)) {
-    throw std::invalid_argument("Unknown layer/operator: " + type);
+    throw std::invalid_argument("Unknown layer/kernal: " + type);
   }
   const auto& spec = entries.at(type);
   for (const auto& key : {"inputs", "outputs"}) {
@@ -214,7 +220,7 @@ std::vector<Tensor> execute_operation(const std::string& type,
     return {reshape(permute(x[0], {0, 2, 1, 3}),
                     {dims[0], dims[2], dims[1] * dims[3]})};
   }
-#include "Layers/OperatorBindings.inc"
-  throw std::invalid_argument("Missing operator implementation: " + type);
+#include "Layers/KernalBindings.inc"
+  throw std::invalid_argument("Missing kernal implementation: " + type);
 }
 }  // namespace elman::nn

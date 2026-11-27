@@ -54,8 +54,8 @@ Tensor lower_paged_attention(Graph m, const Operands& inputs, const KernelParams
   const int heads = p.input_shape(KernelInput::A, 1);
   const int queries = p.input_shape(KernelInput::A, 2);
   const int value_width = p.output_shape(3);
-  const bool causal = p.attribute(operator_attr::tiled_attention::kCausal) != 0;
-  const int causal_offset = p.attribute(operator_attr::tiled_attention::kCausalOffset);
+  const bool causal = p.attribute(kernal_attr::tiled_attention::kCausal) != 0;
+  const int causal_offset = p.attribute(kernal_attr::tiled_attention::kCausalOffset);
   const bool fused = dimension == value_width && dimension % 8 == 0 && !(causal && causal_offset < 0);
   const bool grouped_decode = fused && !p.attribute(5) && queries == 1 && heads != kv_heads &&
                               dimension == 128 && key_count >= 256 &&

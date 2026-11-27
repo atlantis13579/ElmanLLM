@@ -15,7 +15,7 @@ inline bool raw_layout(const std::string& op) {
         op == "gather" || op == "index_select" || op == "scatter" || op == "index_copy" || op == "sort_backward";
 }
 
-inline void validate_operator_dtypes(const std::string& op, const KernelParams& p) {
+inline void validate_kernal_dtypes(const std::string& op, const KernelParams& p) {
     const DType out = DType(p.output_dtype());
     DType widest = out;
     for (KernelInput slot : {KernelInput::A, KernelInput::B, KernelInput::C, KernelInput::D}) {

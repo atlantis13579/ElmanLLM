@@ -24,7 +24,7 @@ MPSMatrixRandomDistributionDescriptor* uniform_distribution(const KernelParams& 
 float attribute_float(const KernelParams& p, int slot);
 NSArray<NSNumber*>* axes(int start, int end);
 
-// Primitive MPSGraph nodes and tensor storage conversions for operator lowering.
+// Primitive MPSGraph nodes and tensor storage conversions for kernal lowering.
 struct Graph {
   MPSGraph* g;
   Tensor random_samples;

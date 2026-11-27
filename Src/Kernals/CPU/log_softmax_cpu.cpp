@@ -3,7 +3,7 @@
 namespace elman {
 void launch_log_softmax_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
                             const uint32_t* c, const KernelParams& p) {
-  const int axis = p.attribute(operator_attr::softmax::kAxis);
+  const int axis = p.attribute(kernal_attr::softmax::kAxis);
   const int inner = p.input_rank(KernelInput::A) == 0
                         ? 1
                         : p.input_stride(KernelInput::A, axis);

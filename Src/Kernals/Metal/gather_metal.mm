@@ -6,7 +6,7 @@ namespace elman::metal {
 Tensor lower_gather(Graph m, const Operands& inputs, const KernelParams& p) {
   Tensor a = inputs[0];
   Tensor b = inputs[1];
-  const int axis = p.attribute(operator_attr::indexing::kAxis);
+  const int axis = p.attribute(kernal_attr::indexing::kAxis);
   const int extent = p.input_shape(KernelInput::A, axis);
   if (!extent) {
     return m.filled(p, 0);

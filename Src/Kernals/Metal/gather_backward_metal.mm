@@ -9,7 +9,7 @@ Tensor lower_gather_backward(Graph m, const Operands& inputs, const KernelParams
   if (!a) {
     return m.filled(p, 0);
   }
-  const int axis = p.attribute(operator_attr::indexing::kAxis);
+  const int axis = p.attribute(kernal_attr::indexing::kAxis);
   Shape update_shape = a.shape;
   const int rank = p.output_rank();
   Tensor ids = b.dataType == MPSDataTypeInt64 ? b : m.cast(b, MPSDataTypeInt32);

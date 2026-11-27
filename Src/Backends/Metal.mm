@@ -10,7 +10,6 @@
 #import <Metal/Metal.h>
 
 #include <algorithm>
-#include <cstdio>
 #include <cstring>
 #include <deque>
 #include <list>
@@ -114,7 +113,7 @@ struct Plan {
         options.waitForCompilationCompletion = YES;
         executable = [graph compileWithDevice:device feeds:feeds targetTensors:@[result]
                               targetOperations:nil compilationDescriptor:options];
-        if (!executable) throw std::runtime_error("Cannot compile Metal operator " + key.op);
+        if (!executable) throw std::runtime_error("Cannot compile Metal kernal " + key.op);
         for (MPSGraphTensor* feed in executable.feedTensors) {
             if (feed == samples) {
                 slots.at(count++) = -1;
@@ -207,8 +206,8 @@ public:
     const Plan& plan(const std::string& op, const KernelParams& p, bool has_samples) {
         Key key{op, p};
         if (random_operation(op)) {
-            key.params.v[KernelParams::kAttributeSlot + operator_attr::random::kSeed] = 0;
-            key.params.v[KernelParams::kAttributeSlot + operator_attr::random::kStreamOffset] = 0;
+            key.params.v[KernelParams::kAttributeSlot + kernal_attr::random::kSeed] = 0;
+            key.params.v[KernelParams::kAttributeSlot + kernal_attr::random::kStreamOffset] = 0;
         }
         auto existing = plans_.find(key);
         if (existing != plans_.end()) {
@@ -248,9 +247,6 @@ MPSGraphTensorData* tensor_data(const BufferPtr& buffer, MPSShape* dims) {
     const size_t offset = offset_for(buffer, owner);
     if (!offset) return [[MPSGraphTensorData alloc] initWithMTLBuffer:owner.storage shape:dims dataType:type];
     MPSNDArrayDescriptor* descriptor = [MPSNDArrayDescriptor descriptorWithDataType:type shape:dims];
-    std::fprintf(stderr, "tensor_data debug owner.length=%zu offset=%zu buffer.bytes=%zu dtype=%d dims=%s\n",
-                 size_t(owner.storage.length), offset, buffer->bytes, int(buffer->dtype),
-                 [[dims description] UTF8String]);
     MPSNDArray* array = [[MPSNDArray alloc] initWithBuffer:owner.storage offset:offset descriptor:descriptor];
     return [[MPSGraphTensorData alloc] initWithMPSNDArray:array];
 }
@@ -390,7 +386,8 @@ void dispatch_metal(const std::string& op, const BufferPtr& output,
         // output->count samples so small tensors do not abort the command queue.
         const size_t philox_multiple = 4;
         const size_t padded_count = (output->count + philox_multiple - 1) & ~(philox_multiple - 1);
-        const bool direct = distribution && output->dtype == DType::Float32 && op != "dropout" &&
+        // Uniform draws also need the graph's half-open endpoint correction.
+        const bool direct = distribution && output->dtype == DType::Float32 && op == "normal" &&
                             padded_count == output->count;
         BufferPtr samples;
         if (distribution && !direct)
@@ -402,8 +399,8 @@ void dispatch_metal(const std::string& op, const BufferPtr& output,
             const MetalBuffer& storage = storage_for(target);
             MPSVectorDescriptor* vector = [MPSVectorDescriptor vectorDescriptorWithLength:padded_count dataType:MPSDataTypeFloat32];
             MPSVector* dest = [[MPSVector alloc] initWithBuffer:storage.storage offset:offset_for(target,storage) descriptor:vector];
-            const uint64_t seed = uint32_t(p.attribute(operator_attr::random::kSeed)) |
-                (uint64_t(uint32_t(p.attribute(operator_attr::random::kStreamOffset))) << 32);
+            const uint64_t seed = uint32_t(p.attribute(kernal_attr::random::kSeed)) |
+                (uint64_t(uint32_t(p.attribute(kernal_attr::random::kStreamOffset))) << 32);
             MPSMatrixRandomPhilox* draw = [[MPSMatrixRandomPhilox alloc] initWithDevice:state.device destinationDataType:MPSDataTypeFloat32
                                                                seed:seed distributionDescriptor:distribution];
             if (!dest || !draw) throw AllocationFailure("Cannot create Metal random generator or destination");

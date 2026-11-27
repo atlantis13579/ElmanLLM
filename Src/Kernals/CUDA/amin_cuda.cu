@@ -9,7 +9,7 @@ __global__ void kernel_amin_cuda(uint32_t* out, const uint32_t* a,
   unsigned int element = blockIdx.x * blockDim.x + threadIdx.x;
   if (element < unsigned(p.output_count())) {
     int i = int(element);
-    int axis = p.attribute(operator_attr::reduction::kAxis);
+    int axis = p.attribute(kernal_attr::reduction::kAxis);
     int inner = axis < 0 ? 1 : p.input_stride(KernelInput::A, axis);
     int length = axis < 0 ? input_count(KernelInput::A, p)
                           : p.input_shape(KernelInput::A, axis);

@@ -1,12 +1,12 @@
 {
-  "format": "elman.operators",
+  "format": "elman.kernals",
   "version": 2,
   "semantics": {
     "tensor_layout": "Native layouts; Linear weights [out,in], Conv2d NCHW/OIHW.",
-    "dtypes": "Native operator dtype/backend checks apply; no implicit input casts.",
-    "autograd": "Native autograd support is preserved. Inference-only operators reject unsupported backward use.",
+    "dtypes": "Native kernal dtype/backend checks apply; no implicit input casts.",
+    "autograd": "Native autograd support is preserved. Inference-only kernals reject unsupported backward use.",
     "context": ["backend", "seed", "training"],
-    "shape": "Input/output shapes are ordered dimension lists. Equal symbols within one operator signature denote equal dimension sizes; native kernels validate runtime sizes.",
+    "shape": "Input/output shapes are ordered dimension lists. Equal symbols within one kernal signature denote equal dimension sizes; native kernels validate runtime sizes.",
     "scope": "Public tensor functions in source headers, stateful nn layers and graph composition primitives.",
     "imported_configuration": "Imported elman.graph v1 aliases retain their attribute conventions and native validation."
   },
@@ -126,27 +126,27 @@
       "shape_constraints": ["input_dims[i] and output_dims[i] are the dimension lists of port i in the instantiated graph."]
     },
     "abs": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "add": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "add_scalar": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}],
       "config": {"b": {"type": "number"}}
     },
     "addmm": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "c", "shape": ["...C"]}, {"name": "a", "shape": ["M", "N"]}, {"name": "b", "shape": ["N", "K"]}],
       "outputs": [{"name": "output", "shape": ["M", "K"]}],
@@ -154,7 +154,7 @@
       "shape_constraints": ["c must broadcast to [M,K] without expanding it."]
     },
     "amax": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...before", "D", "...after"], "shape_alternatives": [[]]}],
       "outputs": [{"name": "output", "shape": ["...before", "...after"], "shape_alternatives": [["...before", 1, "...after"]]}],
@@ -166,7 +166,7 @@
       ]
     },
     "amin": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...before", "D", "...after"], "shape_alternatives": [[]]}],
       "outputs": [{"name": "output", "shape": ["...before", "...after"], "shape_alternatives": [["...before", 1, "...after"]]}],
@@ -178,13 +178,13 @@
       ]
     },
     "angle": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "argsort": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}],
@@ -192,7 +192,7 @@
       "shape_constraints": ["config.dim addresses an existing input axis."]
     },
     "attention_softmax": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "scores", "shape": ["...score_dims"]}, {"name": "mask", "shape": ["...mask_dims"]}],
       "outputs": [{"name": "output", "shape": ["...score_dims"]}],
@@ -200,7 +200,7 @@
       "shape_constraints": ["mask broadcasts to scores without expanding the score shape."]
     },
     "avg_pool2d": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["N", "C", "H", "W"]}],
       "outputs": [
@@ -225,7 +225,7 @@
       ]
     },
     "batch_norm": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [
         {"name": "x", "shape": ["N", "C", "...spatial"]},
@@ -236,20 +236,20 @@
       "config": {"eps": {"type": "number", "default": 1e-05}}
     },
     "bmm": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["B", "M", "N"]}, {"name": "b", "shape": ["B", "N", "K"]}],
       "outputs": [{"name": "output", "shape": ["B", "M", "K"]}]
     },
     "cast": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}],
       "config": {"dtype": {"type": "string"}}
     },
     "causal_depthwise_conv1d": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/recurrent_ops.h",
       "inputs": [
         {"name": "input", "shape": ["B", "T", "C"]},
@@ -260,20 +260,20 @@
       "shape_constraints": ["Omitted state is zero initialized."]
     },
     "causal_mask": {
-      "kind": "operator",
+      "kind": "kernal",
       "inputs": [{"name": "input", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": [1, 1, "input.shape[config.axis]", "input.shape[config.axis]"]}],
       "config": {"axis": {"type": "integer", "default": 1}}
     },
     "complex": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "real", "shape": ["...A"]}, {"name": "imaginary", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "concat": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "inputs", "variadic": true, "shape": ["...before", "D_i", "...after"]}],
       "outputs": [{"name": "output", "shape": ["...before", "sum(D_i)", "...after"]}],
@@ -284,19 +284,19 @@
       ]
     },
     "conj": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "constant": {
-      "kind": "operator",
+      "kind": "kernal",
       "inputs": [],
       "outputs": [{"name": "output", "shape": ["...config.shape"]}],
       "config": {"shape": {"type": "array"}, "dtype": {"type": "string", "default": "float32"}, "values": {"type": "array"}}
     },
     "contiguous_view": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...config.shape"]}],
@@ -304,7 +304,7 @@
       "shape_constraints": ["config.offset + product(config.shape) <= numel(x); shape dimensions are explicit."]
     },
     "conv1d": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/audio_ops.h",
       "inputs": [
         {"name": "input", "shape": ["N", "Cin", "L"]},
@@ -319,7 +319,7 @@
       }
     },
     "conv2d": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [
         {"name": "x", "shape": ["N", "Cin", "H", "W"]},
@@ -339,7 +339,7 @@
       ]
     },
     "conv2d_with_channel_bias": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/inference_ops.h",
       "inputs": [
         {"name": "input", "shape": ["N", "Cin", "H", "W"]},
@@ -359,20 +359,20 @@
       ]
     },
     "cos": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "cross_entropy": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "logits", "shape": ["...examples", "C"]}, {"name": "targets", "shape": ["...target_dims"]}],
       "outputs": [{"name": "output", "shape": []}],
       "shape_constraints": ["product(target_dims) == product(examples); logits rank >= 2."]
     },
     "cumsum": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}],
@@ -380,52 +380,52 @@
       "shape_constraints": ["config.dim addresses an existing input axis."]
     },
     "div": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "div_scalar": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}],
       "config": {"b": {"type": "number"}}
     },
     "dropout": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}],
       "config": {"probability": {"type": "number"}}
     },
     "embedding": {
-      "kind": "operator",
+      "kind": "kernal",
       "inputs": [{"name": "ids", "shape": ["...ids"]}, {"name": "weight", "shape": ["V", "D"]}],
       "outputs": [{"name": "output", "shape": ["...ids", "D"]}]
     },
     "eq": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "exact_gelu": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/inference_ops.h",
       "inputs": [{"name": "value", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "exp": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "expand": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...config.shape"]}],
@@ -433,20 +433,20 @@
       "shape_constraints": ["Only singleton dimensions can be broadcast to larger extents."]
     },
     "flatten": {
-      "kind": "operator",
+      "kind": "kernal",
       "inputs": [{"name": "input", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["product(input.shape[:axis])", "product(input.shape[axis:])"]}],
       "config": {"axis": {"type": "integer", "default": 1}}
     },
     "flux2::apply_rotary": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/flux2_ops.h",
       "inputs": [{"name": "heads", "shape": ["B", "H", "L", 128]}, {"name": "table", "shape": ["Bt", "L", 128]}],
       "outputs": [{"name": "output", "shape": ["B", "H", "L", 128]}],
       "shape_constraints": ["Bt is 1 or B."]
     },
     "flux2::attention": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/flux2_ops.h",
       "inputs": [
         {"name": "query", "shape": ["B", "H", "Q", 128]},
@@ -456,7 +456,7 @@
       "outputs": [{"name": "output", "shape": ["B", "H", "Q", 128]}]
     },
     "flux2::modulate": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/flux2_ops.h",
       "inputs": [
         {"name": "x", "shape": ["B", "L", "D"]},
@@ -467,7 +467,7 @@
       "shape_constraints": ["S is 1 or L."]
     },
     "flux2::pack_latents": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/flux2_ops.h",
       "inputs": [
         {"name": "posterior", "shape": ["B", "C", "2*H", "2*W"]},
@@ -478,19 +478,19 @@
       "shape_constraints": ["C is 32 (mean) or 64 (posterior moments)."]
     },
     "flux2::rotary_table": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/flux2_ops.h",
       "inputs": [{"name": "ids", "shape": ["B", "L", 4]}],
       "outputs": [{"name": "output", "shape": ["B", "L", 128]}]
     },
     "flux2::timestep_embedding": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/flux2_ops.h",
       "inputs": [{"name": "times", "shape": ["B"]}],
       "outputs": [{"name": "output", "shape": ["B", 256]}]
     },
     "flux2::unpack_latents": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/flux2_ops.h",
       "inputs": [
         {"name": "packed", "shape": ["B", 128, "H", "W"]},
@@ -500,7 +500,7 @@
       "outputs": [{"name": "output", "shape": ["B", 32, "2*H", "2*W"]}]
     },
     "gated_delta_rule": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/recurrent_ops.h",
       "inputs": [
         {"name": "query", "shape": ["B", "T", "Hk", "Dk"]},
@@ -514,7 +514,7 @@
       "shape_constraints": ["Hv % Hk == 0; recurrent state is Float32; omitted state is zero initialized."]
     },
     "gather": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}, {"name": "indices", "shape": ["...index_dims"]}],
       "outputs": [{"name": "output", "shape": ["...index_dims"]}],
@@ -522,20 +522,20 @@
       "shape_constraints": ["indices has the same rank as x; non-gather extents cannot exceed x."]
     },
     "ge": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "gelu": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "group_norm": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [
         {"name": "x", "shape": ["N", "C", "...spatial"]},
@@ -547,31 +547,31 @@
       "shape_constraints": ["C % config.groups == 0; rank >= 2."]
     },
     "gt": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "identity": {
-      "kind": "operator",
+      "kind": "kernal",
       "inputs": [{"name": "input", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "imag": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "image_tokens": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/inference_ops.h",
       "inputs": [{"name": "image", "shape": ["B", "C", "H", "W"]}],
       "outputs": [{"name": "output", "shape": ["B", "H * W", "C"]}]
     },
     "index_copy": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [
         {"name": "x", "shape": ["...before", "D", "...after"]},
@@ -583,7 +583,7 @@
       "shape_constraints": ["before/after are the dimensions before/after the normalized config.dim axis; D is its extent."]
     },
     "index_select": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...before", "D", "...after"]}, {"name": "indices", "shape": ["I"]}],
       "outputs": [{"name": "output", "shape": ["...before", "I", "...after"]}],
@@ -591,28 +591,28 @@
       "shape_constraints": ["before/after are the dimensions before/after the normalized config.dim axis; D is its extent."]
     },
     "layer_norm": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...batch", "D"]}, {"name": "weight", "shape": ["D"]}, {"name": "bias", "shape": ["D"]}],
       "outputs": [{"name": "output", "shape": ["...batch", "D"]}],
       "config": {"eps": {"type": "number", "default": 1e-05}}
     },
     "le": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "leaky_relu": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}],
       "config": {"slope": {"type": "number", "default": 0.01}}
     },
     "linear": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [
         {"name": "input", "shape": ["...batch", "I"]},
@@ -623,13 +623,13 @@
       "shape_constraints": ["Bias may also be a scalar []."]
     },
     "log": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "log_softmax": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}],
@@ -637,34 +637,34 @@
       "shape_constraints": ["config.dim addresses an existing input axis."]
     },
     "logical_and": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "logical_not": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "logical_or": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "lt": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "matmul": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [
         {"name": "a", "shape": ["...batch_a", "M", "N"], "shape_alternatives": [["N"]]},
@@ -683,14 +683,14 @@
       ]
     },
     "matmul_transposed": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...batch_a", "M", "N"]}, {"name": "b", "shape": ["...batch_b", "K", "N"]}],
       "outputs": [{"name": "output", "shape": ["...batch", "M", "K"]}],
       "shape_constraints": ["batch = broadcast(batch_a, batch_b); [M,N] x [K,N]^T -> [M,K]. Both operands have rank >= 2."]
     },
     "max": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...before", "D", "...after"], "shape_alternatives": [[]]}],
       "outputs": [{"name": "output", "shape": ["...before", "...after"], "shape_alternatives": [["...before", 1, "...after"]]}],
@@ -702,7 +702,7 @@
       ]
     },
     "max_pool2d": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["N", "C", "H", "W"]}],
       "outputs": [
@@ -727,14 +727,14 @@
       ]
     },
     "maximum": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "mean": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...before", "D", "...after"], "shape_alternatives": [[]]}],
       "outputs": [{"name": "output", "shape": ["...before", "...after"], "shape_alternatives": [["...before", 1, "...after"]]}],
@@ -746,18 +746,18 @@
       ]
     },
     "mean_all": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": []}]
     },
     "merge_heads": {
-      "kind": "operator",
+      "kind": "kernal",
       "inputs": [{"name": "input", "shape": ["B", "H", "T", "D"]}],
       "outputs": [{"name": "output", "shape": ["B", "T", "H * D"]}]
     },
     "min": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...before", "D", "...after"], "shape_alternatives": [[]]}],
       "outputs": [{"name": "output", "shape": ["...before", "...after"], "shape_alternatives": [["...before", 1, "...after"]]}],
@@ -769,14 +769,14 @@
       ]
     },
     "minimum": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "mse_loss": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "prediction", "shape": ["...dims"]}, {"name": "target", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": []}],
@@ -786,28 +786,28 @@
       ]
     },
     "mul": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "mul_scalar": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}],
       "config": {"b": {"type": "number"}}
     },
     "ne": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "normal": {
-      "kind": "operator",
+      "kind": "kernal",
       "inputs": [],
       "outputs": [{"name": "output", "shape": ["...config.shape"]}],
       "config": {
@@ -818,13 +818,13 @@
       }
     },
     "ones": {
-      "kind": "operator",
+      "kind": "kernal",
       "inputs": [],
       "outputs": [{"name": "output", "shape": ["...config.shape"]}],
       "config": {"shape": {"type": "array"}, "dtype": {"type": "string", "default": "float32"}}
     },
     "packed_linear": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [
         {"name": "input", "shape": ["...batch", "I"]},
@@ -836,7 +836,7 @@
       "shape_constraints": ["The output is a flat concatenation of separately flattened projections."]
     },
     "permute": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...permuted_dims"]}],
@@ -844,27 +844,27 @@
       "shape_constraints": ["axes is a permutation of all input axes.", "permuted_dims[i] = dims[axes[i]], with axes from config.axes."]
     },
     "position_ids": {
-      "kind": "operator",
+      "kind": "kernal",
       "inputs": [{"name": "input", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["input.shape[config.axis]"]}],
       "config": {"axis": {"type": "integer", "default": 1}}
     },
     "pow": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "pow_scalar": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}],
       "config": {"b": {"type": "number"}}
     },
     "prod": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...before", "D", "...after"], "shape_alternatives": [[]]}],
       "outputs": [{"name": "output", "shape": ["...before", "...after"], "shape_alternatives": [["...before", 1, "...after"]]}],
@@ -876,25 +876,25 @@
       ]
     },
     "quick_gelu": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/inference_ops.h",
       "inputs": [{"name": "value", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "real": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "relu": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "repeat": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...repeated_dims"]}],
@@ -902,7 +902,7 @@
       "shape_constraints": ["Left-pad dims with 1 to match config.repeats length; repeated_dims[i] = padded_dims[i] * config.repeats[i]."]
     },
     "reshape": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...target_dims"]}],
@@ -912,7 +912,7 @@
       ]
     },
     "rms_norm": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...batch", "D"]}, {"name": "weight", "shape": ["D"]}],
       "outputs": [{"name": "output", "shape": ["...batch", "D"]}],
@@ -922,7 +922,7 @@
       }
     },
     "rotary_embedding": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [
         {"name": "x", "shape": ["...batch", "D"]},
@@ -933,13 +933,13 @@
       "shape_constraints": ["D is even; cosine and sine broadcast to the full input shape without expanding it."]
     },
     "rsqrt": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "scaled_dot_product_attention": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [
         {
@@ -1005,7 +1005,7 @@
       ]
     },
     "scatter": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [
         {"name": "x", "shape": ["...dims"]},
@@ -1016,44 +1016,44 @@
       "config": {"dim": {"type": "integer"}}
     },
     "sgn": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "sigmoid": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/recurrent_ops.h",
       "inputs": [{"name": "input", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "sign": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "silu": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "silu_mul": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "gate", "shape": ["...A"]}, {"name": "up", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "sin": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "sinusoidal_embedding": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/inference_ops.h",
       "inputs": [],
       "outputs": [{"name": "output", "shape": [1, "config.width"]}],
@@ -1066,7 +1066,7 @@
       }
     },
     "slice": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...before", "D", "...after"]}],
       "outputs": [{"name": "output", "shape": ["...before", "L", "...after"]}],
@@ -1082,13 +1082,13 @@
       ]
     },
     "soft_target_cross_entropy": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "logits", "shape": ["...examples", "C"]}, {"name": "probabilities", "shape": ["...examples", "C"]}],
       "outputs": [{"name": "output", "shape": []}]
     },
     "softmax": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}],
@@ -1096,14 +1096,14 @@
       "shape_constraints": ["config.dim addresses an existing input axis."]
     },
     "sort": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "values", "shape": ["...dims"]}, {"name": "indices", "shape": ["...dims"]}],
       "config": {"dim": {"type": "integer", "default": -1}, "descending": {"type": "boolean", "default": false}}
     },
     "split": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...before", "D", "...after"]}],
       "outputs": [
@@ -1121,20 +1121,20 @@
       ]
     },
     "split_heads": {
-      "kind": "operator",
+      "kind": "kernal",
       "inputs": [{"name": "input", "shape": ["B", "T", "D"]}],
       "outputs": [{"name": "output", "shape": ["B", "config.heads", "T", "D / config.heads"]}],
       "config": {"heads": {"type": "integer"}},
       "shape_constraints": ["D % config.heads == 0."]
     },
     "sqrt": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "squeeze": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...before", "D", "...after"], "shape_alternatives": [[]]}],
       "outputs": [{"name": "output", "shape": ["...before", "...after"], "shape_alternatives": [["...before", "D", "...after"]]}],
@@ -1146,28 +1146,28 @@
       ]
     },
     "squeeze_all": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...remaining_dims"]}],
       "shape_constraints": ["remaining_dims preserves dims order after removing size-one axes."]
     },
     "sub": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(A, B)."]
     },
     "sub_scalar": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "a", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}],
       "config": {"b": {"type": "number"}}
     },
     "sum": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...before", "D", "...after"], "shape_alternatives": [[]]}],
       "outputs": [{"name": "output", "shape": ["...before", "...after"], "shape_alternatives": [["...before", 1, "...after"]]}],
@@ -1179,25 +1179,25 @@
       ]
     },
     "sum_all": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": []}]
     },
     "swish": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "tanh": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}]
     },
     "tiled_attention": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [
         {"name": "query", "shape": ["B", "Hq", "Q", "D"]},
@@ -1216,7 +1216,7 @@
       "shape_constraints": ["Hq % Hkv == 0; additive mask, when present, broadcasts to [B,Hq,Q,K]."]
     },
     "token_image": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Kernals/inference_ops.h",
       "inputs": [{"name": "tokens", "shape": ["B", "L", "C"]}],
       "outputs": [{"name": "output", "shape": ["B", "C", "config.height", "config.width"]}],
@@ -1224,7 +1224,7 @@
       "shape_constraints": ["L == config.height * config.width."]
     },
     "transpose": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...transposed_dims"]}],
@@ -1232,7 +1232,7 @@
       "shape_constraints": ["transposed_dims equals dims with dimensions at config.a and config.b exchanged."]
     },
     "tril": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}],
@@ -1240,7 +1240,7 @@
       "shape_constraints": ["Input rank >= 2; triangular masking uses the last two dimensions."]
     },
     "triu": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...dims"]}],
       "outputs": [{"name": "output", "shape": ["...dims"]}],
@@ -1248,7 +1248,7 @@
       "shape_constraints": ["Input rank >= 2; triangular masking uses the last two dimensions."]
     },
     "uniform": {
-      "kind": "operator",
+      "kind": "kernal",
       "inputs": [],
       "outputs": [{"name": "output", "shape": ["...config.shape"]}],
       "config": {
@@ -1259,7 +1259,7 @@
       }
     },
     "unsqueeze": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["...before", "...after"]}],
       "outputs": [{"name": "output", "shape": ["...before", 1, "...after"]}],
@@ -1267,27 +1267,27 @@
       "shape_constraints": ["The new size-one dimension is inserted at config.dim; before/after retain the original dimensions."]
     },
     "upsample_nearest2d": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "x", "shape": ["N", "C", "H", "W"]}],
       "outputs": [{"name": "output", "shape": ["N", "C", "H * config.scale_height", "W * config.scale_width"]}],
       "config": {"scale_height": {"type": "integer", "default": 2}, "scale_width": {"type": "integer", "default": 2}}
     },
     "where": {
-      "kind": "operator",
+      "kind": "kernal",
       "source": "Core/Tensor.h",
       "inputs": [{"name": "condition", "shape": ["...C"]}, {"name": "a", "shape": ["...A"]}, {"name": "b", "shape": ["...B"]}],
       "outputs": [{"name": "output", "shape": ["...broadcast_dims"]}],
       "shape_constraints": ["broadcast_dims = broadcast(C, A, B)."]
     },
     "zeros": {
-      "kind": "operator",
+      "kind": "kernal",
       "inputs": [],
       "outputs": [{"name": "output", "shape": ["...config.shape"]}],
       "config": {"shape": {"type": "array"}, "dtype": {"type": "string", "default": "float32"}}
     }
   },
-  "imported_graph_operators": {
+  "imported_graph_kernals": {
     "Identity": {
       "source": "Inference/GraphSession.cpp",
       "inputs": [{"name": "input0", "shape": ["...dims"]}],
@@ -2210,9 +2210,9 @@
     ]
   },
   "shape_notation": {
-    "purpose": "Dimension contracts for reading operator signatures; symbolic dimensions and constraints are not evaluated by the loader. Native kernels and model ports validate runtime shapes.",
+    "purpose": "Dimension contracts for reading kernal signatures; symbolic dimensions and constraints are not evaluated by the loader. Native kernels and model ports validate runtime shapes.",
     "array": "An ordered list of axis sizes. [M,N] is a rank-two matrix; [] is a scalar. Tensor port shapes are always arrays.",
-    "symbols": "Symbols are local to one operator signature. Reusing a symbol requires equal sizes: [M,N] x [N,K] -> [M,K]. Numbers specify fixed sizes.",
+    "symbols": "Symbols are local to one kernal signature. Reusing a symbol requires equal sizes: [M,N] x [N,K] -> [M,K]. Numbers specify fixed sizes.",
     "variadic_dimensions": "...name expands an ordered list of zero or more dimensions, at any position. [...batch,M,N] reduces to [M,N] when batch is empty.",
     "dimension_expression": "An array element may calculate one axis size, such as H*W or config.transA ? N : M. ...config.shape expands a configured dimension list.",
     "broadcast": "broadcast(A,B,...) right-aligns dimension lists, treating missing axes as 1. Aligned extents must match or be 1; the result takes the non-one extent, including 0.",

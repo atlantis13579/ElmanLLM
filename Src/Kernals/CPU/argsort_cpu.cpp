@@ -10,9 +10,9 @@ namespace elman {
 void launch_argsort_cpu(uint32_t* out, const uint32_t* a, const uint32_t*,
                         const uint32_t*, const KernelParams& p) {
   if (!p.output_count()) return;
-  int axis = p.attribute(operator_attr::sorting::kAxis);
+  int axis = p.attribute(kernal_attr::sorting::kAxis);
   int length = p.input_shape(KernelInput::A, axis), inner = p.input_stride(KernelInput::A, axis);
-  bool descending = p.attribute(operator_attr::sorting::kDescending) != 0;
+  bool descending = p.attribute(kernal_attr::sorting::kDescending) != 0;
   // The standard library still owns its merge scratch; reserve its upper bound.
   MemoryReservation reservation(Backend::CPU, checked_memory_mul(size_t(length), sizeof(int32_t)));
   BufferPtr workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(length), sizeof(int32_t)));

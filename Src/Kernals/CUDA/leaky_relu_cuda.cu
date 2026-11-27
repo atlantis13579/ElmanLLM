@@ -11,7 +11,7 @@ __global__ void kernel_leaky_relu_cuda(uint32_t* out, const uint32_t* a,
     WRITE_OUTPUT(
         i, x >= 0.0f
                ? x
-               : float_attribute(p, operator_attr::activation::kNegativeSlope) *
+               : float_attribute(p, kernal_attr::activation::kNegativeSlope) *
                      x);
   }
 }

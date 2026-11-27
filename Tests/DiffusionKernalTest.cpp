@@ -94,7 +94,7 @@ void timestep_reference() {
   const auto values = timestep_embedding(Tensor::from_data({2}, {.125f, 4.f}, backend)).data();
   for (int b = 0; b < 2; ++b) {
     for (int j = 0; j < 256; ++j) {
-      // The operator stores frequencies and computes phases in FP32.
+      // The kernal stores frequencies and computes phases in FP32.
       const float phase = (b == 0 ? 125.f : 4000.f) * float(std::pow(10000., -double(j % 128) / 128));
       close(values[b * 256 + j], float(j < 128 ? std::cos(phase) : std::sin(phase)), 1e-5f, "time");
     }
@@ -109,7 +109,7 @@ int main(int argc, char** argv) {
     if (!backend_available(backend)) return 77;
     for (DType dtype : {DType::Float32, DType::Float16, DType::BFloat16}) primitives(dtype);
     timestep_reference();
-    std::cout << "Diffusion operator checks passed on " << backend_name(backend) << '\n';
+    std::cout << "Diffusion kernal checks passed on " << backend_name(backend) << '\n';
     return 0;
   } catch (const std::exception& error) {
     std::cerr << error.what() << '\n';

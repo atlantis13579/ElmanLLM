@@ -16,10 +16,10 @@ __global__ void kernel_matmul_cuda(uint32_t* out, const uint32_t* a,
     int batch = i / (rows * columns);
     int abase = matrix_batch_offset(batch, KernelInput::A, p);
     int bbase = matrix_batch_offset(batch, KernelInput::B, p);
-    const bool transposed_a = p.attribute(operator_attr::matmul::kTransposeA) != 0;
+    const bool transposed_a = p.attribute(kernal_attr::matmul::kTransposeA) != 0;
     int shared_size =
         p.input_shape(KernelInput::A, p.input_rank(KernelInput::A) - (transposed_a ? 2 : 1));
-    bool transposed = p.attribute(operator_attr::matmul::kTransposeB) != 0;
+    bool transposed = p.attribute(kernal_attr::matmul::kTransposeB) != 0;
     if (kernel_integer(p.output_dtype())) {
       uint32_t integer_value = 0u;
       for (int k = 0; k < shared_size; ++k) {

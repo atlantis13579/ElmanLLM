@@ -12,7 +12,7 @@ void launch_permute_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
       source += coordinate *
                 p.input_stride(
                     KernelInput::A,
-                    p.attribute(operator_attr::permutation::kFirstAxis + axis));
+                    p.attribute(kernal_attr::permutation::kFirstAxis + axis));
     }
     COPY_INPUT_A(i, source);
   }

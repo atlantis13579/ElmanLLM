@@ -10,10 +10,10 @@ void launch_transpose_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
       int coordinate = flat % p.output_shape(axis);
       flat /= p.output_shape(axis);
       int source_axis =
-          axis == p.attribute(operator_attr::transpose::kFirstAxis)
-              ? p.attribute(operator_attr::transpose::kSecondAxis)
-              : (axis == p.attribute(operator_attr::transpose::kSecondAxis)
-                     ? p.attribute(operator_attr::transpose::kFirstAxis)
+          axis == p.attribute(kernal_attr::transpose::kFirstAxis)
+              ? p.attribute(kernal_attr::transpose::kSecondAxis)
+              : (axis == p.attribute(kernal_attr::transpose::kSecondAxis)
+                     ? p.attribute(kernal_attr::transpose::kFirstAxis)
                      : axis);
       source += coordinate * p.input_stride(KernelInput::A, source_axis);
     }

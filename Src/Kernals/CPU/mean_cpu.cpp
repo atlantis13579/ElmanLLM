@@ -7,7 +7,7 @@ void launch_mean_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
                      const uint32_t* c, const KernelParams& p) {
   parallel_for_cpu(p.output_count(), 128, [&](int64_t begin, int64_t end) {
     for (int i = static_cast<int>(begin); i < end; ++i) {
-      int axis = p.attribute(operator_attr::reduction::kAxis);
+      int axis = p.attribute(kernal_attr::reduction::kAxis);
       int inner = axis < 0 ? 1 : p.input_stride(KernelInput::A, axis);
       int length = axis < 0 ? input_count(KernelInput::A, p)
                             : p.input_shape(KernelInput::A, axis);

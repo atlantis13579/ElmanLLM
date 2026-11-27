@@ -27,7 +27,7 @@ private:
     std::shared_ptr<AllocationPoolState> state_;
 };
 
-// Byte-addressed, aligned scratch storage. Contents are unspecified; operators
+// Byte-addressed, aligned scratch storage. Contents are unspecified; kernals
 // must initialize every value they read. Ownership follows BufferPtr aliases.
 BufferPtr backend_workspace(Backend backend, size_t bytes);
 

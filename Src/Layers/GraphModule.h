@@ -30,7 +30,7 @@ class GraphModule final : public Module {
 std::unique_ptr<Module> create_layer(const std::string& type,
                                      const Json& config, Backend backend,
                                      uint32_t& seed);
-const Json& operator_catalog();
+const Json& kernal_catalog();
 void validate_operation(const std::string& type, const Json& config,
                         size_t inputs, size_t outputs);
 std::vector<Tensor> execute_operation(const std::string& type,

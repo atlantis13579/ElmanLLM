@@ -4,7 +4,7 @@
 
 namespace elman::flux2 {
 
-// Inference operators accept Float32, Float16 and BFloat16 activations.
+// Inference kernals accept Float32, Float16 and BFloat16 activations.
 // Supply [B,L,4] coordinates in (time, height, width, text) order. The FP32
 // [B,L,128] table can be shared by every block, and batch 1 broadcasts.
 Tensor rotary_table(const Tensor& ids);

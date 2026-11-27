@@ -52,7 +52,7 @@ __device__ Moments block_moments(Moments moments) {
 __device__ float2 normalization_stats(float mean, float variance, const KernelParams& p) {
   const int dtype = p.input_dtype(KernelInput::A);
   const bool narrow = is_narrow_float(DType(dtype));
-  float epsilon = float_attribute(p, operator_attr::group_norm::kEpsilon);
+  float epsilon = float_attribute(p, kernal_attr::group_norm::kEpsilon);
   if (narrow) epsilon = elman_cuda_decode(elman_cuda_encode(epsilon, dtype), dtype);
   float inverse = rsqrtf(variance + epsilon);
   if (narrow) {
@@ -118,7 +118,7 @@ void launch_group_norm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
   if (p.output_count() <= 0) return;
   const int channels = p.input_shape(KernelInput::A, tensor_axis::image::kChannels);
   const int spatial = p.input_stride(KernelInput::A, tensor_axis::image::kChannels);
-  const int length = (channels / p.attribute(operator_attr::group_norm::kGroups)) * spatial;
+  const int length = (channels / p.attribute(kernal_attr::group_norm::kGroups)) * spatial;
   const cudaStream_t stream = current_cuda_stream();
   BufferPtr workspace;
   float2* stats = nullptr;

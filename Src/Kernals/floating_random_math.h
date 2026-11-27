@@ -38,7 +38,7 @@ ELMAN_FLOATING_RANDOM_HD inline float floating_random_value(bool normal, int ind
         const float range = floating_random_round(high - low, dtype);
         float value = floating_random_round(::fmaf(range, floating_random_unit(uint64_t(index), p, dtype), low), dtype);
 #if defined(__CUDA_ARCH__)
-        // The native CUDA operator restores the lower endpoint after storage rounding.
+        // The native CUDA kernal restores the lower endpoint after storage rounding.
         if (value == high) value = low;
 #endif
         return value;

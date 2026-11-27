@@ -45,9 +45,9 @@ Tensor lower_tiled_attention(Graph m, const Operands& inputs, const KernelParams
     key = m.gather(key, ids, 1);
     value = m.gather(value, ids, 1);
   }
-  if (p.attribute(operator_attr::tiled_attention::kCausal)) {
+  if (p.attribute(kernal_attr::tiled_attention::kCausal)) {
     mask = causal_mask(m, mask, queries, key_count,
-                       p.attribute(operator_attr::tiled_attention::kCausalOffset), query.dataType);
+                       p.attribute(kernal_attr::tiled_attention::kCausalOffset), query.dataType);
   }
   float divisor = attribute_float(p, 0);
   if (p.attribute(7)) {
@@ -58,8 +58,8 @@ Tensor lower_tiled_attention(Graph m, const Operands& inputs, const KernelParams
   }
   const float scale = 1.f / divisor;
   const int value_width = p.output_shape(3);
-  const bool fully_blocked_rows = p.attribute(operator_attr::tiled_attention::kCausal) &&
-                                  p.attribute(operator_attr::tiled_attention::kCausalOffset) < 0;
+  const bool fully_blocked_rows = p.attribute(kernal_attr::tiled_attention::kCausal) &&
+                                  p.attribute(kernal_attr::tiled_attention::kCausalOffset) < 0;
   if (dimension != value_width || dimension % 8 != 0 || fully_blocked_rows) {
     // A finite additive mask on a fully blocked row still participates in
     // softmax. Fused SDPA is allowed to suppress such rows entirely.

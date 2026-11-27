@@ -10,7 +10,7 @@ void launch_batch_norm_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
     WRITE_OUTPUT(i, (READ_A(i) - READ_B(channel)) /
                         EL_SQRT(READ_C(channel) +
                                 float_attribute(
-                                    p, operator_attr::batch_norm::kEpsilon)));
+                                    p, kernal_attr::batch_norm::kEpsilon)));
   }
 }
 }  // namespace elman

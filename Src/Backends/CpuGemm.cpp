@@ -117,7 +117,7 @@ bool try_gemm_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
         p.input_dtype(KernelInput::B) != int(DType::Float32)) return false;
     if (p.output_count() == 0) return true;
     bool linear = operation == CpuGemmOperation::Linear;
-    bool transposed = linear || (operation == CpuGemmOperation::Matmul && p.attribute(operator_attr::matmul::kTransposeB) != 0);
+    bool transposed = linear || (operation == CpuGemmOperation::Matmul && p.attribute(kernal_attr::matmul::kTransposeB) != 0);
     MKL_INT columns = p.output_shape(p.output_rank() - 1);
     MKL_INT rows = linear ? p.output_count() / columns : p.output_shape(p.output_rank() - 2);
     MKL_INT shared = p.input_shape(KernelInput::A, p.input_rank(KernelInput::A) - 1);
@@ -127,8 +127,8 @@ bool try_gemm_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
     if (!linear && p.output_rank() > 2 && int64_t(rows) * columns * shared < 400) return false;
     float alpha = 1, beta = 0;
     if (operation == CpuGemmOperation::Addmm) {
-        alpha = float_attribute(p, operator_attr::addmm::kAlpha);
-        beta = float_attribute(p, operator_attr::addmm::kBeta);
+        alpha = float_attribute(p, kernal_attr::addmm::kAlpha);
+        beta = float_attribute(p, kernal_attr::addmm::kBeta);
     } else if (linear && p.input_rank(KernelInput::C) >= 0) beta = 1;
     if (alpha == 0) return false;
     if (beta != 0 && p.input_dtype(KernelInput::C) != int(DType::Float32)) return false;

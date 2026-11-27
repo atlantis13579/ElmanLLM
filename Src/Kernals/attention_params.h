@@ -12,7 +12,7 @@ struct TiledAttentionShape {
           heads(p.input_shape(KernelInput::A, 1)), queries(p.input_shape(KernelInput::A, 2)),
           keys(p.input_shape(KernelInput::B, 2)), dimension(p.input_shape(KernelInput::A, 3)),
           values(p.input_shape(KernelInput::C, 3)), groups(heads / p.input_shape(KernelInput::B, 1)),
-          tile(std::min(queries, p.attribute(operator_attr::tiled_attention::kQueryTile))) {}
+          tile(std::min(queries, p.attribute(kernal_attr::tiled_attention::kQueryTile))) {}
     AttentionGemm scores(int rows) const {
         return {dtype, rows, keys, dimension, batch * heads, groups,
                 queries * dimension, keys * dimension, rows * keys, true};
@@ -45,11 +45,11 @@ struct TiledAttentionShape {
         p.v[KernelParams::input_dtype_slot(KernelInput::A)] = int(dtype);
         p.v[KernelParams::input_dtype_slot(KernelInput::B)] = int(dtype);
         p.v[KernelParams::kOutputDTypeSlot] = int(dtype);
-        p.v[KernelParams::kAttributeSlot + operator_attr::attention_softmax::kAxis] = 3;
-        p.v[KernelParams::kAttributeSlot + operator_attr::attention_softmax::kDivisor] = source.attribute(operator_attr::tiled_attention::kDivisor);
-        p.v[KernelParams::kAttributeSlot + operator_attr::attention_softmax::kCausal] = source.attribute(operator_attr::tiled_attention::kCausal);
-        p.v[KernelParams::kAttributeSlot + operator_attr::attention_softmax::kCausalOffset] = source.attribute(operator_attr::tiled_attention::kCausalOffset);
-        p.v[KernelParams::kAttributeSlot + operator_attr::attention_softmax::kQueryBase] = start;
+        p.v[KernelParams::kAttributeSlot + kernal_attr::attention_softmax::kAxis] = 3;
+        p.v[KernelParams::kAttributeSlot + kernal_attr::attention_softmax::kDivisor] = source.attribute(kernal_attr::tiled_attention::kDivisor);
+        p.v[KernelParams::kAttributeSlot + kernal_attr::attention_softmax::kCausal] = source.attribute(kernal_attr::tiled_attention::kCausal);
+        p.v[KernelParams::kAttributeSlot + kernal_attr::attention_softmax::kCausalOffset] = source.attribute(kernal_attr::tiled_attention::kCausalOffset);
+        p.v[KernelParams::kAttributeSlot + kernal_attr::attention_softmax::kQueryBase] = start;
         return p;
     }
     size_t mask_offset(const KernelParams& p, int start) const {

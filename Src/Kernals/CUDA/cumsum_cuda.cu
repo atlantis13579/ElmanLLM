@@ -205,7 +205,7 @@ template <class T> void launch_float_scan(T* output, const T* input, int count, 
 
 void dispatch_scan(uint32_t* out, const uint32_t* a, const KernelParams& p, bool reverse) {
   if (!p.output_count()) return;
-  int axis = p.attribute(operator_attr::scan::kAxis);
+  int axis = p.attribute(kernal_attr::scan::kAxis);
   bool scalar = p.input_rank(KernelInput::A) == 0;
   int length = scalar ? 1 : p.input_shape(KernelInput::A, axis);
   int inner = scalar ? 1 : p.input_stride(KernelInput::A, axis);

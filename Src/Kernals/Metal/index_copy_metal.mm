@@ -10,7 +10,7 @@ Tensor lower_index_copy(Graph m, const Operands& inputs, const KernelParams& p) 
   if (!c) {
     return a;
   }
-  const int axis = p.attribute(operator_attr::indexing::kAxis);
+  const int axis = p.attribute(kernal_attr::indexing::kAxis);
   Shape update_shape = c.shape;
   const int rank = p.output_rank();
   Tensor ids = b.dataType == MPSDataTypeInt64 ? b : m.cast(b, MPSDataTypeInt32);

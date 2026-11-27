@@ -337,7 +337,7 @@ void dispatch_cuda(const std::string& op, const BufferPtr& output,
   const Float64Pointwise double_operation = low_operation == LowPrecisionPointwise::None ? float64_pointwise_operation(op, params) : Float64Pointwise::None;
   auto found = kernels.find(op);
   if (found == kernels.end() && double_operation == Float64Pointwise::None && complex_operation == ComplexPointwise::None)
-    throw std::runtime_error("Unknown CUDA operator: " + op);
+    throw std::runtime_error("Unknown CUDA kernal: " + op);
   const int arity = complex_operation != ComplexPointwise::None ? complex_pointwise_arity(complex_operation) :
       found == kernels.end() ? float64_pointwise_arity(double_operation) : found->second.inputs;
   CudaBuffer& target = checked_cuda(output);

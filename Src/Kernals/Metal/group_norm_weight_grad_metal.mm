@@ -15,7 +15,7 @@ Tensor lower_group_norm_weight_grad(Graph m, const Operands& inputs, const Kerne
   const int batches = p.input_shape(KernelInput::A, 0);
   const int channels = p.input_shape(KernelInput::A, 1);
   const int spatial = p.input_stride(KernelInput::A, 1);
-  const int groups = p.attribute(operator_attr::group_norm::kGroups);
+  const int groups = p.attribute(kernal_attr::group_norm::kGroups);
   NSArray<NSNumber*>* const group_shape = @[ @(batches), @(groups), @(channels / groups * spatial) ];
   NSArray<NSNumber*>* const channel_shape = @[ @(batches), @(channels), @(spatial) ];
   NSArray<NSNumber*>* const reduce_axes = @[ @2 ];

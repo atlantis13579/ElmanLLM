@@ -21,7 +21,7 @@
 #include <string>
 
 namespace {
-namespace operators {
+namespace kernals {
 using namespace elman;
 int checks = 0;
 size_t elements = 0, nan_encodings = 0;
@@ -1887,7 +1887,7 @@ void run_suite(Backend backend, const Suite& suite) {
     run_checked(backend, std::string(suite.option + 2), [&] { suite.run(backend); });
 }
 
-}  // namespace operators
+}  // namespace kernals
 
 namespace optimizer_reference {
 using namespace elman;
@@ -2246,7 +2246,7 @@ void run(elman::Backend backend,const std::filesystem::path& directory){
 }  // namespace optimizer_guards
 
 void run_float8(elman::Backend backend, const std::filesystem::path& output) {
-    for (const operators::Suite& suite : operators::float8_suites) operators::run_suite(backend, suite);
+    for (const kernals::Suite& suite : kernals::float8_suites) kernals::run_suite(backend, suite);
     const std::chrono::steady_clock::rep stamp = std::chrono::steady_clock::now().time_since_epoch().count();
     optimizer_guards::run(backend, output / std::to_string(stamp));
 }
@@ -2271,17 +2271,17 @@ int main(int argc, char** argv) {
             return optimizer_reference::run(backend, argv[2], true, argv[4]);
         } else if (argc == 3) {
             const std::string option = argv[2];
-            for (const operators::Suite& suite : operators::float8_suites) {
+            for (const kernals::Suite& suite : kernals::float8_suites) {
                 if (option != suite.option) continue;
-                operators::run_suite(backend, suite);
+                kernals::run_suite(backend, suite);
                 return 0;
             }
-            for (const operators::Suite& suite : operators::other_suites) {
+            for (const kernals::Suite& suite : kernals::other_suites) {
                 if (option != suite.option) continue;
-                operators::run_suite(backend, suite);
+                kernals::run_suite(backend, suite);
                 return 0;
             }
-            operators::run_checked(backend, option, [&] { operators::reference(backend, option); });
+            kernals::run_checked(backend, option, [&] { kernals::reference(backend, option); });
         } else {
             throw std::invalid_argument("Invalid Float8 test mode");
         }

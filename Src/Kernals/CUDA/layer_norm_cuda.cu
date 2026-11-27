@@ -17,7 +17,7 @@ __global__ void layer_norm_rows(uint32_t* out, const uint32_t* a, const uint32_t
     squares += __fmul_rn(delta, delta);
   }
   const float variance = row_reduce<false>(squares, scratch) / float(length);
-  const float inverse = rsqrtf(variance + float_attribute(p, operator_attr::normalization::kEpsilon));
+  const float inverse = rsqrtf(variance + float_attribute(p, kernal_attr::normalization::kEpsilon));
   for (int j = threadIdx.x; j < length; j += threads) {
     const int i = base + j;
     float value = (READ_A(i) - mean) * inverse;
@@ -36,7 +36,7 @@ __global__ void kernel_layer_norm_cuda(uint32_t* out, const uint32_t* a,
     int length = 1;
     for (int axis =
              p.input_rank(KernelInput::A) -
-             p.attribute(operator_attr::normalization::kTrailingDimensions);
+             p.attribute(kernal_attr::normalization::kTrailingDimensions);
          axis < p.input_rank(KernelInput::A); ++axis) {
       length *= p.input_shape(KernelInput::A, axis);
     }
@@ -55,7 +55,7 @@ __global__ void kernel_layer_norm_cuda(uint32_t* out, const uint32_t* a,
     float value =
         (READ_A(i) - average) /
         EL_SQRT(variance +
-                float_attribute(p, operator_attr::normalization::kEpsilon));
+                float_attribute(p, kernal_attr::normalization::kEpsilon));
     int coordinate = i % length;
     if (p.input_rank(KernelInput::B) >= 0) {
       value *= READ_B(coordinate);
@@ -71,7 +71,7 @@ void launch_layer_norm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
   if (p.output_count() > 0) {
     const int rank = p.input_rank(KernelInput::A);
     int length = 1;
-    for (int axis = rank - p.attribute(operator_attr::normalization::kTrailingDimensions); axis < rank; ++axis)
+    for (int axis = rank - p.attribute(kernal_attr::normalization::kTrailingDimensions); axis < rank; ++axis)
       length *= p.input_shape(KernelInput::A, axis);
     if (length >= 128 && p.output_dtype() == int(DType::Float32)) {
       layer_norm_rows<<<p.output_count() / length, threads, 0, current_cuda_stream()>>>(out, a, b, c, length, p);

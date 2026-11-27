@@ -6,7 +6,7 @@ void launch_index_copy_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
                            const uint32_t* c, const KernelParams& p) {
     if (!p.output_count()) return;
     if (out != a) std::memcpy(out, a, dtype_storage_bytes(DType(p.output_dtype()), size_t(p.output_count())));
-    int axis = p.attribute(operator_attr::index_copy::kAxis);
+    int axis = p.attribute(kernal_attr::index_copy::kAxis);
     int inner = p.input_stride(KernelInput::C, axis), length = p.input_shape(KernelInput::C, axis);
     int destination_length = p.input_shape(KernelInput::A, axis);
     for (int i = 0, count = input_count(KernelInput::C, p); i < count; ++i) {

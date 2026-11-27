@@ -6,12 +6,12 @@ differentiation, model training, checkpoint loading, and inference.
 
 ## Capabilities
 
-### Tensor types and operators
+### Tensor types and kernals
 
 - Tensor operations cover elementwise arithmetic and comparisons, shape transforms,
   indexing and scatter/gather, reductions, matrix multiplication, convolution,
   pooling, normalization, losses, random sampling, and dropout.
-- Specialized operators include attention, rotary embeddings, quantized affine
+- Specialized kernals include attention, rotary embeddings, quantized affine
   transforms, and packed low-bit linear projections. Supported data types include
   floating-point, integer, Boolean, complex, and quantized formats; availability
   varies by operation and backend.
@@ -25,9 +25,9 @@ differentiation, model training, checkpoint loading, and inference.
 
 - A common backend interface supports CPU, NVIDIA CUDA, and Apple Metal, with
   native kernels and optional acceleration libraries.
-- CPU: native operators with optional Intel oneMKL acceleration for FP32 matrix
+- CPU: native kernals with optional Intel oneMKL acceleration for FP32 matrix
   multiplication and vector math.
-- CUDA: native operators combined with cuBLAS/cuBLASLt for matrix multiplication
+- CUDA: native kernals combined with cuBLAS/cuBLASLt for matrix multiplication
   and optional cuDNN for convolution, or Elman's own GEMM kernels without a BLAS
   dependency. The custom GEMM path uses shared-memory/register tiling, FP16/BF16
   Tensor Core products with FP32 accumulation, and specialized small-row decode
@@ -36,7 +36,7 @@ differentiation, model training, checkpoint loading, and inference.
   MPSGraph compiling tensor operations into GPU executables.
 - Multi-device CUDA execution supports layer placement and tensor parallelism.
 
-### Operator fusion
+### Kernal fusion
 
 - Dataflow analysis groups compatible FP32 pointwise operations and trailing-axis
   reductions in forward and backward execution to reduce dispatch overhead and
@@ -47,7 +47,7 @@ differentiation, model training, checkpoint loading, and inference.
   Compiled programs are cached for reuse.
 - Fusion and first-use numerical verification are enabled by default. Unsupported
   operations use ordinary execution; compilation failures or verification
-  mismatches also fall back to the original operators.
+  mismatches also fall back to the original kernals.
 
 ### Training
 

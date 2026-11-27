@@ -258,7 +258,7 @@ Tensor pack(Graph m, Tensor values, int count, unsigned width) {
 }
 
 // MPSGraph can move IEEE binary64 words without converting the value. Keep
-// the physical lane dimension outside the logical shape used by the operator.
+// the physical lane dimension outside the logical shape used by the kernal.
 Tensor wide_layout(Graph m, Lowering kernel, const std::string& op, const Operands& tensors,
                    const KernelParams& p) {
   const DType out = DType(p.output_dtype());

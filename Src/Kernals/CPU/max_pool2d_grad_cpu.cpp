@@ -17,20 +17,20 @@ void launch_max_pool2d_grad_cpu(uint32_t* out, const uint32_t* a,
     float value = 0.0f;
     for (int oy = 0; oy < output_height; ++oy) {
       for (int ox = 0; ox < output_width; ++ox) {
-        int start_y = oy * p.attribute(operator_attr::pool2d::kStrideHeight) -
-                      p.attribute(operator_attr::pool2d::kPaddingHeight);
-        int start_x = ox * p.attribute(operator_attr::pool2d::kStrideWidth) -
-                      p.attribute(operator_attr::pool2d::kPaddingWidth);
+        int start_y = oy * p.attribute(kernal_attr::pool2d::kStrideHeight) -
+                      p.attribute(kernal_attr::pool2d::kPaddingHeight);
+        int start_x = ox * p.attribute(kernal_attr::pool2d::kStrideWidth) -
+                      p.attribute(kernal_attr::pool2d::kPaddingWidth);
         if (iy >= start_y &&
-            iy < start_y + p.attribute(operator_attr::pool2d::kKernelHeight) &&
+            iy < start_y + p.attribute(kernal_attr::pool2d::kKernelHeight) &&
             ix >= start_x &&
-            ix < start_x + p.attribute(operator_attr::pool2d::kKernelWidth)) {
+            ix < start_x + p.attribute(kernal_attr::pool2d::kKernelWidth)) {
           float maximum_value = -EL_INF;
           int selected = -1;
           for (int ky = 0;
-               ky < p.attribute(operator_attr::pool2d::kKernelHeight); ++ky) {
+               ky < p.attribute(kernal_attr::pool2d::kKernelHeight); ++ky) {
             for (int kx = 0;
-                 kx < p.attribute(operator_attr::pool2d::kKernelWidth); ++kx) {
+                 kx < p.attribute(kernal_attr::pool2d::kKernelWidth); ++kx) {
               int y = start_y + ky;
               int x = start_x + kx;
               if (y >= 0 && y < input_height && x >= 0 && x < input_width) {

@@ -17,7 +17,7 @@ void validate_low_precision_random(LowPrecisionRandom op, const BufferPtr& outpu
     }
     require(is_low_precision_float(output->dtype), "Low precision random operation requires a low precision output");
     require(p.attribute(8) == 0 || p.attribute(8) == 1, "Invalid low precision random parameter encoding");
-    require(p.attribute(operator_attr::dropout::kBackward) == 0 || (dropout && p.attribute(operator_attr::dropout::kBackward) == 1), "Invalid low precision random derivative mode");
+    require(p.attribute(kernal_attr::dropout::kBackward) == 0 || (dropout && p.attribute(kernal_attr::dropout::kBackward) == 1), "Invalid low precision random derivative mode");
     const int rank = p.output_rank();
     require(rank >= 0 && rank <= 8, "Invalid low precision random rank");
     if (dropout) require(inputs[0] && inputs[0]->dtype == output->dtype && p.input_rank(KernelInput::A) == rank,

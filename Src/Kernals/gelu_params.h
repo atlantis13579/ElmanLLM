@@ -1,5 +1,5 @@
 #pragma once
 
-namespace elman::operator_attr::gelu {
+namespace elman::kernal_attr::gelu {
 inline constexpr int kExact = 1;
-}  // namespace elman::operator_attr::gelu
+}  // namespace elman::kernal_attr::gelu

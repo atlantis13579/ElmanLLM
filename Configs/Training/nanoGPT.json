@@ -2,7 +2,7 @@
   "format": "elman.training",
   "version": 1,
   "model_name": "nanoGPT",
-  "model": "../../Models/nanoGPT.json",
+  "model": "../../Models/NanoGPT.json",
   "backend": "cuda",
   "data": {
     "format": "character_text",
@@ -34,8 +34,8 @@
     "precision": "float32",
     "matmul_precision": "fp32",
     "convolution_precision": "fp32",
-    "operator_fusion": true,
-    "operator_fusion_verify": true,
+    "kernal_fusion": true,
+    "kernal_fusion_verify": true,
     "asynchronous": true,
     "reuse_memory": true,
     "pool_megabytes": 3072

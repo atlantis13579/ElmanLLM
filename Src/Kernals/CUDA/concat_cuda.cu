@@ -14,7 +14,7 @@ __global__ void kernel_concat_cuda(uint32_t* out, const uint32_t* a,
   unsigned int element = blockIdx.x * blockDim.x + threadIdx.x;
   if (element < unsigned(p.output_count())) {
     int i = int(element);
-    int axis = p.attribute(operator_attr::concat::kAxis);
+    int axis = p.attribute(kernal_attr::concat::kAxis);
     int inner = p.input_stride(KernelInput::A, axis);
     int full = p.output_shape(axis);
     int coordinate = (i / inner) % full;
@@ -43,7 +43,7 @@ void launch_concat_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
   if (p.output_count() > 0) {
     if (p.output_dtype() == int(DType::Float32) && p.input_dtype(KernelInput::A) == p.output_dtype() &&
         p.input_dtype(KernelInput::B) == p.output_dtype()) {
-      const int axis = p.attribute(operator_attr::concat::kAxis), inner = p.input_stride(KernelInput::A, axis);
+      const int axis = p.attribute(kernal_attr::concat::kAxis), inner = p.input_stride(KernelInput::A, axis);
       const int left = p.input_shape(KernelInput::A, axis) * inner, right = p.input_shape(KernelInput::B, axis) * inner;
       if (left % 4 == 0 && right % 4 == 0 && reinterpret_cast<uintptr_t>(out) % 16 == 0 &&
           reinterpret_cast<uintptr_t>(a) % 16 == 0 && reinterpret_cast<uintptr_t>(b) % 16 == 0) {

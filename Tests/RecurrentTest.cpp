@@ -80,6 +80,6 @@ int main(int argc, char** argv) {
         try { causal_depthwise_conv1d(input,weights,Tensor::zeros({1,3,2},backend)); }
         catch (const std::invalid_argument&) { rejected = true; }
         check(rejected,"Invalid convolution state accepted");
-        std::cout << "Recurrent operator checks passed\n"; return 0;
+        std::cout << "Recurrent kernal checks passed\n"; return 0;
     } catch (const std::exception& error) { std::cerr << error.what() << '\n'; return 1; }
 }

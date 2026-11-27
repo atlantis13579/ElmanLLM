@@ -24,16 +24,16 @@ __global__ void kernel_addmm_cuda(uint32_t* out, const uint32_t* a,
                          uint32_t(READ_INT_B(bbase + k * columns + column));
       }
       integer_value =
-          uint32_t(int(float_attribute(p, operator_attr::addmm::kAlpha))) *
+          uint32_t(int(float_attribute(p, kernal_attr::addmm::kAlpha))) *
               integer_value +
-          uint32_t(int(float_attribute(p, operator_attr::addmm::kBeta))) *
+          uint32_t(int(float_attribute(p, kernal_attr::addmm::kBeta))) *
               uint32_t(READ_INT_C(broadcast_index(i, KernelInput::C, p)));
       WRITE_INT_OUTPUT(i, int(integer_value));
       return;
     }
     float value = 0.0f;
-    const float alpha = float_attribute(p, operator_attr::addmm::kAlpha);
-    const float beta = float_attribute(p, operator_attr::addmm::kBeta);
+    const float alpha = float_attribute(p, kernal_attr::addmm::kAlpha);
+    const float beta = float_attribute(p, kernal_attr::addmm::kBeta);
     for (int k = 0; alpha != 0.0f && k < shared_size; ++k) {
       value += READ_A(abase + row * shared_size + k) *
                READ_B(bbase + k * columns + column);

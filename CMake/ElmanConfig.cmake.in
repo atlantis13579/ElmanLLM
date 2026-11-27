@@ -1,7 +1,0 @@
-@PACKAGE_INIT@
-
-include("${CMAKE_CURRENT_LIST_DIR}/ElmanTargets.cmake")
-
-set(Elman_BIN_DIR "@PACKAGE_CMAKE_INSTALL_BINDIR@")
-
-check_required_components(Elman)

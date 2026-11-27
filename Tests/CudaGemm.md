@@ -80,10 +80,8 @@ device pointer batches. Cancellation cases retain FP32 mantissa bits below
 TF32 precision; large/small exponent products catch accidental FP16 narrowing.
 References use CPU double
 accumulation over the values actually representable in each input dtype.
-Existing CUDA operator, attention, graph, dtype and math-policy suites check
+Existing CUDA kernal, attention, graph, dtype and math-policy suites check
 integration with the rest of the framework.
-`cuda_no_blas_dependencies` inspects the built library's imports when `dumpbin`
-or `readelf` is available. It rejects cuBLAS, cuBLASLt and cuDNN dependencies.
 
 `--benchmark` first runs correctness checks, then prints CSV latency and GFLOP/s
 for decode, small-model projections, larger GEMM and irregular sizes. Timed

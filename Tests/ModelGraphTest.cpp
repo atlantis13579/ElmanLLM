@@ -48,7 +48,7 @@ void graph_tests(Backend backend, const std::filesystem::path& directory) {
   check(graph->parameters()[0].value.grad() == std::vector<float>({2, 1, 2, 1}),
         "Graph gradient");
   check(result.at("indices").int_data() == std::vector<int32_t>({0, 1}),
-        "Multiple operator outputs");
+        "Multiple kernal outputs");
   const auto checkpoint = directory / "branch.elman";
   const auto path = directory / "branch.json";
   definition.write(path.string());
@@ -84,7 +84,7 @@ void graph_tests(Backend backend, const std::filesystem::path& directory) {
   layers[0] = bad_node;
   malformed["layers"] = layers;
   rejects([&] { create_model(malformed, backend); });
-  bad_node["class_name"] = "NotAnOperator";
+  bad_node["class_name"] = "NotAnKernal";
   layers[0] = bad_node;
   malformed["layers"] = layers;
   rejects([&] { create_model(malformed, backend); });
@@ -95,8 +95,8 @@ void graph_tests(Backend backend, const std::filesystem::path& directory) {
         1);
   });
   rejects([&] { graph->forward(nn::TensorMap{{"x", input.at("x")}}, false); });
-  check(nn::operator_catalog().at("entries").object().size() > 100,
-        "Operator catalog coverage");
+  check(nn::kernal_catalog().at("entries").object().size() > 100,
+        "Kernal catalog coverage");
 }
 void state_tests(Backend backend, const std::filesystem::path& directory) {
   const auto definition = Json::parse(
@@ -203,7 +203,7 @@ void subgraph_tests(Backend backend, const std::filesystem::path& directory) {
 }
 
 void compact_catalog_tests() {
-  const auto& catalog = nn::operator_catalog();
+  const auto& catalog = nn::kernal_catalog();
   check(catalog.at("version").integer() == 2, "Compact catalog version");
   nn::validate_operation(
       "Linear", Json::Object{{"in_features", 2}, {"out_features", 3}}, 1, 1);

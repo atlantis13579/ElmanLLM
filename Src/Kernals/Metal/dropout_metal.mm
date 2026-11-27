@@ -6,7 +6,7 @@
 namespace elman::metal {
 MPSMatrixRandomDistributionDescriptor* dropout_distribution(const KernelParams& p) {
   const double first = float64_random_parameter(p, 0);
-  if (!p.attribute(operator_attr::dropout::kTraining) || first == 0 || first == 1) {
+  if (!p.attribute(kernal_attr::dropout::kTraining) || first == 0 || first == 1) {
     return nil;
   }
   return [MPSMatrixRandomDistributionDescriptor uniformDistributionDescriptorWithMinimum:0 maximum:1];
@@ -15,7 +15,7 @@ MPSMatrixRandomDistributionDescriptor* dropout_distribution(const KernelParams& 
 Tensor lower_dropout(Graph m, const Operands& inputs, const KernelParams& p) {
   Tensor a = inputs[0];
   const double first = float64_random_parameter(p, 0);
-  if (!p.attribute(operator_attr::dropout::kTraining) || first == 0) {
+  if (!p.attribute(kernal_attr::dropout::kTraining) || first == 0) {
     return a;
   }
   if (first == 1) {

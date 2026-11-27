@@ -15,33 +15,33 @@ __global__ void kernel_conv2d_weight_grad_cuda(uint32_t* out, const uint32_t* a,
   if (element < unsigned(p.output_count())) {
     int i = int(element);
     if (repair_nan && !isnan(reinterpret_cast<float*>(out)[i])) return;
-    int kernel_width = p.output_shape(operator_attr::conv2d::kWidthAxis);
-    int kernel_height = p.output_shape(operator_attr::conv2d::kHeightAxis);
-    int channels_per_group = p.output_shape(operator_attr::conv2d::kChannelAxis);
-    int output_channels = p.output_shape(operator_attr::conv2d::kOutputChannelAxis);
+    int kernel_width = p.output_shape(kernal_attr::conv2d::kWidthAxis);
+    int kernel_height = p.output_shape(kernal_attr::conv2d::kHeightAxis);
+    int channels_per_group = p.output_shape(kernal_attr::conv2d::kChannelAxis);
+    int output_channels = p.output_shape(kernal_attr::conv2d::kOutputChannelAxis);
     int kx = i % kernel_width;
     int ky = (i / kernel_width) % kernel_height;
     int local_channel =
         (i / (kernel_width * kernel_height)) % channels_per_group;
     int oc = i / (channels_per_group * kernel_height * kernel_width);
-    int batches = p.input_shape(KernelInput::A, operator_attr::conv2d::kBatchAxis);
-    int input_channels = p.input_shape(KernelInput::A, operator_attr::conv2d::kChannelAxis);
-    int input_height = p.input_shape(KernelInput::A, operator_attr::conv2d::kHeightAxis);
-    int input_width = p.input_shape(KernelInput::A, operator_attr::conv2d::kWidthAxis);
-    int output_height = p.input_shape(KernelInput::B, operator_attr::conv2d::kHeightAxis);
-    int output_width = p.input_shape(KernelInput::B, operator_attr::conv2d::kWidthAxis);
-    int outputs_per_group = output_channels / p.attribute(operator_attr::conv2d::kGroups);
+    int batches = p.input_shape(KernelInput::A, kernal_attr::conv2d::kBatchAxis);
+    int input_channels = p.input_shape(KernelInput::A, kernal_attr::conv2d::kChannelAxis);
+    int input_height = p.input_shape(KernelInput::A, kernal_attr::conv2d::kHeightAxis);
+    int input_width = p.input_shape(KernelInput::A, kernal_attr::conv2d::kWidthAxis);
+    int output_height = p.input_shape(KernelInput::B, kernal_attr::conv2d::kHeightAxis);
+    int output_width = p.input_shape(KernelInput::B, kernal_attr::conv2d::kWidthAxis);
+    int outputs_per_group = output_channels / p.attribute(kernal_attr::conv2d::kGroups);
     int ic = (oc / outputs_per_group) * channels_per_group + local_channel;
     float value = 0.0f;
     for (int batch = 0; batch < batches; ++batch) {
       for (int oy = 0; oy < output_height; ++oy) {
         for (int ox = 0; ox < output_width; ++ox) {
-          int iy = oy * p.attribute(operator_attr::conv2d::kStrideHeight) -
-                   p.attribute(operator_attr::conv2d::kPaddingHeight) +
-                   ky * p.attribute(operator_attr::conv2d::kDilationHeight);
-          int ix = ox * p.attribute(operator_attr::conv2d::kStrideWidth) -
-                   p.attribute(operator_attr::conv2d::kPaddingWidth) +
-                   kx * p.attribute(operator_attr::conv2d::kDilationWidth);
+          int iy = oy * p.attribute(kernal_attr::conv2d::kStrideHeight) -
+                   p.attribute(kernal_attr::conv2d::kPaddingHeight) +
+                   ky * p.attribute(kernal_attr::conv2d::kDilationHeight);
+          int ix = ox * p.attribute(kernal_attr::conv2d::kStrideWidth) -
+                   p.attribute(kernal_attr::conv2d::kPaddingWidth) +
+                   kx * p.attribute(kernal_attr::conv2d::kDilationWidth);
           if (iy >= 0 && iy < input_height && ix >= 0 && ix < input_width) {
             value +=
                 READ_A(((batch * input_channels + ic) * input_height + iy) *
@@ -87,7 +87,7 @@ __global__ void sum_filter_tiles(float* out, const float* partials, int weights,
   out[i] = sum;
 }
 bool tiled_filter_gradient(uint32_t* out, const uint32_t* a, const uint32_t* b, const KernelParams& p) {
-  using namespace operator_attr::conv2d;
+  using namespace kernal_attr::conv2d;
   constexpr int fp32 = int(DType::Float32);
   if (p.output_rank() != 4 || p.input_rank(KernelInput::A) != 4 || p.input_rank(KernelInput::B) != 4 ||
       p.output_dtype() != fp32 || p.input_dtype(KernelInput::A) != fp32 || p.input_dtype(KernelInput::B) != fp32 ||

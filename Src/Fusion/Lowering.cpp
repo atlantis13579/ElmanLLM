@@ -18,7 +18,7 @@ Dimensions input_shape(const KernelParams& p, int index) {
 }
 bool last_axis(const KernelParams& p) { return p.input_rank(KernelInput::A) > 0 && p.attribute(0) == p.input_rank(KernelInput::A) - 1; }
 }
-// These are mathematical operator definitions. The analyzer never matches operator
+// These are mathematical kernal definitions. The analyzer never matches kernal
 // names or model subgraphs: it only sees the resulting primitive dataflow.
 bool has_definition(const std::string& operation) {
     static const std::unordered_set<std::string> definitions{

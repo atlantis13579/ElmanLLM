@@ -12,7 +12,7 @@ namespace {
 void require(bool value, const char* message) { if (!value) throw std::invalid_argument(message); }
 void same_device(const Tensor& a, const Tensor& b) {
     require(b.defined() && a.backend() == b.backend() && a.device() == b.device(), "Recurrent operands must share a device");
-    require(!b.requires_grad(), "Recurrent inference operators do not record gradients");
+    require(!b.requires_grad(), "Recurrent inference kernals do not record gradients");
 }
 }
 

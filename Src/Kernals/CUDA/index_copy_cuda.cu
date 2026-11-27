@@ -15,7 +15,7 @@ __global__ void copy_indexed(uint32_t* out, const uint32_t* indices, const uint3
                              const uint32_t* order, int count, KernelParams p) {
     unsigned element = blockIdx.x * blockDim.x + threadIdx.x;
     if (element >= unsigned(count)) return;
-    int i = int(element), axis = p.attribute(operator_attr::index_copy::kAxis);
+    int i = int(element), axis = p.attribute(kernal_attr::index_copy::kAxis);
     int inner = p.input_stride(KernelInput::C, axis), length = p.input_shape(KernelInput::C, axis);
     int position = i / inner % length;
     int selected_source = order ? int(order[position]) : position;
@@ -48,7 +48,7 @@ void launch_index_copy_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
     if (!count) return;
     BufferPtr order, narrowed;
     const uint32_t* keys = b;
-    if (p.attribute(operator_attr::index_copy::kHasDuplicates)) {
+    if (p.attribute(kernal_attr::index_copy::kHasDuplicates)) {
         int length = p.input_shape(KernelInput::B, 0);
         order = backend_workspace(Backend::CUDA, size_t(length) * sizeof(int32_t));
         if (p.input_dtype(KernelInput::B) == int(DType::Int64)) {

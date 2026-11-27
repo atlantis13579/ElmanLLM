@@ -10,7 +10,7 @@ namespace {
 
 std::filesystem::path asset_path(std::string_view path) {
   if (path.empty() || path.front() != '/') return {};
-  if (path == "/") return "index.html";
+  if (path == "/") return "Index.html";
   std::string name;
   for (size_t i = 1; i < path.size(); ++i) {
     unsigned char byte = static_cast<unsigned char>(path[i]);

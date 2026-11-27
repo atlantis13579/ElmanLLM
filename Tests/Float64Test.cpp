@@ -1141,7 +1141,7 @@ void resume(Backend backend,const std::filesystem::path& directory) {
             TrainingState old_state=optimizer.state();std::vector<uint8_t> old_first=old_state.first_moment_double[0].raw_data();
             uint64_t before=backend_dispatch_count(backend);
             check(optimizer.update(model,.01)==restored_optimizer.update(restored,.01),"Resumed gradient norm differs");
-            check(backend_dispatch_count(backend)>before,"Double optimizer did not use native operators");
+            check(backend_dispatch_count(backend)>before,"Double optimizer did not use native kernals");
             check(old_state.first_moment_double[0].raw_data()==old_first,"Optimizer mutated a saved state snapshot");
             check(snapshot(model,optimizer.state())==snapshot(restored,restored_optimizer.state()),"Resumed Double optimizer differs");
         }

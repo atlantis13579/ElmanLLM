@@ -5,7 +5,7 @@ namespace elman {
 template <bool Product>
 __global__ void integer_reduction_cuda(uint64_t* output, const uint32_t* input, KernelParams p) {
     int row = int(blockIdx.x), lane = int(threadIdx.x);
-    int axis = p.attribute(operator_attr::reduction::kAxis);
+    int axis = p.attribute(kernal_attr::reduction::kAxis);
     int inner = axis < 0 ? 1 : p.input_stride(KernelInput::A, axis);
     int length = axis < 0 ? input_count(KernelInput::A, p) : p.input_shape(KernelInput::A, axis);
     int base = axis < 0 ? 0 : (row / inner) * length * inner + row % inner;

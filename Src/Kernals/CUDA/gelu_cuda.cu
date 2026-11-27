@@ -10,7 +10,7 @@ __global__ void kernel_gelu_cuda(uint32_t* out, const uint32_t* a,
   if (element < unsigned(p.output_count())) {
     int i = int(element);
     float x = READ_A(i);
-    if (p.attribute(operator_attr::gelu::kExact)) {
+    if (p.attribute(kernal_attr::gelu::kExact)) {
       WRITE_OUTPUT(i, 0.5f * x * (1.0f + erff(x * 0.7071067811865475f)));
       return;
     }

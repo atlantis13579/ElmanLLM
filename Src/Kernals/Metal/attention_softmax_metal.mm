@@ -9,7 +9,7 @@ namespace elman::metal {
 Tensor lower_attention_softmax(Graph m, const Operands& inputs, const KernelParams& p) {
   Tensor input = inputs[0];
   Tensor stored = inputs[1];
-  const int axis = p.attribute(operator_attr::reduction::kAxis);
+  const int axis = p.attribute(kernal_attr::reduction::kAxis);
   const int rank = input.shape.count, selected = std::max(axis, 0);
   Tensor work = m.float_work(input);
   switch (p.attribute(8)) {
@@ -40,7 +40,7 @@ Tensor lower_attention_softmax(Graph m, const Operands& inputs, const KernelPara
       return m.matmul(work, stored);
     }
     default: {
-      using namespace operator_attr::attention_softmax;
+      using namespace kernal_attr::attention_softmax;
       float divisor = attribute_float(p, kDivisor);
       if (p.attribute(7)) {
         const uint64_t bits = uint64_t(uint32_t(p.attribute(5))) | (uint64_t(uint32_t(p.attribute(6))) << 32);

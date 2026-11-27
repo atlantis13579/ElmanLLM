@@ -94,7 +94,7 @@ __global__ void log_softmax_strided(uint32_t* out, const uint32_t* a,
 void launch_log_softmax_cuda(uint32_t* out, const uint32_t* a,
                              const uint32_t*, const uint32_t*, const KernelParams& p) {
   if (!p.output_count()) return;
-  const int axis = p.attribute(operator_attr::softmax::kAxis);
+  const int axis = p.attribute(kernal_attr::softmax::kAxis);
   const int rank = p.input_rank(KernelInput::A);
   const int inner = rank ? p.input_stride(KernelInput::A, axis) : 1;
   const int length = rank ? p.input_shape(KernelInput::A, axis) : 1;

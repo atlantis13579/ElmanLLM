@@ -81,7 +81,7 @@ template<class Input> __global__ void spatial_softmax_cuda(uint32_t* out, const 
 template<class Input> void launch_softmax_cuda_impl(uint32_t* out, const uint32_t* a, const uint32_t* b,
                                                     const KernelParams& p, Input read, int input_dtype) {
   if (p.output_count() > 0) {
-    int axis = p.attribute(operator_attr::softmax::kAxis);
+    int axis = p.attribute(kernal_attr::softmax::kAxis);
     int inner = p.input_rank(KernelInput::A) == 0 ? 1 : p.input_stride(KernelInput::A, axis);
     int length = p.input_rank(KernelInput::A) == 0 ? 1 : p.input_shape(KernelInput::A, axis);
     if (inner == 1 && length <= 2048) {

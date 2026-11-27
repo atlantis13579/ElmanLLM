@@ -365,7 +365,7 @@ private:
             {"ExpandDims", "ExpandDims"}, {"Pack", "Stack"}, {"StridedSlice", "StridedSlice"}, {"Pad", "Pad"},
         };
         const auto found = operations.find(op);
-        require(found != operations.end(), "Unsupported TensorFlow inference operator " + op);
+        require(found != operations.end(), "Unsupported TensorFlow inference kernal " + op);
         Json::Object attributes;
         if (op == "Pack") attributes.emplace("axis", int(node.attr("axis").integer(3)));
         if (op == "StridedSlice") {

@@ -24,7 +24,7 @@ __global__ void group_norm_input_grad_rows(uint32_t* out, const uint32_t* a,
   }
   const float variance = row_reduce<false>(squares, scratch) * reciprocal;
   const float average_dy = row_reduce<false>(weighted, scratch) * reciprocal;
-  const float inverse = rsqrtf(variance + float_attribute(p, operator_attr::group_norm::kEpsilon));
+  const float inverse = rsqrtf(variance + float_attribute(p, kernal_attr::group_norm::kEpsilon));
   const float slope = row_reduce<false>(cross, scratch) * reciprocal * inverse * inverse;
   for (int j = threadIdx.x; j < length; j += threads) {
     const int i = base + j;
@@ -41,7 +41,7 @@ __global__ void kernel_group_norm_input_grad_cuda(uint32_t* out, const uint32_t*
     int i = int(element);
     int channels = p.input_shape(KernelInput::A, tensor_axis::image::kChannels);
     int spatial = p.input_stride(KernelInput::A, tensor_axis::image::kChannels);
-    int per_group = channels / p.attribute(operator_attr::group_norm::kGroups);
+    int per_group = channels / p.attribute(kernal_attr::group_norm::kGroups);
     int length = per_group * spatial;
     int base = (i / length) * length;
     float average = 0;
@@ -53,7 +53,7 @@ __global__ void kernel_group_norm_input_grad_cuda(uint32_t* out, const uint32_t*
       variance += difference * difference;
     }
     variance /= float(length);
-    float epsilon = float_attribute(p, operator_attr::group_norm::kEpsilon);
+    float epsilon = float_attribute(p, kernal_attr::group_norm::kEpsilon);
     const int dtype = p.input_dtype(KernelInput::A);
     if (dtype == 3 || dtype == 4) epsilon = elman_cuda_decode(elman_cuda_encode(epsilon, dtype), dtype);
     float inverse = rsqrtf(variance + epsilon);
@@ -92,7 +92,7 @@ void launch_group_norm_input_grad_cuda(uint32_t* out, const uint32_t* a,
   if (p.output_count() > 0) {
     const int channels = p.input_shape(KernelInput::A, tensor_axis::image::kChannels);
     const int spatial = p.input_stride(KernelInput::A, tensor_axis::image::kChannels);
-    const int length = channels / p.attribute(operator_attr::group_norm::kGroups) * spatial;
+    const int length = channels / p.attribute(kernal_attr::group_norm::kGroups) * spatial;
     if (length >= 128 && p.output_dtype() == int(DType::Float32)) {
       group_norm_input_grad_rows<<<p.output_count() / length, threads, 0, current_cuda_stream()>>>(
           out, a, b, c, channels, spatial, length, p);

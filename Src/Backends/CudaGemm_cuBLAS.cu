@@ -348,7 +348,7 @@ void convolution_filter_partials_cuda(float* partials, const float* packed, int 
 
 bool try_pointwise_conv_gradient_cuda(CudaConvolution operation, uint32_t* out,
                                        const uint32_t* a, const uint32_t* b, const KernelParams& p) {
-  using namespace operator_attr::conv2d;
+  using namespace kernal_attr::conv2d;
   constexpr int fp32 = int(DType::Float32);
   if (p.output_rank() != 4 || p.input_rank(KernelInput::A) != 4 || p.input_rank(KernelInput::B) != 4 ||
       p.output_dtype() != fp32 || p.input_dtype(KernelInput::A) != fp32 || p.input_dtype(KernelInput::B) != fp32 ||
@@ -394,16 +394,16 @@ bool try_gemm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
       p.input_dtype(KernelInput::B) != p.output_dtype()) return false;
   if (p.output_count() == 0) return true;
   const bool linear = operation == GemmOperation::Linear;
-  const bool transposed = linear || (operation == GemmOperation::Matmul && p.attribute(operator_attr::matmul::kTransposeB) != 0);
-  const bool transposed_a = operation == GemmOperation::Matmul && p.attribute(operator_attr::matmul::kTransposeA) != 0;
+  const bool transposed = linear || (operation == GemmOperation::Matmul && p.attribute(kernal_attr::matmul::kTransposeB) != 0);
+  const bool transposed_a = operation == GemmOperation::Matmul && p.attribute(kernal_attr::matmul::kTransposeA) != 0;
   const int columns = p.output_shape(p.output_rank() - 1);
   const int rows = linear ? p.output_count() / columns : p.output_shape(p.output_rank() - 2);
   const int shared = p.input_shape(KernelInput::A, p.input_rank(KernelInput::A) - (transposed_a ? 2 : 1));
   const int batches = linear ? 1 : p.output_count() / (rows * columns);
   float alpha = 1, beta = 0;
   if (operation == GemmOperation::Addmm) {
-    alpha = attribute(p, operator_attr::addmm::kAlpha);
-    beta = attribute(p, operator_attr::addmm::kBeta);
+    alpha = attribute(p, kernal_attr::addmm::kAlpha);
+    beta = attribute(p, kernal_attr::addmm::kBeta);
   } else if (linear && p.input_rank(KernelInput::C) >= 0) beta = 1;
   // Preserve the reference kernel's empty-inner-dimension and ignored-NaN rules.
   if (shared == 0 || alpha == 0) return false;

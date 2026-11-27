@@ -1,7 +1,7 @@
 #pragma once
 #include "Core/Backend.h"
 namespace elman {
-// Private stages of the standard SDPA operator, not graph rewrite rules.
+// Private stages of the standard SDPA kernal, not graph rewrite rules.
 void validate_sdpa_stage(bool backward, const BufferPtr& output,
                          const std::vector<BufferPtr>& inputs, const KernelParams& params);
 namespace sdpa_attr {

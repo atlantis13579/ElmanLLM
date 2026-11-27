@@ -56,14 +56,13 @@ file(GLOB_RECURSE ELMAN_HEADERS CONFIGURE_DEPENDS
 # Src/Tools holds standalone command line tools, each with its own entry point.
 list(FILTER ELMAN_SOURCES EXCLUDE REGEX "/Src/Tools/")
 if(ELMAN_ENABLE_CUDA)
-    file(GLOB_RECURSE CUDA_OPERATORS CONFIGURE_DEPENDS "Src/Kernals/CUDA/*.cu")
+    file(GLOB_RECURSE CUDA_KERNALS CONFIGURE_DEPENDS "Src/Kernals/CUDA/*.cu")
     list(APPEND ELMAN_SOURCES
         Src/Backends/Cuda.cu
         Src/Backends/CudaExecution.cu
         Src/Backends/CudaGraph.cu
         Src/Backends/CudaGemm.cu
-        Src/Backends/CudaGemm_cuBLAS.cu
-        ${CUDA_OPERATORS})
+        ${CUDA_KERNALS})
     if(MSVC)
         # CCCL requires the conforming MSVC preprocessor in CUDA 13.
         set_source_files_properties(Src/Kernals/CUDA/argsort_cuda.cu Src/Kernals/CUDA/cumsum_cuda.cu
@@ -162,7 +161,7 @@ if(ELMAN_ENABLE_CUDA)
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different ${ELMAN_CUDNN_RUNTIME} "${ELMAN_TEST_RUNTIME_DIRECTORY}" VERBATIM)
         endif()
     endif()
-    target_link_libraries(elman_core PRIVATE CUDA::cublas CUDA::cublasLt)
+    target_link_libraries(elman_core PRIVATE CUDA::cublas CUDA::cublasLt CUDA::nvrtc CUDA::cuda_driver)
     if(WIN32)
         # Resolve cuBLAS from the installed CUDA Toolkit through PATH at run time.
         file(GLOB ELMAN_CUBLAS_RUNTIME "${CUDAToolkit_BIN_DIR}/cublas64_*.dll"
@@ -226,21 +225,29 @@ endif()
 
 # Standalone command line tools. They live outside the library because each one
 # provides its own entry point.
+add_library(elman_tool_io STATIC Src/Tools/ToolIO.cpp)
+target_link_libraries(elman_tool_io PUBLIC elman_core)
+if(WIN32)
+    target_link_libraries(elman_tool_io PRIVATE bcrypt)
+elseif(NOT APPLE)
+    find_package(OpenSSL REQUIRED COMPONENTS Crypto)
+    target_link_libraries(elman_tool_io PRIVATE OpenSSL::Crypto)
+endif()
 add_executable(elman_import_weights Src/Tools/ImportWeights.cpp)
 target_link_libraries(elman_import_weights PRIVATE elman_core)
-add_executable(elman_quantize_weights Src/Tools/QuantizeWeights.cpp Src/Tools/ToolIO.cpp)
-target_link_libraries(elman_quantize_weights PRIVATE elman_core)
+add_executable(elman_quantize_weights Src/Tools/QuantizeWeights.cpp)
+target_link_libraries(elman_quantize_weights PRIVATE elman_tool_io)
 if(NOT WIN32)
     target_link_libraries(elman_quantize_weights PRIVATE Threads::Threads)
 endif()
 add_executable(elman_launch_distributed Src/Tools/LaunchDistributed.cpp)
-target_link_libraries(elman_launch_distributed PRIVATE elman_core)
+target_link_libraries(elman_launch_distributed PRIVATE elman_core Threads::Threads)
 option(ELMAN_ENABLE_ONNX "Build the ONNX graph import tool (requires the ONNX C++ library)" OFF)
 if(ELMAN_ENABLE_ONNX)
     find_package(onnx CONFIG REQUIRED)
     add_executable(elman_import_onnx Src/Tools/ImportOnnx.cpp)
     target_compile_definitions(elman_import_onnx PRIVATE ELMAN_HAS_ONNX)
-    target_link_libraries(elman_import_onnx PRIVATE elman_core onnx onnx_proto)
+    target_link_libraries(elman_import_onnx PRIVATE elman_tool_io onnx onnx_proto)
 endif()
 
 enable_testing()
@@ -262,7 +269,27 @@ if(WIN32)
         endif()
     endforeach()
     list(REMOVE_DUPLICATES ELMAN_RUNTIME_FILENAMES)
-    configure_file(CMake/PruneRuntime.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/PruneRuntime.cmake" @ONLY)
+    file(CONFIGURE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/PruneRuntime.cmake" CONTENT [=[
+cmake_minimum_required(VERSION 3.24)
+
+# Remove only obsolete vendor runtimes from this build/install's binary directory.
+if(NOT DEFINED ELMAN_RUNTIME_DIRECTORY OR ELMAN_RUNTIME_DIRECTORY STREQUAL "")
+    message(FATAL_ERROR "ELMAN_RUNTIME_DIRECTORY is required")
+endif()
+set(expected "@ELMAN_RUNTIME_FILENAMES@")
+file(GLOB candidates LIST_DIRECTORIES FALSE
+    "${ELMAN_RUNTIME_DIRECTORY}/mkl_*.dll"
+    "${ELMAN_RUNTIME_DIRECTORY}/libiomp5md*.dll"
+    "${ELMAN_RUNTIME_DIRECTORY}/cudnn*.dll"
+    "${ELMAN_RUNTIME_DIRECTORY}/cublas64_*.dll"
+    "${ELMAN_RUNTIME_DIRECTORY}/cublasLt64_*.dll")
+foreach(candidate IN LISTS candidates)
+    get_filename_component(filename "${candidate}" NAME)
+    if(NOT filename IN_LIST expected)
+        file(REMOVE "${candidate}")
+    endif()
+endforeach()
+]=] @ONLY)
     add_custom_command(TARGET elman_core POST_BUILD
         COMMAND ${CMAKE_COMMAND} "-DELMAN_RUNTIME_DIRECTORY=${ELMAN_TEST_RUNTIME_DIRECTORY}"
             -P "${CMAKE_CURRENT_BINARY_DIR}/PruneRuntime.cmake" VERBATIM)
@@ -276,7 +303,17 @@ install(DIRECTORY Src/ DESTINATION ${CMAKE_INSTALL_INCLUDEDIR}/Elman
     FILES_MATCHING PATTERN "*.h" PATTERN "*.inc")
 install(DIRECTORY App/Web/ DESTINATION ${CMAKE_INSTALL_DATADIR}/Elman/Web)
 install(EXPORT ElmanTargets NAMESPACE Elman:: DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Elman)
-configure_package_config_file(CMake/ElmanConfig.cmake.in "${CMAKE_CURRENT_BINARY_DIR}/ElmanConfig.cmake"
+# The package helper requires a template file; keep it in the build directory.
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/ElmanConfig.cmake.in" [=[
+@PACKAGE_INIT@
+
+include("${CMAKE_CURRENT_LIST_DIR}/ElmanTargets.cmake")
+
+set(Elman_BIN_DIR "@PACKAGE_CMAKE_INSTALL_BINDIR@")
+
+check_required_components(Elman)
+]=])
+configure_package_config_file("${CMAKE_CURRENT_BINARY_DIR}/ElmanConfig.cmake.in" "${CMAKE_CURRENT_BINARY_DIR}/ElmanConfig.cmake"
     INSTALL_DESTINATION ${CMAKE_INSTALL_LIBDIR}/cmake/Elman
     PATH_VARS CMAKE_INSTALL_BINDIR)
 write_basic_package_version_file("${CMAKE_CURRENT_BINARY_DIR}/ElmanConfigVersion.cmake"

@@ -239,7 +239,7 @@ Bundle import_graph(const fs::path& source) {
     for (onnx::NodeProto& node : *model.mutable_graph()->mutable_node()) {
         const auto op = supported().find(node.op_type());
         const std::string name = node.name().empty() ? node.op_type() : node.name();
-        if (op == supported().end()) throw std::invalid_argument(name + ": unsupported ONNX operator " + node.op_type());
+        if (op == supported().end()) throw std::invalid_argument(name + ": unsupported ONNX kernal " + node.op_type());
         if ((node.domain() != "" && node.domain() != "ai.onnx") ||
             std::count_if(node.output().begin(), node.output().end(), [](const std::string& s) { return !s.empty(); }) != 1)
             throw std::invalid_argument(name + ": expected one named output in the standard ONNX domain");

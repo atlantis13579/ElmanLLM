@@ -8,7 +8,7 @@
 
 namespace elman {
 namespace {
-using namespace operator_attr::conv2d;
+using namespace kernal_attr::conv2d;
 
 __device__ float direct_value(const uint32_t* a, const uint32_t* b, const uint32_t* c,
                               const KernelParams& p, int i) {

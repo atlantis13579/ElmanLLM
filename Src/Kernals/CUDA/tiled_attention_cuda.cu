@@ -118,16 +118,16 @@ bool try_online_attention(uint32_t* out, const uint32_t* q, const uint32_t* k,
                           const TiledAttentionShape& s, const KernelParams& p) {
     if (s.dtype != DType::Float32 || s.dimension != 64 || s.values != 64 ||
         s.queries < 32 || s.keys < keys_per_tile || s.keys > 2048 || s.batch * s.heads > 65535 ||
-        p.attribute(operator_attr::tiled_attention::kTiling) != 0)
+        p.attribute(kernal_attr::tiled_attention::kTiling) != 0)
         return false;
     OnlineAttention options{};
     options.query_count = s.queries;
     options.key_count = s.keys;
     options.head_count = s.heads;
     options.groups = s.groups;
-    options.causal = p.attribute(operator_attr::tiled_attention::kCausal) != 0;
-    options.causal_offset = p.attribute(operator_attr::tiled_attention::kCausalOffset);
-    const int scale_bits = p.attribute(operator_attr::tiled_attention::kDivisor);
+    options.causal = p.attribute(kernal_attr::tiled_attention::kCausal) != 0;
+    options.causal_offset = p.attribute(kernal_attr::tiled_attention::kCausalOffset);
+    const int scale_bits = p.attribute(kernal_attr::tiled_attention::kDivisor);
     float divisor;
     std::memcpy(&divisor, &scale_bits, sizeof(divisor));
     options.scale = 1.f / divisor;
@@ -186,7 +186,7 @@ void launch_tiled_attention_cuda(uint32_t* out, const uint32_t* q, const uint32_
     TiledAttentionShape s(p);
     if (try_online_attention(out, q, k, v, mask, s, p)) return;
     size_t bytes = dtype_storage_bytes(s.dtype, 1);
-    if (p.attribute(operator_attr::tiled_attention::kTiling) == 1) {
+    if (p.attribute(kernal_attr::tiled_attention::kTiling) == 1) {
         BufferPtr workspace = backend_workspace(Backend::CUDA, checked_memory_mul(size_t(s.queries) * s.keys, bytes));
         uint32_t* scores = static_cast<uint32_t*>(workspace->raw_pointer());
         AttentionGemm qk = s.scores(s.queries), pv = s.attended(s.queries);

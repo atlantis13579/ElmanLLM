@@ -8,7 +8,7 @@ __global__ void kernel_index_select_grad_cuda(uint32_t* out, const uint32_t* a,
   unsigned int element = blockIdx.x * blockDim.x + threadIdx.x;
   if (element < unsigned(p.output_count())) {
     int i = int(element);
-    int axis = p.attribute(operator_attr::indexing::kAxis);
+    int axis = p.attribute(kernal_attr::indexing::kAxis);
     int inner = output_stride(axis, p);
     int length = p.output_shape(axis);
     int selected = (i / inner) % length;

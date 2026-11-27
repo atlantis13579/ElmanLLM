@@ -47,7 +47,7 @@ enum class KernelInput : int { A = 0, B = 1, C = 2, D = 3 };
 #endif
 
 struct KernelParams {
-  // Packed ABI slots shared by CPU and CUDA. Operators use the accessors below.
+  // Packed ABI slots shared by CPU and CUDA. Kernals use the accessors below.
   static constexpr int kOutputCountSlot = 0;
   static constexpr int kOutputRankSlot = 1;
   static constexpr int kOutputShapeSlot = 2;

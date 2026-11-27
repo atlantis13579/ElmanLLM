@@ -22,7 +22,7 @@ private:
 };
 
 // Q is [batch,heads,queries,dimension]; physical K/V are
-// [physical_slots,kv_heads*dimension]. This inference operator does not gather K/V.
+// [physical_slots,kv_heads*dimension]. This inference kernal does not gather K/V.
 Tensor paged_attention(const Tensor& query, const Tensor& keys, const Tensor& values,
                        const PagedAttentionMap& map, int kv_heads, float divisor,
                        int query_tile = 32, bool causal = true, int causal_offset = 0);

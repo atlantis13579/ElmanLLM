@@ -12,7 +12,7 @@ void validate_floating_dropout(const BufferPtr& output, const std::vector<Buffer
         require(p.input_rank(KernelInput(i)) == -1, "Unexpected floating dropout descriptor");
     }
     require(p.attribute(8) == 0 || p.attribute(8) == 1, "Invalid floating dropout parameter encoding");
-    require(p.attribute(operator_attr::dropout::kBackward) == 0 || p.attribute(operator_attr::dropout::kBackward) == 1, "Invalid floating dropout derivative mode");
+    require(p.attribute(kernal_attr::dropout::kBackward) == 0 || p.attribute(kernal_attr::dropout::kBackward) == 1, "Invalid floating dropout derivative mode");
     const double probability = float64_random_parameter(p, 0);
     require(probability >= 0. && probability <= 1. && (p.attribute(3) == 0 || p.attribute(3) == 1), "Invalid floating dropout probability or training flag");
     const int rank = p.output_rank();

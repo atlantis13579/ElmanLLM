@@ -397,7 +397,7 @@ int main(int argc,char** argv) {
         const Backend backend=elman::parse_backend(argc>1?argv[1]:"cpu");
         if(!elman::backend_available(backend))return 77;
         test_kernel_reference(backend);
-        std::cout<<"PASS "<<visited.size()<<" native operators on "<<elman::backend_name(backend)<<"; expected values, CPU parity, and convolution finite differences\n";
+        std::cout<<"PASS "<<visited.size()<<" native kernals on "<<elman::backend_name(backend)<<"; expected values, CPU parity, and convolution finite differences\n";
         return 0;
     }catch(const std::exception& error){std::cerr<<"FAIL native kernels: "<<error.what()<<'\n';return 1;}
 }

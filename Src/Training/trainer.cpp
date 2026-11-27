@@ -120,9 +120,9 @@ int train_model(Model& model, const BatchDataset& data, const TrainingRun& run, 
   fusion::Options fusion_options;
   const bool gpu_fusion = run.backend == Backend::CUDA || run.backend == Backend::Metal;
   const bool legacy_fusion = run.backend != Backend::CUDA || settings.bool_or("cuda_fusion", true);
-  fusion_options.enabled = gpu_fusion && settings.bool_or("operator_fusion", legacy_fusion);
-  fusion_options.verify = settings.bool_or("operator_fusion_verify", settings.bool_or("cuda_fusion_verify", true));
-  fusion_options.cache_directory = settings.string_or("operator_fusion_cache", settings.string_or("cuda_fusion_cache", "Intermediate/Fusion"));
+  fusion_options.enabled = gpu_fusion && settings.bool_or("kernal_fusion", legacy_fusion);
+  fusion_options.verify = settings.bool_or("kernal_fusion_verify", settings.bool_or("cuda_fusion_verify", true));
+  fusion_options.cache_directory = settings.string_or("kernal_fusion_cache", settings.string_or("cuda_fusion_cache", "Intermediate/Fusion"));
   fusion::Policy fusion_policy(fusion_options);
   const auto fusion_before = fusion::statistics();
   require(is_compute_float(precision), "Training precision must be float32, float16 or bfloat16");
@@ -403,7 +403,7 @@ int train_model(Model& model, const BatchDataset& data, const TrainingRun& run, 
       {"precision", dtype_name(precision)},
       {"matmul_precision", matmul_precision},
       {"convolution_precision", convolution_precision},
-      {"operator_fusion", fusion::enabled()},
+      {"kernal_fusion", fusion::enabled()},
       {"cuda_fusion", run.backend == Backend::CUDA && fusion::enabled()},
       {"fusion_compiled", double(fusion_after.compiled-fusion_before.compiled)},
       {"fusion_cache_hits", double(fusion_after.cache_hits-fusion_before.cache_hits)},

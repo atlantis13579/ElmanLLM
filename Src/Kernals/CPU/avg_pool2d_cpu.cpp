@@ -14,19 +14,19 @@ void launch_avg_pool2d_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
     int input_width = p.input_shape(KernelInput::A, tensor_axis::image::kWidth);
     float value = 0.0f;
     int count = 0;
-    for (int ky = 0; ky < p.attribute(operator_attr::pool2d::kKernelHeight);
+    for (int ky = 0; ky < p.attribute(kernal_attr::pool2d::kKernelHeight);
          ++ky) {
-      for (int kx = 0; kx < p.attribute(operator_attr::pool2d::kKernelWidth);
+      for (int kx = 0; kx < p.attribute(kernal_attr::pool2d::kKernelWidth);
            ++kx) {
-        int iy = oy * p.attribute(operator_attr::pool2d::kStrideHeight) -
-                 p.attribute(operator_attr::pool2d::kPaddingHeight) + ky;
-        int ix = ox * p.attribute(operator_attr::pool2d::kStrideWidth) -
-                 p.attribute(operator_attr::pool2d::kPaddingWidth) + kx;
+        int iy = oy * p.attribute(kernal_attr::pool2d::kStrideHeight) -
+                 p.attribute(kernal_attr::pool2d::kPaddingHeight) + ky;
+        int ix = ox * p.attribute(kernal_attr::pool2d::kStrideWidth) -
+                 p.attribute(kernal_attr::pool2d::kPaddingWidth) + kx;
         if (iy >= 0 && iy < input_height && ix >= 0 && ix < input_width) {
           float x = READ_A((plane * input_height + iy) * input_width + ix);
           value += x;
           ++count;
-        } else if (p.attribute(operator_attr::pool2d::kCountIncludePadding) !=
+        } else if (p.attribute(kernal_attr::pool2d::kCountIncludePadding) !=
                    0) {
           ++count;
         }

@@ -26,7 +26,7 @@ __global__ void weight_gradient_terms(float* terms, const uint32_t* a, const uin
     const float variance = row_reduce<false>(squares, scratch) / float(length);
     dot = row_reduce<false>(dot, scratch);
     if (threadIdx.x == 0)
-        terms[channel] = dot * rsqrtf(variance + float_attribute(p, operator_attr::group_norm::kEpsilon));
+        terms[channel] = dot * rsqrtf(variance + float_attribute(p, kernal_attr::group_norm::kEpsilon));
 }
 
 __global__ void finish_weight_gradient(uint32_t* out, const float* terms,
@@ -48,7 +48,7 @@ __device__ float group_weight_term(const uint32_t* a, const uint32_t* b, const K
     for (int j = 0; j < length; ++j) mean = __fadd_rn(mean, READ_A(base + j));
     mean /= float(length);
     for (int j = 0; j < length; ++j) { float delta = READ_A(base + j) - mean; variance = fmaf(delta, delta, variance); }
-    float epsilon = float_attribute(p, operator_attr::group_norm::kEpsilon);
+    float epsilon = float_attribute(p, kernal_attr::group_norm::kEpsilon);
     int dtype = p.input_dtype(KernelInput::A);
     if (dtype == 3 || dtype == 4) epsilon = elman_cuda_decode(elman_cuda_encode(epsilon, dtype), dtype);
     float inverse = rsqrtf(variance / float(length) + epsilon);
@@ -96,7 +96,7 @@ void launch_group_norm_weight_grad_cuda(uint32_t* out, const uint32_t* a, const 
     if (!p.output_count()) return;
     const int batch = p.input_shape(KernelInput::A, 0), channels = p.input_shape(KernelInput::A, 1);
     const int spatial = p.input_stride(KernelInput::A, 1);
-    const int per_group = channels / p.attribute(operator_attr::group_norm::kGroups);
+    const int per_group = channels / p.attribute(kernal_attr::group_norm::kGroups);
     const cudaStream_t stream = current_cuda_stream();
     if (batch && spatial >= 128 && p.output_dtype() == int(DType::Float32) &&
         p.input_dtype(KernelInput::A) == int(DType::Float32)) {

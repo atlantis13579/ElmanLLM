@@ -62,7 +62,7 @@ template <IndexedWrite operation>
 void launch_indexed_write(uint32_t* out, const uint32_t* a, const uint32_t* b,
                           const uint32_t* c, const KernelParams& p) {
   if (p.output_count() <= 0) return;
-  const int axis = p.attribute(operator_attr::indexing::kAxis);
+  const int axis = p.attribute(kernal_attr::indexing::kAxis);
   int inner = 1;
   for (int dim = axis + 1; dim < p.output_rank(); ++dim) inner *= p.output_shape(dim);
   indexed_write<operation><<<(unsigned(p.output_count()) + 255u) / 256u, 256, 0,

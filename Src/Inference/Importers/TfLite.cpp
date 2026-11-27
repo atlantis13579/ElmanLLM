@@ -205,7 +205,7 @@ Lowered lower(int code, const Table& options, size_t input_count, DType output_d
         case 92: return {"Square", {}};
         case 98: return {"LeakyRelu", {{"alpha", double(options.number(0, 0))}}};
         case 101: return {"Abs", {}};
-        default: throw std::invalid_argument("Unsupported TFLite operator code " + std::to_string(code));
+        default: throw std::invalid_argument("Unsupported TFLite kernal code " + std::to_string(code));
     }
 }
 
@@ -270,7 +270,7 @@ InferenceSession load_tflite_session(const std::filesystem::path& path, Backend 
     const Vector codes = model.vector(1, 4), subgraphs = model.vector(2, 4), buffers = model.vector(4, 4);
     require(subgraphs.count == 1 && buffers.count > 0, "TFLite requires a single subgraph and a buffer catalog");
     const Table graph = Table::entry(file, subgraphs, 0);
-    const Vector tensors = graph.vector(0, 4), operators = graph.vector(3, 4);
+    const Vector tensors = graph.vector(0, 4), kernals = graph.vector(3, 4);
     const std::vector<int> inputs = graph.vector(1, 4).integers(), outputs = graph.vector(2, 4).integers();
     std::set<std::string> names;
     std::vector<TensorInfo> info;
@@ -316,15 +316,15 @@ InferenceSession load_tflite_session(const std::filesystem::path& path, Backend 
     std::string prefix = "_elman";
     while (std::any_of(names.begin(), names.end(), [&](const std::string& name) { return name.rfind(prefix, 0) == 0; })) prefix += '_';
     Json::Array nodes;
-    for (size_t index = 0; index < operators.count; ++index) {
-        const Table op = Table::entry(file, operators, index);
+    for (size_t index = 0; index < kernals.count; ++index) {
+        const Table op = Table::entry(file, kernals, index);
         require(!op.vector(5, 1).count && !op.vector(7, 1).count && !op.raw(9, 8) && !op.raw(10, 8),
-                "TFLite custom or stateful operators are unsupported");
+                "TFLite custom or stateful kernals are unsupported");
         const Table opcode = Table::entry(file, codes, size_t(op.raw(0, 4)));
         const int code = std::max(opcode.integer(3), int(opcode.raw(0, 1)));
-        require(!opcode.has(1) && opcode.integer(2, 1) > 0, "Unsupported TFLite operator declaration");
+        require(!opcode.has(1) && opcode.integer(2, 1) > 0, "Unsupported TFLite kernal declaration");
         const std::vector<int> arguments = op.vector(1, 4).integers(), results = op.vector(2, 4).integers();
-        require(results.size() == 1, "TFLite operator must have one output");
+        require(results.size() == 1, "TFLite kernal must have one output");
         const TensorInfo& output = info.at(results[0]);
         require(!output.quantization.vector(2, 4).count, "TFLite quantized execution is unsupported");
         const std::string temporary = prefix + '/' + std::to_string(index);

@@ -12,9 +12,9 @@ __global__ void kernel_split_cuda(uint32_t* out, const uint32_t* a,
     for (int axis = p.output_rank() - 1; axis >= 0; --axis) {
       int coordinate = flat % p.output_shape(axis);
       flat /= p.output_shape(axis);
-      if (axis == p.attribute(operator_attr::slice::kAxis)) {
-        coordinate = p.attribute(operator_attr::slice::kStart) +
-                     coordinate * p.attribute(operator_attr::slice::kStep);
+      if (axis == p.attribute(kernal_attr::slice::kAxis)) {
+        coordinate = p.attribute(kernal_attr::slice::kStart) +
+                     coordinate * p.attribute(kernal_attr::slice::kStep);
       }
       source += coordinate * p.input_stride(KernelInput::A, axis);
     }

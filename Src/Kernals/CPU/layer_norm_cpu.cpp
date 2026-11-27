@@ -7,7 +7,7 @@ void launch_layer_norm_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
     int length = 1;
     for (int axis =
              p.input_rank(KernelInput::A) -
-             p.attribute(operator_attr::normalization::kTrailingDimensions);
+             p.attribute(kernal_attr::normalization::kTrailingDimensions);
          axis < p.input_rank(KernelInput::A); ++axis) {
       length *= p.input_shape(KernelInput::A, axis);
     }
@@ -26,7 +26,7 @@ void launch_layer_norm_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
     float value =
         (READ_A(i) - average) /
         EL_SQRT(variance +
-                float_attribute(p, operator_attr::normalization::kEpsilon));
+                float_attribute(p, kernal_attr::normalization::kEpsilon));
     int coordinate = i % length;
     if (p.input_rank(KernelInput::B) >= 0) {
       value *= READ_B(coordinate);

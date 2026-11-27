@@ -335,7 +335,7 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
   }
   if (output->count > size_t(std::numeric_limits<int>::max()))
     throw std::invalid_argument(op + ": output element count exceeds Int32 indexing");
-  if (output->backend == Backend::Metal) metal::validate_operator_dtypes(op, params);
+  if (output->backend == Backend::Metal) metal::validate_kernal_dtypes(op, params);
   if (op == "paged_attention") {
     validate_paged_attention(output, inputs, params);
     const BackendOps& implementation = find_backend(output->backend);
@@ -418,7 +418,7 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
     if (double_normalization != Float64Normalization::None) return;
     if (integer_matrix != IntegerMatrix::None) return;
     // Exact integer reductions use Int64 outputs. Index-copy uses Int64 indices.
-    // Operator-specific validation below enforces each supported position.
+    // Kernal-specific validation below enforces each supported position.
     if ((op == "cumsum" || ((op == "sum" || op == "prod") && output->dtype == DType::Int64)) &&
         is_standard_integer(dtype)) return;
     if (integer_extrema && is_standard_integer(dtype)) return;
@@ -635,7 +635,7 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
       p.v[KernelParams::kOutputRankSlot] = 1;
       p.v[KernelParams::kOutputShapeSlot] = 1;
     }
-    int axis = p.attribute(operator_attr::index_copy::kAxis);
+    int axis = p.attribute(kernal_attr::index_copy::kAxis);
     if (axis < 0) axis += rank;
     require(axis >= 0 && axis < rank && p.input_rank(KernelInput::C) == rank, "Invalid index copy axis/source rank");
     require(size_t(p.input_shape(KernelInput::C, axis)) == inputs[1]->count, "Index copy source/index length differs");
@@ -666,8 +666,8 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
       std::sort(values.begin(), values.end());
       duplicate = std::adjacent_find(values.begin(), values.end()) != values.end();
     }
-    p.v[KernelParams::kAttributeSlot + operator_attr::index_copy::kAxis] = axis;
-    p.v[KernelParams::kAttributeSlot + operator_attr::index_copy::kHasDuplicates] = int(duplicate);
+    p.v[KernelParams::kAttributeSlot + kernal_attr::index_copy::kAxis] = axis;
+    p.v[KernelParams::kAttributeSlot + kernal_attr::index_copy::kHasDuplicates] = int(duplicate);
     const BackendOps& implementation = find_backend(output->backend);
     if (!implementation.dispatch) throw std::runtime_error("Index copy backend not compiled");
     implementation.dispatch(op, output, inputs, p);
@@ -700,10 +700,10 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
             "Packed linear input feature dimensions differ");
     require(params.input_rank(KernelInput::C) < 0 || params.input_shape(KernelInput::C, 0) == columns,
             "Packed linear bias shape differs");
-    int sections = params.attribute(operator_attr::packed_linear::kCount), total = 0;
+    int sections = params.attribute(kernal_attr::packed_linear::kCount), total = 0;
     require(sections > 0 && sections < KernelParams::kAttributeCount, "Invalid packed projection count");
     for (int i = 0; i < sections; ++i) {
-      int width = params.attribute(operator_attr::packed_linear::kWidths + i);
+      int width = params.attribute(kernal_attr::packed_linear::kWidths + i);
       require(width >= 0 && width <= columns - total, "Invalid packed projection width");
       total += width;
     }
@@ -783,22 +783,22 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
     for (int d = 0; d < rank; ++d)
       require(params.input_shape(KernelInput::D, d) == 1 || params.input_shape(KernelInput::D, d) == scores[4 - rank + d],
               "Tiled attention mask does not broadcast to the scores");
-    int tile = params.attribute(operator_attr::tiled_attention::kQueryTile);
+    int tile = params.attribute(kernal_attr::tiled_attention::kQueryTile);
     require(tile > 0, "Tiled attention query tile must be positive");
-    int causal = params.attribute(operator_attr::tiled_attention::kCausal);
+    int causal = params.attribute(kernal_attr::tiled_attention::kCausal);
     require(causal == 0 || causal == 1, "Invalid tiled attention causal flag");
-    int tiling = params.attribute(operator_attr::tiled_attention::kTiling);
+    int tiling = params.attribute(kernal_attr::tiled_attention::kTiling);
     require(tiling == 0 || tiling == 1, "Invalid attention tiling mode");
     size_t tile_elements = tiling ? checked_memory_mul(size_t(q(2)), size_t(k(2))) : size_t(q(0));
     if (!tiling) for (int value : {q(1), tile < q(2) ? tile : q(2), k(2)}) tile_elements = checked_memory_mul(tile_elements, size_t(value));
     require(tile_elements <= size_t(std::numeric_limits<int>::max()), "Tiled attention workspace exceeds the Int32 element limit");
   }
   if (op == "attention_softmax" && low_attention == LowPrecisionAttention::None) {
-    if (params.attribute(operator_attr::attention_softmax::kCausal) ||
-        params.attribute(operator_attr::attention_softmax::kCausalOffset) ||
-        params.attribute(operator_attr::attention_softmax::kQueryBase))
+    if (params.attribute(kernal_attr::attention_softmax::kCausal) ||
+        params.attribute(kernal_attr::attention_softmax::kCausalOffset) ||
+        params.attribute(kernal_attr::attention_softmax::kQueryBase))
       throw std::invalid_argument("Causal softmax attributes are internal to tiled attention");
-    int rank = params.output_rank(), axis = params.attribute(operator_attr::attention_softmax::kAxis);
+    int rank = params.output_rank(), axis = params.attribute(kernal_attr::attention_softmax::kAxis);
     if (rank < 0 || rank > 8 || axis < 0 || axis >= (rank ? rank : 1) ||
         !is_arithmetic_float(output->dtype) || inputs.size() < 2 || !inputs[0] || !inputs[1] ||
         inputs[0]->dtype != output->dtype || inputs[1]->dtype != output->dtype ||
@@ -816,10 +816,10 @@ void backend_dispatch(const std::string& op, const BufferPtr& output,
     }
   }
   if (op == "rms_norm" && double_normalization == Float64Normalization::None && low_normalization == LowPrecisionNormalization::None) {
-    int rank = params.output_rank(), trailing = params.attribute(operator_attr::normalization::kTrailingDimensions);
-    int rounding = params.attribute(operator_attr::normalization::kRounding);
+    int rank = params.output_rank(), trailing = params.attribute(kernal_attr::normalization::kTrailingDimensions);
+    int rounding = params.attribute(kernal_attr::normalization::kRounding);
     float epsilon;
-    int bits = params.attribute(operator_attr::normalization::kEpsilon);
+    int bits = params.attribute(kernal_attr::normalization::kEpsilon);
     std::memcpy(&epsilon, &bits, sizeof(epsilon));
     if (rank < 1 || rank > 8 || trailing < 1 || trailing > rank || rounding < 0 || rounding > 1 ||
         !(epsilon >= 0) || !is_compute_float(output->dtype) || inputs.empty() || !inputs[0] ||

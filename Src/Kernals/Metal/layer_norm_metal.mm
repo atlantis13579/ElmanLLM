@@ -11,10 +11,10 @@ Tensor lower_layer_norm(Graph m, const Operands& inputs, const KernelParams& p) 
   weight = m.float_work(weight);
   bias = m.float_work(bias);
   Shape dims = shape(p, 0);
-  const int rank = dims.count, suffix = p.attribute(operator_attr::normalization::kTrailingDimensions);
+  const int rank = dims.count, suffix = p.attribute(kernal_attr::normalization::kTrailingDimensions);
   NSArray<NSNumber*>* reduce_axes = axes(rank - suffix, rank);
   Tensor center = m.sub(input, m.mean(input, reduce_axes));
-  Tensor epsilon = m.number(attribute_float(p, operator_attr::normalization::kEpsilon));
+  Tensor epsilon = m.number(attribute_float(p, kernal_attr::normalization::kEpsilon));
   Tensor result = m.mul(center, m.rsqrt(m.add(m.mean(m.square(center), reduce_axes), epsilon)));
   if (weight) {
     result = m.mul(result, weight);

@@ -19,7 +19,7 @@ ELMAN_LOW_RANDOM_HD inline uint8_t low_precision_random_code(LowPrecisionRandom 
         // Reuse the counter stream across storage formats. The keep mask stays
         // boolean even when the output format cannot represent zero.
         const bool keep = first < 1. && float64_random_unit(uint64_t(index), p.attribute(0), p.attribute(1)) >= first;
-        const float scale = floating_dropout_scale(DType::Float32, first, p.attribute(operator_attr::dropout::kBackward) != 0);
+        const float scale = floating_dropout_scale(DType::Float32, first, p.attribute(kernal_attr::dropout::kBackward) != 0);
         value = low_precision_value(input, index, dtype) * (keep ? scale : 0.f);
     } else if (op == LowPrecisionRandom::Uniform) {
         const float low = float(first), high = float(second);

@@ -10,7 +10,7 @@ Tensor lower_conv2d_input_grad(Graph m, const Operands& inputs, const KernelPara
   if (!a) {
     return m.filled(p, 0);
   }
-  using namespace operator_attr::conv2d;
+  using namespace kernal_attr::conv2d;
   const int pw = p.attribute(kPaddingWidth), ph = p.attribute(kPaddingHeight);
   MPSGraphConvolution2DOpDescriptor* descriptor =
       [MPSGraphConvolution2DOpDescriptor descriptorWithStrideInX:p.attribute(kStrideWidth)

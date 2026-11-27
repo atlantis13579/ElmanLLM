@@ -36,11 +36,11 @@ struct PagedAttentionShape {
                 p.v[KernelParams::kOutputShapeSlot + d] = shape[d];
             }
         }
-        p.v[KernelParams::kAttributeSlot + operator_attr::attention_softmax::kAxis] = 3;
-        p.v[KernelParams::kAttributeSlot + operator_attr::attention_softmax::kDivisor] = source.attribute(0);
-        p.v[KernelParams::kAttributeSlot + operator_attr::attention_softmax::kCausal] = source.attribute(2);
-        p.v[KernelParams::kAttributeSlot + operator_attr::attention_softmax::kCausalOffset] = source.attribute(3);
-        p.v[KernelParams::kAttributeSlot + operator_attr::attention_softmax::kQueryBase] = start;
+        p.v[KernelParams::kAttributeSlot + kernal_attr::attention_softmax::kAxis] = 3;
+        p.v[KernelParams::kAttributeSlot + kernal_attr::attention_softmax::kDivisor] = source.attribute(0);
+        p.v[KernelParams::kAttributeSlot + kernal_attr::attention_softmax::kCausal] = source.attribute(2);
+        p.v[KernelParams::kAttributeSlot + kernal_attr::attention_softmax::kCausalOffset] = source.attribute(3);
+        p.v[KernelParams::kAttributeSlot + kernal_attr::attention_softmax::kQueryBase] = start;
         return p;
     }
 };

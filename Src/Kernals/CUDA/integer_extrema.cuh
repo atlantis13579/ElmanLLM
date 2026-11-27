@@ -5,7 +5,7 @@ namespace elman {
 template<bool Maximum>
 __global__ void integer_extrema_cuda(uint32_t* output, const uint32_t* input, KernelParams p) {
     const int row = int(blockIdx.x), lane = int(threadIdx.x);
-    const int axis = p.attribute(operator_attr::reduction::kAxis);
+    const int axis = p.attribute(kernal_attr::reduction::kAxis);
     const int inner = axis < 0 ? 1 : p.input_stride(KernelInput::A, axis);
     const int length = axis < 0 ? input_count(KernelInput::A, p) : p.input_shape(KernelInput::A, axis);
     const int base = axis < 0 ? 0 : (row / inner) * length * inner + row % inner;

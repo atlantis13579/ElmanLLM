@@ -2,6 +2,7 @@
 #include "Core/Execution.h"
 #include "Core/Graph.h"
 #include "Core/TensorDispatch.h"
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
 
@@ -68,6 +69,25 @@ void malformed(Backend backend) {
     Tensor quantized = Tensor::from_raw({2, 2}, DType::QUInt8, {0, 1, 2, 3}, backend);
     rejects([&] { tril(quantized); });
 }
+template<class T> void integer_constructor(Backend backend, DType dtype) {
+    const std::vector<int32_t> data = {INT32_MIN, -65537, -129, -1, 0, 1, 127, 256, 65537, INT32_MAX};
+    std::vector<T> converted(data.begin(), data.end());
+    std::vector<uint8_t> expected(converted.size() * sizeof(T));
+    std::memcpy(expected.data(), converted.data(), expected.size());
+    const Tensor value = Tensor::from_int_data({int(data.size())}, data, backend, dtype);
+    check(value.raw_data() == expected, "Integer constructor changed exact storage bits");
+    check(Tensor::from_int_data({0}, {}, backend, dtype).raw_data().empty(), "Empty integer constructor differs");
+}
+void integer_constructors(Backend backend) {
+    integer_constructor<int8_t>(backend, DType::Int8);
+    integer_constructor<uint8_t>(backend, DType::UInt8);
+    integer_constructor<int16_t>(backend, DType::Int16);
+    integer_constructor<uint16_t>(backend, DType::UInt16);
+    integer_constructor<int32_t>(backend, DType::Int32);
+    integer_constructor<uint32_t>(backend, DType::UInt32);
+    integer_constructor<int64_t>(backend, DType::Int64);
+    integer_constructor<uint64_t>(backend, DType::UInt64);
+}
 void execution(Backend backend) {
     for (bool asynchronous : {false, true}) {
         AllocationPool pool(backend);
@@ -96,7 +116,7 @@ int main(int argc, char** argv) {
         const Backend backend = parse_backend(argc > 1 ? argv[1] : "cpu");
         if (!backend_available(backend)) return 77;
         const size_t before = memory_stats(backend).live_bytes();
-        malformed(backend); execution(backend);
+        malformed(backend); execution(backend); integer_constructors(backend);
         check(memory_stats(backend).live_bytes() == before, "Storage layout leaked allocation ownership");
         std::cout << "Storage layout: " << checks << " passed, 0 failed\n";
         return 0;

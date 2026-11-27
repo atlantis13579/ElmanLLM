@@ -11,7 +11,7 @@ __global__ void kernel_tril_cuda(uint32_t* out, const uint32_t* a,
     int rows = p.output_shape(p.output_rank() - 2);
     int row = (i / columns) % rows;
     int column = i % columns;
-    if (column - row <= p.attribute(operator_attr::triangular::kDiagonal)) {
+    if (column - row <= p.attribute(kernal_attr::triangular::kDiagonal)) {
       COPY_INPUT_A(i, i);
     } else {
       WRITE_OUTPUT(i, 0.0f);

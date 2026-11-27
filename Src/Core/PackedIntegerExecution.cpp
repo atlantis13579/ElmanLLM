@@ -85,7 +85,7 @@ bool execute_packed_integer(const std::string& name, const BufferPtr& output, co
         "sum", "prod", "cumsum", "max", "min", "amax", "amin", "matmul", "bmm", "linear", "packed_linear", "addmm",
         "argsort", "scatter", "scatter_add"
     };
-    require(supported.count(name) != 0, "Operator does not support packed integer arithmetic");
+    require(supported.count(name) != 0, "Kernal does not support packed integer arithmetic");
     const bool logical = name == "logical_and" || name == "logical_or" || name == "logical_not";
     const bool compare = name == "eq" || name == "ne" || name == "gt" || name == "ge" || name == "lt" || name == "le";
     const bool reduce = name == "sum" || name == "prod" || name == "cumsum";

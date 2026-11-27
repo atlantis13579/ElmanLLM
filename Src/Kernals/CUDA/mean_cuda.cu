@@ -56,7 +56,7 @@ __global__ void kernel_mean_cuda(uint32_t* out, const uint32_t* a,
   unsigned int element = blockIdx.x * blockDim.x + threadIdx.x;
   if (element < unsigned(p.output_count())) {
     int i = int(element);
-    int axis = p.attribute(operator_attr::reduction::kAxis);
+    int axis = p.attribute(kernal_attr::reduction::kAxis);
     int inner = axis < 0 ? 1 : p.input_stride(KernelInput::A, axis);
     int length = axis < 0 ? input_count(KernelInput::A, p)
                           : p.input_shape(KernelInput::A, axis);
@@ -72,7 +72,7 @@ __global__ void kernel_mean_cuda(uint32_t* out, const uint32_t* a,
 void launch_mean_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
                       const uint32_t* c, const KernelParams& p) {
   if (p.output_count() > 0) {
-    int axis = p.attribute(operator_attr::reduction::kAxis);
+    int axis = p.attribute(kernal_attr::reduction::kAxis);
     int inner = axis < 0 ? 1 : p.input_stride(KernelInput::A, axis);
     int length = axis < 0 ? 1 : p.input_shape(KernelInput::A, axis);
     if (axis < 0) for (int i = 0; i < p.input_rank(KernelInput::A); ++i) length *= p.input_shape(KernelInput::A, i);

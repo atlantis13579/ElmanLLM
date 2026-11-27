@@ -15,7 +15,7 @@ void near(const Tensor& value, const std::vector<float>& expected, float toleran
 template<class F> void rejects(F action) {
     bool rejected = false;
     try { action(); } catch (const std::exception&) { rejected = true; }
-    check(rejected, "Invalid audio operator input was accepted");
+    check(rejected, "Invalid audio kernal input was accepted");
 }
 }
 int main(int argc, char** argv) {

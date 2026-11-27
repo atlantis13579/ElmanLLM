@@ -113,7 +113,7 @@ std::pair<int, int> spatial_geometry(const Json& p, int default_stride = 1) {
   if (strides.size() != 2 || strides[0] <= 0 || strides[0] != strides[1] || pads.size() != 4 ||
       pads[0] < 0 || !std::all_of(pads.begin(), pads.end(), [&](int pad) { return pad == pads[0]; }) ||
       p.string_or("auto_pad", "NOTSET") != "NOTSET" || integers(p, "dilations", {1, 1}) != std::vector<int>{1, 1})
-    throw std::invalid_argument("Graph spatial operator requires square strides, symmetric explicit padding and unit dilation");
+    throw std::invalid_argument("Graph spatial kernal requires square strides, symmetric explicit padding and unit dilation");
   return {strides[0], pads[0]};
 }
 

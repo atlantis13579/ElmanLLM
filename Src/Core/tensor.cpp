@@ -136,6 +136,13 @@ Tensor Tensor::from_int64_data(Shape shape, const std::vector<int64_t>& data, Ba
   backend_upload_int64(node->value, data);
   return Tensor(node);
 }
+template<class T>
+static void store_integer_data(const std::vector<int32_t>& data, std::vector<uint8_t>& bytes) {
+  for (size_t i = 0; i < data.size(); ++i) {
+    const T value = static_cast<T>(data[i]);
+    std::memcpy(bytes.data() + i * sizeof(T), &value, sizeof(T));
+  }
+}
 Tensor Tensor::from_int_data(Shape shape, const std::vector<int32_t>& data,
                              Backend backend, DType dtype) {
   require(is_arithmetic_integer(dtype), "Integer data requires an integer dtype");
@@ -151,33 +158,26 @@ Tensor Tensor::from_int_data(Shape shape, const std::vector<int32_t>& data,
     backend_upload_int64(node->value, std::vector<int64_t>(data.begin(), data.end()));
     return Tensor(node);
   }
-  // Standard byte-addressable integer formats widen the int32 source into raw
-  // storage so callers do not have to assemble packed bytes for every dtype.
+  // Copy converted values into byte storage without creating typed aliases.
   std::vector<uint8_t> bytes(dtype_storage_bytes(dtype, data.size()));
   switch (dtype) {
     case DType::Int8:
-      for (size_t i = 0; i < data.size(); ++i)
-        reinterpret_cast<int8_t*>(bytes.data())[i] = int8_t(data[i]);
+      store_integer_data<int8_t>(data, bytes);
       break;
     case DType::UInt8:
-      for (size_t i = 0; i < data.size(); ++i)
-        reinterpret_cast<uint8_t*>(bytes.data())[i] = uint8_t(data[i]);
+      store_integer_data<uint8_t>(data, bytes);
       break;
     case DType::Int16:
-      for (size_t i = 0; i < data.size(); ++i)
-        reinterpret_cast<int16_t*>(bytes.data())[i] = int16_t(data[i]);
+      store_integer_data<int16_t>(data, bytes);
       break;
     case DType::UInt16:
-      for (size_t i = 0; i < data.size(); ++i)
-        reinterpret_cast<uint16_t*>(bytes.data())[i] = uint16_t(data[i]);
+      store_integer_data<uint16_t>(data, bytes);
       break;
     case DType::UInt32:
-      for (size_t i = 0; i < data.size(); ++i)
-        reinterpret_cast<uint32_t*>(bytes.data())[i] = uint32_t(data[i]);
+      store_integer_data<uint32_t>(data, bytes);
       break;
     case DType::UInt64:
-      for (size_t i = 0; i < data.size(); ++i)
-        reinterpret_cast<uint64_t*>(bytes.data())[i] = uint64_t(data[i]);
+      store_integer_data<uint64_t>(data, bytes);
       break;
     default:
       throw std::invalid_argument("Integer data requires an integer dtype");

@@ -24,8 +24,8 @@ Tensor lower_packed_linear(Graph m, const Operands& inputs, const KernelParams& 
   result = m.reshape(result, @[ @(rows), @(columns) ]);
   NSMutableArray<MPSGraphTensor*>* partitions = [NSMutableArray<MPSGraphTensor*> array];
   int start = 0;
-  for (int group = 0; group < p.attribute(operator_attr::packed_linear::kCount); ++group) {
-    const int count = p.attribute(operator_attr::packed_linear::kWidths + group);
+  for (int group = 0; group < p.attribute(kernal_attr::packed_linear::kCount); ++group) {
+    const int count = p.attribute(kernal_attr::packed_linear::kWidths + group);
     if (count) {
       [partitions addObject:m.reshape(m.slice(result, 1, start, count), @[ @(int64_t(rows) * count) ])];
     }

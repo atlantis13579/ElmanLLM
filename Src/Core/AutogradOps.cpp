@@ -1020,7 +1020,7 @@ Tensor dropout(const Tensor& x, double p, uint32_t seed, bool training) {
   return tracked(dispatch_tensor("dropout", x.shape(), {x}, attributes, x.dtype()),
                  {x}, [x, attributes](const Tensor& g) {
                    std::vector<int> backward = attributes;
-                   if (x.dtype() != DType::Float64) { backward.resize(10); backward[operator_attr::dropout::kBackward] = 1; }
+                   if (x.dtype() != DType::Float64) { backward.resize(10); backward[kernal_attr::dropout::kBackward] = 1; }
                    accumulate(x, dispatch_tensor("dropout", g.shape(), {g}, backward, x.dtype()));
                  });
 }

@@ -8,11 +8,11 @@ namespace elman {
 void launch_attention_softmax_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
                                   const uint32_t* c, const KernelParams& p) {
   if (!p.output_count()) return;
-  int axis = p.attribute(operator_attr::attention_softmax::kAxis);
-  float divisor = float_attribute(p, operator_attr::attention_softmax::kDivisor);
-  const bool causal = p.attribute(operator_attr::attention_softmax::kCausal) != 0;
-  const int64_t query_offset = int64_t(p.attribute(operator_attr::attention_softmax::kQueryBase)) +
-                               p.attribute(operator_attr::attention_softmax::kCausalOffset);
+  int axis = p.attribute(kernal_attr::attention_softmax::kAxis);
+  float divisor = float_attribute(p, kernal_attr::attention_softmax::kDivisor);
+  const bool causal = p.attribute(kernal_attr::attention_softmax::kCausal) != 0;
+  const int64_t query_offset = int64_t(p.attribute(kernal_attr::attention_softmax::kQueryBase)) +
+                               p.attribute(kernal_attr::attention_softmax::kCausalOffset);
   const float blocked = p.output_dtype() == int(DType::Float16) ? -65504.0f :
                         p.output_dtype() == int(DType::BFloat16) ? -3.3895313892515355e38f : -3.402823466e38f;
   LocalFunction rounded{[&](float value) {

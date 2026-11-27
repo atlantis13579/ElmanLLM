@@ -7,7 +7,7 @@ namespace elman::metal {
 Tensor lower_gelu(Graph m, const Operands& inputs, const KernelParams& p) {
   Tensor a = inputs[0];
   a = m.float_work(a);
-  if (p.attribute(operator_attr::gelu::kExact)) {
+  if (p.attribute(kernal_attr::gelu::kExact)) {
     return m.mul(m.mul(a, m.number(.5)),
                  m.add(m.number(1), [m.g erfWithTensor:m.mul(a, m.number(.7071067811865475)) name:nil]));
   }

@@ -30,7 +30,7 @@ void launch_tiled_attention_cpu(uint32_t* out, const uint32_t* q, const uint32_t
     if (!p.output_count() || !p.input_shape(KernelInput::B, 2)) return;
     TiledAttentionShape s(p);
     size_t bytes = dtype_storage_bytes(s.dtype, 1);
-    if (p.attribute(operator_attr::tiled_attention::kTiling) == 1) {
+    if (p.attribute(kernal_attr::tiled_attention::kTiling) == 1) {
         BufferPtr workspace = backend_workspace(Backend::CPU, checked_memory_mul(size_t(s.queries) * s.keys, bytes));
         uint32_t* scores = static_cast<uint32_t*>(workspace->raw_pointer());
         AttentionGemm qk = s.scores(s.queries), pv = s.attended(s.queries);

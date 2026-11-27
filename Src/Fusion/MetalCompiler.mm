@@ -72,7 +72,7 @@ struct Program final : Executable {
                 inputs.at(i) = [graph reshapeTensor:values[slot]
                                           withShape:metal::storage_shape(command.parameters, int(i)) name:nil];
             }
-            // Reuse the ordinary backend's exact operator definitions. Region
+            // Reuse the ordinary backend's exact kernal definitions. Region
             // selection is dataflow-based; MPSGraph owns Metal kernel lowering.
             auto result = metal::lower(graph, command.operation, inputs, command.parameters, nil);
             if (!result) throw std::runtime_error("Cannot lower Metal fusion operation " + command.operation);

@@ -68,11 +68,11 @@ KernelParams params(const Case& s, DType dtype) {
   for (int i = 0; i < 3; ++i) p.v[KernelParams::kInputDTypeSlot + i] = int(dtype);
   p.v[KernelParams::kOutputDTypeSlot] = int(dtype);
   if (s.operation == GemmOperation::Matmul) {
-    p.v[KernelParams::kAttributeSlot + operator_attr::matmul::kTransposeA] = s.ta;
-    p.v[KernelParams::kAttributeSlot + operator_attr::matmul::kTransposeB] = s.tb;
+    p.v[KernelParams::kAttributeSlot + kernal_attr::matmul::kTransposeA] = s.ta;
+    p.v[KernelParams::kAttributeSlot + kernal_attr::matmul::kTransposeB] = s.tb;
   } else if (s.operation == GemmOperation::Addmm) {
-    std::memcpy(&p.v[KernelParams::kAttributeSlot + operator_attr::addmm::kAlpha], &s.alpha, sizeof(float));
-    std::memcpy(&p.v[KernelParams::kAttributeSlot + operator_attr::addmm::kBeta], &s.beta, sizeof(float));
+    std::memcpy(&p.v[KernelParams::kAttributeSlot + kernal_attr::addmm::kAlpha], &s.alpha, sizeof(float));
+    std::memcpy(&p.v[KernelParams::kAttributeSlot + kernal_attr::addmm::kBeta], &s.beta, sizeof(float));
   }
   return p;
 }

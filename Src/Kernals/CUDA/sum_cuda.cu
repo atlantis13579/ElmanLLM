@@ -35,7 +35,7 @@ __global__ void kernel_sum_cuda(uint32_t* out, const uint32_t* a,
   unsigned int element = blockIdx.x * blockDim.x + threadIdx.x;
   if (element < unsigned(p.output_count())) {
     int i = int(element);
-    int axis = p.attribute(operator_attr::reduction::kAxis);
+    int axis = p.attribute(kernal_attr::reduction::kAxis);
     int inner = axis < 0 ? 1 : p.input_stride(KernelInput::A, axis);
     int length = axis < 0 ? input_count(KernelInput::A, p)
                           : p.input_shape(KernelInput::A, axis);
@@ -64,7 +64,7 @@ void launch_sum_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
       return;
     }
     if (try_reduce_contiguous_rows<RowReduction::Sum>(out, a, p)) return;
-    const int axis = p.attribute(operator_attr::reduction::kAxis);
+    const int axis = p.attribute(kernal_attr::reduction::kAxis);
     if (p.output_dtype() == int(DType::Float32) && p.input_dtype(KernelInput::A) == int(DType::Float32) && axis >= 0) {
       const int inner = p.input_stride(KernelInput::A, axis), length = p.input_shape(KernelInput::A, axis);
       const int parts = length / 128 + int(length % 128 != 0), outer = p.output_count() / inner;

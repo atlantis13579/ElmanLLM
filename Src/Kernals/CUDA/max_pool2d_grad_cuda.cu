@@ -17,28 +17,28 @@ __global__ void kernel_max_pool2d_grad_cuda(uint32_t* out, const uint32_t* a,
     int output_width =
         p.input_shape(KernelInput::B, tensor_axis::image::kWidth);
     float value = 0.0f;
-    const int stride_y = p.attribute(operator_attr::pool2d::kStrideHeight);
-    const int stride_x = p.attribute(operator_attr::pool2d::kStrideWidth);
-    const int kernel_y = p.attribute(operator_attr::pool2d::kKernelHeight);
-    const int kernel_x = p.attribute(operator_attr::pool2d::kKernelWidth);
-    const int y = iy + p.attribute(operator_attr::pool2d::kPaddingHeight);
-    const int x = ix + p.attribute(operator_attr::pool2d::kPaddingWidth);
+    const int stride_y = p.attribute(kernal_attr::pool2d::kStrideHeight);
+    const int stride_x = p.attribute(kernal_attr::pool2d::kStrideWidth);
+    const int kernel_y = p.attribute(kernal_attr::pool2d::kKernelHeight);
+    const int kernel_x = p.attribute(kernal_attr::pool2d::kKernelWidth);
+    const int y = iy + p.attribute(kernal_attr::pool2d::kPaddingHeight);
+    const int x = ix + p.attribute(kernal_attr::pool2d::kPaddingWidth);
     const int first_y = y < kernel_y ? 0 : (y - kernel_y) / stride_y + 1;
     const int first_x = x < kernel_x ? 0 : (x - kernel_x) / stride_x + 1;
     const int stop_y = min(output_height, y / stride_y + 1);
     const int stop_x = min(output_width, x / stride_x + 1);
     for (int oy = first_y; oy < stop_y; ++oy) {
       for (int ox = first_x; ox < stop_x; ++ox) {
-        int start_y = oy * p.attribute(operator_attr::pool2d::kStrideHeight) -
-                      p.attribute(operator_attr::pool2d::kPaddingHeight);
-        int start_x = ox * p.attribute(operator_attr::pool2d::kStrideWidth) -
-                      p.attribute(operator_attr::pool2d::kPaddingWidth);
+        int start_y = oy * p.attribute(kernal_attr::pool2d::kStrideHeight) -
+                      p.attribute(kernal_attr::pool2d::kPaddingHeight);
+        int start_x = ox * p.attribute(kernal_attr::pool2d::kStrideWidth) -
+                      p.attribute(kernal_attr::pool2d::kPaddingWidth);
         float maximum_value = -EL_INF;
         int selected = -1;
         for (int ky = 0;
-             ky < p.attribute(operator_attr::pool2d::kKernelHeight); ++ky) {
+             ky < p.attribute(kernal_attr::pool2d::kKernelHeight); ++ky) {
           for (int kx = 0;
-               kx < p.attribute(operator_attr::pool2d::kKernelWidth); ++kx) {
+               kx < p.attribute(kernal_attr::pool2d::kKernelWidth); ++kx) {
             int y = start_y + ky;
             int x = start_x + kx;
             if (y >= 0 && y < input_height && x >= 0 && x < input_width) {

@@ -4,13 +4,13 @@ namespace elman {
 void launch_reduce_grad_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
                             const uint32_t* c, const KernelParams& p) {
   for (int i = 0; i < p.output_count(); ++i) {
-    int axis = p.attribute(operator_attr::reduction::kAxis);
+    int axis = p.attribute(kernal_attr::reduction::kAxis);
     int inner = axis < 0 ? 1 : p.input_stride(KernelInput::A, axis);
     int length =
         axis < 0 ? p.output_count() : p.input_shape(KernelInput::A, axis);
     int target = axis < 0 ? 0 : (i / (length * inner)) * inner + i % inner;
     float value = READ_C(target);
-    int kind = p.attribute(operator_attr::reduction::kGradientKind);
+    int kind = p.attribute(kernal_attr::reduction::kGradientKind);
     if (kind == 1) {
       value /= float(length);
     }

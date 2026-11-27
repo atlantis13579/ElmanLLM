@@ -7,7 +7,7 @@ void launch_group_norm_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
   for (int i = 0; i < p.output_count(); ++i) {
     int channels = p.input_shape(KernelInput::A, tensor_axis::image::kChannels);
     int spatial = p.input_stride(KernelInput::A, tensor_axis::image::kChannels);
-    int per_group = channels / p.attribute(operator_attr::group_norm::kGroups);
+    int per_group = channels / p.attribute(kernal_attr::group_norm::kGroups);
     int length = per_group * spatial;
     int base = (i / length) * length;
     float average = 0.0f;
@@ -32,7 +32,7 @@ void launch_group_norm_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
     float value =
         (READ_A(i) - average) /
         EL_SQRT(variance +
-                float_attribute(p, operator_attr::group_norm::kEpsilon));
+                float_attribute(p, kernal_attr::group_norm::kEpsilon));
     int channel = (i / spatial) % channels;
     if (p.input_rank(KernelInput::B) >= 0) {
       value *= READ_B(channel);

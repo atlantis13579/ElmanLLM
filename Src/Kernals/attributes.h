@@ -1,6 +1,6 @@
 #pragma once
 
-namespace elman::operator_attr {
+namespace elman::kernal_attr {
 
 namespace addmm {
 inline constexpr int kAlpha = 0;
@@ -116,4 +116,4 @@ namespace permutation {
 inline constexpr int kFirstAxis = 0;
 }
 
-}  // namespace elman::operator_attr
+}  // namespace elman::kernal_attr

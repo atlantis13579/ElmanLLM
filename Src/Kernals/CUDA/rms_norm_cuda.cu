@@ -5,7 +5,7 @@ namespace elman {
 __device__ void rms_norm_write(uint32_t* out, const uint32_t* a, const uint32_t* b,
                                const uint32_t* c, const KernelParams& p, int i, int j, float inverse) {
   float value = __fmul_rn(READ_A(i), inverse);
-  if (p.attribute(operator_attr::normalization::kRounding))
+  if (p.attribute(kernal_attr::normalization::kRounding))
     value = elman_cuda_decode(elman_cuda_encode(value, p.output_dtype()), p.output_dtype());
   if (p.input_rank(KernelInput::B) >= 0) value = __fmul_rn(value, READ_B(j));
   if (p.input_rank(KernelInput::C) >= 0) value = __fadd_rn(value, READ_C(j));
@@ -17,7 +17,7 @@ __global__ void rms_norm_short_rows_cuda(uint32_t* out, const uint32_t* a, const
   unsigned row = blockIdx.x * blockDim.y + threadIdx.y;
   float total = short_row_sum<true>(a, p, row, rows, length);
   if (threadIdx.x == 0)
-    inverses[threadIdx.y] = rsqrtf(__fadd_rn(__fmul_rn(total, factor), float_attribute(p, operator_attr::normalization::kEpsilon)));
+    inverses[threadIdx.y] = rsqrtf(__fadd_rn(__fmul_rn(total, factor), float_attribute(p, kernal_attr::normalization::kEpsilon)));
   __syncthreads();
   if (row < unsigned(rows))
     for (int j = int(threadIdx.x); j < length; j += int(blockDim.x))
@@ -68,7 +68,7 @@ __global__ void rms_norm_rows_cuda(uint32_t* out, const uint32_t* a, const uint3
   __syncthreads();
   for (int offset = 1; offset < 32; offset <<= 1) value += __shfl_down_sync(0xffffffff, value, offset);
   if (lane == 0 && (!shared_row || warp == 0))
-    inverses[shared_row ? 0 : warp] = rsqrtf(__fadd_rn(__fmul_rn(value, factor), float_attribute(p, operator_attr::normalization::kEpsilon)));
+    inverses[shared_row ? 0 : warp] = rsqrtf(__fadd_rn(__fmul_rn(value, factor), float_attribute(p, kernal_attr::normalization::kEpsilon)));
   __syncthreads();
   if (row < rows) {
     float inverse = inverses[shared_row ? 0 : warp];
@@ -87,7 +87,7 @@ __global__ void rms_norm_sequential_cuda(uint32_t* out, const uint32_t* a, const
       float x = READ_A(base + j);
       total = __fadd_rn(total, __fmul_rn(x, x));
     }
-    inverse = rsqrtf(__fadd_rn(total / float(length), float_attribute(p, operator_attr::normalization::kEpsilon)));
+    inverse = rsqrtf(__fadd_rn(total / float(length), float_attribute(p, kernal_attr::normalization::kEpsilon)));
   }
   __syncthreads();
   for (int j = int(threadIdx.x); j < length; j += int(blockDim.x)) rms_norm_write(out, a, b, c, p, base + j, j, inverse);
@@ -96,7 +96,7 @@ void launch_rms_norm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
                           const uint32_t* c, const KernelParams& p) {
   if (!p.output_count()) return;
   int length = 1;
-  for (int axis = p.output_rank() - p.attribute(operator_attr::normalization::kTrailingDimensions);
+  for (int axis = p.output_rank() - p.attribute(kernal_attr::normalization::kTrailingDimensions);
        axis < p.output_rank(); ++axis) length *= p.output_shape(axis);
   int rows = p.output_count() / length;
   if (length <= 128) {

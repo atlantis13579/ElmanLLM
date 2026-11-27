@@ -10,11 +10,11 @@ void launch_gather_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
     int valid =
         selected >= 0 &&
         selected < p.input_shape(KernelInput::A,
-                                 p.attribute(operator_attr::indexing::kAxis));
+                                 p.attribute(kernal_attr::indexing::kAxis));
     for (int axis = p.output_rank() - 1; axis >= 0; --axis) {
       int coordinate = flat % p.output_shape(axis);
       flat /= p.output_shape(axis);
-      if (axis == p.attribute(operator_attr::indexing::kAxis)) {
+      if (axis == p.attribute(kernal_attr::indexing::kAxis)) {
         coordinate = selected;
       }
       source += coordinate * p.input_stride(KernelInput::A, axis);

@@ -14,7 +14,7 @@ Tensor lower_conv2d(Graph m, const Operands& inputs, const KernelParams& p) {
   if (!a) {
     return m.filled(p, 0);
   }
-  using namespace operator_attr::conv2d;
+  using namespace kernal_attr::conv2d;
   const int pw = p.attribute(kPaddingWidth), ph = p.attribute(kPaddingHeight);
   MPSGraphConvolution2DOpDescriptor* descriptor =
       [MPSGraphConvolution2DOpDescriptor descriptorWithStrideInX:p.attribute(kStrideWidth)
@@ -33,6 +33,6 @@ Tensor lower_conv2d(Graph m, const Operands& inputs, const KernelParams& p) {
   if (!c) {
     return result;
   }
-  return m.add(result, m.reshape(c, @[ @1, @(p.output_shape(operator_attr::conv2d::kChannelAxis)), @1, @1 ]));
+  return m.add(result, m.reshape(c, @[ @1, @(p.output_shape(kernal_attr::conv2d::kChannelAxis)), @1, @1 ]));
 }
 }  // namespace elman::metal

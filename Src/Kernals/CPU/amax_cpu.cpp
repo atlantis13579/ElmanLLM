@@ -9,7 +9,7 @@ void launch_amax_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
     return;
   }
   for (int i = 0; i < p.output_count(); ++i) {
-    int axis = p.attribute(operator_attr::reduction::kAxis);
+    int axis = p.attribute(kernal_attr::reduction::kAxis);
     int inner = axis < 0 ? 1 : p.input_stride(KernelInput::A, axis);
     int length = axis < 0 ? input_count(KernelInput::A, p)
                           : p.input_shape(KernelInput::A, axis);

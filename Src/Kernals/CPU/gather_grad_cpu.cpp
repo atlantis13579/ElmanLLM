@@ -14,7 +14,7 @@ void launch_gather_grad_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
       for (int axis = p.output_rank() - 1; axis >= 0; --axis) {
         int coordinate = flat % p.input_shape(KernelInput::A, axis);
         flat /= p.input_shape(KernelInput::A, axis);
-        if (axis == p.attribute(operator_attr::indexing::kAxis)) {
+        if (axis == p.attribute(kernal_attr::indexing::kAxis)) {
           coordinate = selected;
         }
         target += coordinate * stride;
@@ -22,7 +22,7 @@ void launch_gather_grad_cpu(uint32_t* out, const uint32_t* a, const uint32_t* b,
       }
       if (target == i && selected >= 0 &&
           selected <
-              p.output_shape(p.attribute(operator_attr::indexing::kAxis))) {
+              p.output_shape(p.attribute(kernal_attr::indexing::kAxis))) {
         value += READ_A(j);
       }
     }

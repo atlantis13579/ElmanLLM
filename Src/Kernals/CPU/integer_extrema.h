@@ -4,7 +4,7 @@
 namespace elman {
 template<bool Maximum>
 void launch_integer_extrema_cpu(uint32_t* out, const uint32_t* input, const KernelParams& p) {
-    const int axis = p.attribute(operator_attr::reduction::kAxis);
+    const int axis = p.attribute(kernal_attr::reduction::kAxis);
     const int inner = axis < 0 ? 1 : p.input_stride(KernelInput::A, axis);
     const int length = axis < 0 ? input_count(KernelInput::A, p) : p.input_shape(KernelInput::A, axis);
     const int dtype = p.input_dtype(KernelInput::A);

@@ -597,7 +597,7 @@ __global__ void tensor_split_gemm(void* out, const T* a, const T* b, Matrix s) {
 // FP16/BF16 use WMMA or sliced-K; medium/large FP32 uses the pipelined SIMT path.
 // The 24/48-block cutoffs and row thresholds were tuned on the 24-SM RTX 4060,
 // not computed from device occupancy. They are performance heuristics only;
-// every selected kernel masks tails and preserves the same operator semantics.
+// every selected kernel masks tails and preserves the same kernal semantics.
 template<class T, bool TA, bool TB>
 void launch(void* out, const void* a, const void* b, Matrix s) {
   if (!s.rows || !s.columns || !s.batches) return;
@@ -695,8 +695,8 @@ bool try_gemm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
       p.input_dtype(KernelInput::B) != p.output_dtype()) return false;
   if (!p.output_count()) return true;
   const bool linear = operation == GemmOperation::Linear;
-  const bool ta = operation == GemmOperation::Matmul && p.attribute(operator_attr::matmul::kTransposeA);
-  const bool tb = linear || (operation == GemmOperation::Matmul && p.attribute(operator_attr::matmul::kTransposeB));
+  const bool ta = operation == GemmOperation::Matmul && p.attribute(kernal_attr::matmul::kTransposeA);
+  const bool tb = linear || (operation == GemmOperation::Matmul && p.attribute(kernal_attr::matmul::kTransposeB));
   Matrix s;
   s.columns = p.output_shape(p.output_rank() - 1);
   s.rows = linear ? p.output_count() / s.columns : p.output_shape(p.output_rank() - 2);
@@ -705,8 +705,8 @@ bool try_gemm_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
   s.batches = linear ? 1 : p.output_count() / (s.rows * s.columns);
   s.stride_out = int64_t(s.rows) * s.columns;
   if (operation == GemmOperation::Addmm) {
-    s.alpha = attribute(p, operator_attr::addmm::kAlpha);
-    s.beta = attribute(p, operator_attr::addmm::kBeta);
+    s.alpha = attribute(p, kernal_attr::addmm::kAlpha);
+    s.beta = attribute(p, kernal_attr::addmm::kBeta);
   } else if (linear && p.input_rank(KernelInput::C) >= 0) s.beta = 1;
   // Keep the scalar kernels' ignored-NaN and empty-product semantics.
   if (!s.shared || s.alpha == 0) return false;

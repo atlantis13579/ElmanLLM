@@ -58,7 +58,7 @@ bool try_reduce_contiguous_rows(uint32_t* out, const uint32_t* a, const KernelPa
   if constexpr (operation == RowReduction::Sum || operation == RowReduction::Product) {
     if (dtype != DType::Float32) return false;
   }
-  const int axis = p.attribute(operator_attr::reduction::kAxis);
+  const int axis = p.attribute(kernal_attr::reduction::kAxis);
   if (axis >= 0 && p.input_stride(KernelInput::A, axis) != 1) return false;
   int length = axis < 0 ? 1 : p.input_shape(KernelInput::A, axis);
   if (axis < 0)

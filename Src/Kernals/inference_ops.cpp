@@ -12,8 +12,8 @@ namespace elman {
 Tensor exact_gelu(const Tensor& value) {
   if (!is_compute_float(value.dtype())) throw std::invalid_argument("Exact GELU requires a compute floating dtype");
   const Tensor input = cast(value, DType::Float32);
-  std::vector<int> attributes(operator_attr::gelu::kExact + 1, 0);
-  attributes[operator_attr::gelu::kExact] = 1;
+  std::vector<int> attributes(kernal_attr::gelu::kExact + 1, 0);
+  attributes[kernal_attr::gelu::kExact] = 1;
   return cast(dispatch_tensor("gelu", input.shape(), {input}, attributes, input.dtype()), value.dtype());
 }
 

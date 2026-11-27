@@ -7,8 +7,8 @@ Tensor lower_addmm(Graph m, const Operands& inputs, const KernelParams& p) {
   Tensor a = inputs[0];
   Tensor b = inputs[1];
   Tensor c = inputs[2];
-  const float alpha = attribute_float(p, operator_attr::addmm::kAlpha);
-  const float beta = attribute_float(p, operator_attr::addmm::kBeta);
+  const float alpha = attribute_float(p, kernal_attr::addmm::kAlpha);
+  const float beta = attribute_float(p, kernal_attr::addmm::kBeta);
   if (!a) {
     return c && beta ? m.spread(m.mul(c, m.number(beta, c.dataType)), shape(p)) : m.filled(p, 0);
   }

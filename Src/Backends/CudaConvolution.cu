@@ -17,7 +17,7 @@
 
 namespace elman {
 namespace {
-using namespace operator_attr::conv2d;
+using namespace kernal_attr::conv2d;
 using Shape4 = std::array<int, 4>;
 constexpr size_t workspace_limit = 32 * 1024 * 1024;
 constexpr size_t plan_limit = 32;

@@ -10,10 +10,10 @@ Tensor lower_reduce_grad(Graph m, const Operands& inputs, const KernelParams& p)
   Tensor input = inputs[0];
   Tensor reduced_value = inputs[1];
   Tensor gradient = inputs[2];
-  const int axis = p.attribute(operator_attr::reduction::kAxis);
+  const int axis = p.attribute(kernal_attr::reduction::kAxis);
   NSArray<NSNumber*>* dims = axis < 0 ? axes(0, input.shape.count) : @[ @(axis) ];
   Tensor work = m.float_work(input);
-  const int kind = p.attribute(operator_attr::reduction::kGradientKind);
+  const int kind = p.attribute(kernal_attr::reduction::kGradientKind);
   NSMutableArray<NSNumber*>* kept = [NSMutableArray<NSNumber*> arrayWithArray:input.shape];
   for (NSNumber* dim in dims) {
     kept[dim.unsignedIntegerValue] = @1;

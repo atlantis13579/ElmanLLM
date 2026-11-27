@@ -5,7 +5,7 @@
 #include "Inference/LLM/PagedAttention.h"
 #include "IO/Json.h"
 #include "Backends/MetalDTypeSupport.h"
-#include "OperatorFixture.h"
+#include "KernalFixture.h"
 
 #include <algorithm>
 #include <cmath>
@@ -20,7 +20,7 @@ using namespace elman;
 using fixture::shape;
 
 const std::set<std::string> registered = {
-    // These operators are routed by operand dtype before table lookup.
+    // These kernals are routed by operand dtype before table lookup.
     "angle", "complex", "conj", "float64_fma", "imag", "real", "sgn", "tanh",
 #define ELMAN_CPU_KERNEL(operation) #operation,
 #define ELMAN_CPU_KERNEL4(operation) #operation,
@@ -68,7 +68,7 @@ void check_metal_dtype_contract(const Json& test, const std::string& op) {
         p.v[KernelParams::input_slot(slot)] = present ? int(inputs[i].at("shape").array().size()) : -1;
         if (present) p.v[KernelParams::input_dtype_slot(slot)] = int(inputs[i].at("type").integer());
     }
-    LocalFunction validate{[&] { metal::validate_operator_dtypes(op,p); }};
+    LocalFunction validate{[&] { metal::validate_kernal_dtypes(op,p); }};
     if (test.contains("metal_error")) check_rejection(test.at("metal_error").string(),validate);
     else {
         validate();
@@ -108,7 +108,7 @@ void check_distribution(const Tensor& values, double mean, double variance) {
     double sum = 0, squares = 0;
     const std::vector<float> actual = values.data();
     for (float x : actual) {
-        if (!std::isfinite(x)) throw std::runtime_error("Random operator produced nonfinite data");
+        if (!std::isfinite(x)) throw std::runtime_error("Random kernal produced nonfinite data");
         sum += x;
         squares += double(x)*x;
     }
@@ -155,7 +155,7 @@ Tensor input(Shape dims, int seed, Backend device) {
     return Tensor::from_data(dims,data,device);
 }
 
-void decode_operator_paths(Backend backend) {
+void decode_kernal_paths(Backend backend) {
     if (backend != Backend::Metal) {
         for (elman::DType dtype : {DType::Float32, DType::Float16, DType::BFloat16}) {
             Tensor gate = cast(input({2,257},9,backend),dtype);
@@ -208,7 +208,7 @@ void decode_operator_paths(Backend backend) {
     }
 }
 
-void public_operators(Backend backend) {
+void public_kernals(Backend backend) {
     const std::vector<float> values = {1.f, -2.f, 3.f, 4.f, -.5f, 1.5f};
     Tensor reference = Tensor::from_data({2,3}, values, Backend::CPU, true);
     Tensor gpu = Tensor::from_data({2,3}, values, backend, true);
@@ -286,7 +286,7 @@ void public_operators(Backend backend) {
 
 int main(int argc, char** argv) {
     try {
-        if (argc != 3) throw std::invalid_argument("Usage: elman_operator_parity <fixtures.json> cpu|cuda|metal");
+        if (argc != 3) throw std::invalid_argument("Usage: elman_kernal_parity <fixtures.json> cpu|cuda|metal");
         const Backend target = parse_backend(argv[2]);
         if (!backend_available(target)) return 77;
         const Json fixtures = Json::read(argv[1]);
@@ -334,10 +334,10 @@ int main(int argc, char** argv) {
             compare(dropped,dropout(x,.2,21));
             seeded_streams(backend);
         }
-        if (target != Backend::CPU) public_operators(target);
-        decode_operator_paths(target);
+        if (target != Backend::CPU) public_kernals(target);
+        decode_kernal_paths(target);
         std::cout << backend_name(target) << " passed " << passed << '/' << fixtures.array().size()
-                  << " fixtures covering " << covered.size() << '/' << registered.size() << " native operators, "
+                  << " fixtures covering " << covered.size() << '/' << registered.size() << " native kernals, "
                   << rejected << " expected rejections\n";
         return failures ? 1 : 0;
     } catch (const std::exception& error) {

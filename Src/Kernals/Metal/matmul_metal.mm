@@ -10,7 +10,7 @@ Tensor lower_matmul(Graph m, const Operands& inputs, const KernelParams& p) {
   if (!a) {
     return m.filled(p, 0);
   }
-  if (p.attribute(operator_attr::matmul::kTransposeB)) {
+  if (p.attribute(kernal_attr::matmul::kTransposeB)) {
     const int rank = b.shape.count;
     b = m.transpose(b, rank - 2, rank - 1);
   }

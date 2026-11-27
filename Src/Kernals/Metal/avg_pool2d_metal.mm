@@ -6,7 +6,7 @@
 namespace elman::metal {
 Tensor lower_avg_pool2d(Graph m, const Operands& inputs, const KernelParams& p) {
   Tensor a = inputs[0];
-  using namespace operator_attr::pool2d;
+  using namespace kernal_attr::pool2d;
   const int px = p.attribute(kPaddingWidth), py = p.attribute(kPaddingHeight);
   MPSGraphPooling2DOpDescriptor* descriptor =
       [MPSGraphPooling2DOpDescriptor descriptorWithKernelWidth:p.attribute(kKernelWidth)

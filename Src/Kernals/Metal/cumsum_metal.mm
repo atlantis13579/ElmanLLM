@@ -7,7 +7,7 @@
 namespace elman::metal {
 Tensor lower_cumsum(Graph m, const Operands& inputs, const KernelParams& p) {
   Tensor a = inputs[0];
-  const int axis = p.attribute(operator_attr::reduction::kAxis);
+  const int axis = p.attribute(kernal_attr::reduction::kAxis);
   Tensor work = m.float_work(a);
   if (DType(p.output_dtype()) == DType::Int64) {
     work = m.cast(work, MPSDataTypeInt64);

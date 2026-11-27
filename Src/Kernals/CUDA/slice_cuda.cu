@@ -20,9 +20,9 @@ __global__ void kernel_slice_cuda(uint32_t* out, const uint32_t* a,
     for (int axis = p.output_rank() - 1; axis >= 0; --axis) {
       int coordinate = flat % p.output_shape(axis);
       flat /= p.output_shape(axis);
-      if (axis == p.attribute(operator_attr::slice::kAxis)) {
-        coordinate = p.attribute(operator_attr::slice::kStart) +
-                     coordinate * p.attribute(operator_attr::slice::kStep);
+      if (axis == p.attribute(kernal_attr::slice::kAxis)) {
+        coordinate = p.attribute(kernal_attr::slice::kStart) +
+                     coordinate * p.attribute(kernal_attr::slice::kStep);
       }
       source += coordinate * p.input_stride(KernelInput::A, axis);
     }
@@ -33,10 +33,10 @@ void launch_slice_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
                        const uint32_t* c, const KernelParams& p) {
   if (p.output_count() > 0) {
     if (p.output_dtype() == int(DType::Float32) && p.input_dtype(KernelInput::A) == p.output_dtype()) {
-      const int axis = p.attribute(operator_attr::slice::kAxis);
+      const int axis = p.attribute(kernal_attr::slice::kAxis);
       slice_float_contiguous<<<(unsigned(p.output_count()) + 255u) / 256u, 256, 0, current_cuda_stream()>>>(
           out, a, p.output_count(), p.input_stride(KernelInput::A, axis), p.output_shape(axis),
-          p.input_shape(KernelInput::A, axis), p.attribute(operator_attr::slice::kStart), p.attribute(operator_attr::slice::kStep));
+          p.input_shape(KernelInput::A, axis), p.attribute(kernal_attr::slice::kStart), p.attribute(kernal_attr::slice::kStep));
       return;
     }
     kernel_slice_cuda<<<(unsigned(p.output_count()) + 255u) / 256u, 256, 0, current_cuda_stream()>>>(

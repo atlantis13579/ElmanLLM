@@ -6,7 +6,7 @@
 namespace elman {
 
 // Zero restores the environment or backend default. A positive value includes
-// the caller and caps the number of threads used by one operator.
+// the caller and caps the number of threads used by one kernal.
 void set_cpu_thread_count(int threads);
 int configured_cpu_thread_count();
 

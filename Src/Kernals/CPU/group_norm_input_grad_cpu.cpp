@@ -9,7 +9,7 @@ void launch_group_norm_input_grad_cpu(uint32_t* out, const uint32_t* a,
   for (int i = 0; i < p.output_count(); ++i) {
     int channels = p.input_shape(KernelInput::A, tensor_axis::image::kChannels);
     int spatial = p.input_stride(KernelInput::A, tensor_axis::image::kChannels);
-    int per_group = channels / p.attribute(operator_attr::group_norm::kGroups);
+    int per_group = channels / p.attribute(kernal_attr::group_norm::kGroups);
     int length = per_group * spatial;
     int base = (i / length) * length;
     float average = 0;
@@ -21,7 +21,7 @@ void launch_group_norm_input_grad_cpu(uint32_t* out, const uint32_t* a,
       variance += difference * difference;
     }
     variance /= float(length);
-    float epsilon = float_attribute(p, operator_attr::group_norm::kEpsilon);
+    float epsilon = float_attribute(p, kernal_attr::group_norm::kEpsilon);
     float inverse = p.input_dtype(KernelInput::A) == int(DType::Float32) ?
         float(1.0 / std::sqrt(double(variance) + group_norm_epsilon(p))) : 1.0f / EL_SQRT(variance + epsilon);
     const DType dtype = static_cast<DType>(p.input_dtype(KernelInput::B));

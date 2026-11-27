@@ -8,7 +8,7 @@ The four shipped definitions use the same graph/module runtime and optimizer pat
 The design follows the separation of layer configuration, connections and weights
 in [Keras serialization](https://keras.io/guides/serialization_and_saving/) and the
 [Functional API](https://keras.io/guides/functional_api/). This is an Elman format,
-not a Keras file. Native tensor layouts and native operator semantics apply.
+not a Keras file. Native tensor layouts and native kernal semantics apply.
 
 ## Model contract
 
@@ -33,9 +33,9 @@ arguments must resolve to integers. Parameters can be changed without editing C+
 Each layer has `name`, `class_name`, optional `config`, `inputs`, and optional
 `outputs`. The default output value name is the layer name. Inputs reference graph
 values; multiple consumers create branches. Explicit output lists expose `split`,
-`sort` and recurrent operator outputs. The loader sorts the DAG and rejects cycles,
-unresolved references, duplicate names, unknown operators/config fields and invalid
-port counts. Native operators validate tensor dimensions and dtype constraints at
+`sort` and recurrent kernal outputs. The loader sorts the DAG and rejects cycles,
+unresolved references, duplicate names, unknown kernals/config fields and invalid
+port counts. Native kernals validate tensor dimensions and dtype constraints at
 execution. Model boundary shapes/dtypes are checked on every call.
 
 Layer names cannot contain dots. Dots separate nested module names in checkpoints.
@@ -52,7 +52,7 @@ chain each child to the previous result. Config `repeat` instantiates independen
 copies, with stable indexed names; it does not share weights or implement a recurrent
 loop. For repeated sequences use implicit connections between children, and put
 explicit local branches inside a nested `Graph`, as GPT2 does. A recurrent temporal
-state is represented by explicit `state` input/output ports and recurrent operators.
+state is represented by explicit `state` input/output ports and recurrent kernals.
 
 ## Reusable nested JSON
 
@@ -107,18 +107,18 @@ OIHW weights. Stateful normalization uses registered persistent buffers. `reshap
 accepts `0` to copy the corresponding input dimension and one `-1` to infer a size.
 `split_heads`/`merge_heads`, `position_ids`, `causal_mask` and `embedding` provide
 dynamic sequence primitives without embedding a transformer model in C++.
-Zero-input `constant`, `zeros`, `ones`, `normal` and `uniform` operators construct
+Zero-input `constant`, `zeros`, `ones`, `normal` and `uniform` kernals construct
 non-trainable values; `Parameter` registers a trainable weight instead.
 
-## Operator catalog
+## Kernal catalog
 
-`Operators.json` is the unified catalog:
+`Kernals.json` is the unified catalog:
 
-* `entries`:  tensor-only operators, trainable layers and composition primitives
+* `entries`:  tensor-only kernals, trainable layers and composition primitives
   available as version-2 `class_name` values. Entries declare named tensor operands,
   optional/variadic operands, outputs, configuration types/defaults and port counts.
   `backend`, `seed`, and `training` are supplied by the execution context.
-* `imported_graph_operators`: the existing version-1 `elman.graph` importer dialect
+* `imported_graph_kernals`: the existing version-1 `elman.graph` importer dialect
   (ONNX/Keras/Torch aliases), with input/output arities. It retains its own attribute
   conventions and runtime checks; these aliases are not version-2 layer names.
 * `native_interfaces`: typed C++ APIs requiring objects such as `QuantizedTensor`,
@@ -126,7 +126,7 @@ non-trainable values; `Parameter` registers a trainable weight instead.
   documented native interfaces, not falsely advertised as tensor-only bindings.
 
 Every tensor input/output has a `shape` array listing its axis sizes in order.
-Symbols are local to one operator signature; the same symbol means the same size.
+Symbols are local to one kernal signature; the same symbol means the same size.
 For example, matrix multiplication is `[M,N] x [N,K] -> [M,K]`: both inputs share
 the contracted dimension `N`, while the output retains `M` and `K`.
 
@@ -154,7 +154,7 @@ configured dimension list.
 shapes. `shape_alternatives` lists additional supported shapes, such as vector
 operands of `matmul` or a retained size-one reduction axis. Native object/enum
 arguments without tensor dimensions use `null`. These are descriptive dimension
-contracts, not a shape-expression evaluator: native operators and model ports
+contracts, not a shape-expression evaluator: native kernals and model ports
 still validate runtime shapes. The catalog's `shape_notation` records the notation.
 
 The catalog covers public tensor/layer APIs, not private backend kernels or their
@@ -194,6 +194,6 @@ learning model interfaces and external pretrained model importers retain their
 existing formats.
 
 `Tests/ModelGraphTest.cpp` checks graph branches, gradients, multi-port sessions,
-stateful buffers, subgraphs, operator catalog validation and malformed graphs using
+stateful buffers, subgraphs, kernal catalog validation and malformed graphs using
 synthetic fixtures. `Tests/ModelIO.cpp` covers JSON, datasets, checkpoint integrity
 and inference reports without depending on shipped model definitions.

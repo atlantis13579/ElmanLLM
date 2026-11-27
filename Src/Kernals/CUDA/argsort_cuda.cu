@@ -35,7 +35,7 @@ __device__ uint32_t sort_key(const uint32_t* a, int source, const KernelParams& 
     const bool low = is_low_precision_float(DType(p.input_dtype(KernelInput::A)));
     key = !low && isnan(value) ? 0xffffffffu : bits ^ ((bits & 0x80000000u) ? 0xffffffffu : 0x80000000u);
   }
-  return p.attribute(operator_attr::sorting::kDescending) ? ~key : key;
+  return p.attribute(kernal_attr::sorting::kDescending) ? ~key : key;
 }
 __global__ void make_sort_keys(uint64_t* keys, int32_t* indices, const uint32_t* a,
                               KernelParams p, int length, int inner) {
@@ -91,7 +91,7 @@ __global__ void make_wide_sort_keys(uint64_t* keys, int32_t* indices, int32_t* o
     const uint64_t sign = integer_signed(dtype) ? uint64_t(1) << 63 : 0;
     key = integer_reduction_value(a, source, dtype) ^ sign;
   }
-  if (p.attribute(operator_attr::sorting::kDescending)) key = ~key;
+  if (p.attribute(kernal_attr::sorting::kDescending)) key = ~key;
   keys[i] = key;
   indices[i] = column;
   if (column == 0) offsets[group] = int(i);
@@ -102,7 +102,7 @@ void launch_argsort_cuda(uint32_t* out, const uint32_t* a, const uint32_t*,
                          const uint32_t*, const KernelParams& p) {
   int count = p.output_count();
   if (!count) return;
-  int axis = p.attribute(operator_attr::sorting::kAxis);
+  int axis = p.attribute(kernal_attr::sorting::kAxis);
   int length = p.input_shape(KernelInput::A, axis), inner = p.input_stride(KernelInput::A, axis);
   const DType dtype = DType(p.input_dtype(KernelInput::A));
   if (inner == 1 && length > 0 && length <= 1024 && is_compute_float(dtype)) {

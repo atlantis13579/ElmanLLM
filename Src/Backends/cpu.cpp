@@ -102,7 +102,7 @@ void dispatch_cpu(const std::string& operation, const BufferPtr& output,
   const Float64Pointwise double_operation = low_operation == LowPrecisionPointwise::None ? float64_pointwise_operation(operation, params) : Float64Pointwise::None;
   auto found = kernels.find(operation);
   if (found == kernels.end() && double_operation == Float64Pointwise::None && complex_operation == ComplexPointwise::None)
-    throw std::invalid_argument("Unknown CPU operator: " + operation);
+    throw std::invalid_argument("Unknown CPU kernal: " + operation);
   const int arity = complex_operation != ComplexPointwise::None ? complex_pointwise_arity(complex_operation) :
       found == kernels.end() ? float64_pointwise_arity(double_operation) : found->second.inputs;
   Buffer& destination = cpu_buffer(output);

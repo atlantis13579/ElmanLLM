@@ -12,7 +12,7 @@ __global__ void sort_backward_cuda(uint32_t* out, const uint32_t* a, const uint3
 void launch_sort_backward_cuda(uint32_t* out, const uint32_t* a, const uint32_t* b,
                                const uint32_t*, const KernelParams& p) {
   if (!p.output_count()) return;
-  int axis = p.attribute(operator_attr::sorting::kAxis);
+  int axis = p.attribute(kernal_attr::sorting::kAxis);
   sort_backward_cuda<<<(unsigned(p.output_count()) + 255u) / 256u, 256, 0, current_cuda_stream()>>>(out, a, b, p,
       p.output_shape(axis), p.input_stride(KernelInput::A, axis));
 }

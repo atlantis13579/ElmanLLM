@@ -155,6 +155,23 @@ void wide_storage() {
 void random_values() {
   constexpr int count = 4096;
   for (DType dtype : {DType::Float32, DType::Float16, DType::BFloat16}) {
+    // Exercise both padded Philox draws and exact multiples of four.
+    for (int size : {0, 1, 2, 3, 4, 5, 7, 8, 9}) {
+      Tensor small = Tensor::uniform({size}, 1, 1.00001, 73, backend, false, dtype);
+      exact(small, Tensor::uniform({size}, 1, 1.00001, 73, backend, false, dtype), "Small uniform reproducibility");
+      for (float value : small.data())
+        check(value >= 1 && value < 1.00001, "Small uniform escaped its narrow interval");
+      Tensor normal = Tensor::normal({size}, 0, 1, 89, backend, false, dtype);
+      exact(normal, Tensor::normal({size}, 0, 1, 89, backend, false, dtype), "Small normal reproducibility");
+      Tensor x = Tensor::ones({size}, backend, true, dtype);
+      Tensor dropped = dropout(x, .5, 91);
+      exact(dropped, dropout(x, .5, 91), "Small dropout reproducibility");
+      for (float value : dropped.data()) check(value == 0 || value == 2, "Small dropout scaling");
+      if (size) {
+        sum_all(dropped).backward();
+        near(x.grad(), dropped.data(), 0, "Small dropout backward mask");
+      }
+    }
     Tensor uniform = Tensor::uniform({count}, -1, 1, 73, backend, false, dtype);
     exact(uniform, Tensor::uniform({count}, -1, 1, 73, backend, false, dtype), "Metal uniform reproducibility");
     check(uniform.raw_data() != Tensor::uniform({count}, -1, 1, 74, backend, false, dtype).raw_data(), "Uniform seed ignored");
